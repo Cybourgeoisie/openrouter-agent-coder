@@ -53,10 +53,17 @@ logs/
 
 ## Configuration
 
+Copy `.env.example` to `.env` and fill in your values:
+
+```bash
+cp .env.example .env
+```
+
 | Env Variable | Default | Description |
 |---|---|---|
 | `OPENROUTER_API_KEY` | **(required)** | Your OpenRouter API key |
-| `OR_MODEL` | `anthropic/claude-sonnet-4` | Model to use |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | API base URL (override for local/staging) |
+| `OR_MODEL` | `~anthropic/claude-sonnet-latest` | Model to use |
 | `OR_MAX_STEPS` | `25` | Max agentic steps per prompt |
 | `OR_MAX_COST` | `1.00` | Max cost in USD per prompt |
 | `OR_SESSION_ID` | *(auto-generated)* | Resume a previous session |

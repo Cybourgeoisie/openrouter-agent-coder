@@ -1,4 +1,10 @@
-import { OpenRouter, stepCountIs, maxCost, isTurnStartEvent, isTurnEndEvent } from '@openrouter/agent';
+import {
+  OpenRouter,
+  stepCountIs,
+  maxCost,
+  isTurnStartEvent,
+  isTurnEndEvent,
+} from '@openrouter/agent';
 import type { ConversationState } from '@openrouter/agent';
 import { allTools } from './tools/index.js';
 import { createFileStateAccessor } from './state/file-state.js';
@@ -21,6 +27,7 @@ export interface AgentSession {
 export function createAgent(sessionId: string): AgentSession {
   const client = new OpenRouter({
     apiKey: process.env.OPENROUTER_API_KEY,
+    ...(process.env.OPENROUTER_BASE_URL && { serverURL: process.env.OPENROUTER_BASE_URL }),
     appTitle: 'OR/Agent Coder',
   });
   return { sessionId, client };

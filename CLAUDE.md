@@ -28,7 +28,7 @@ echo "your prompt" | node dist/index.js
 node dist/index.js
 ```
 
-Requires `OPENROUTER_API_KEY` env var. Optional: `OR_MODEL` (default: `anthropic/claude-sonnet-4`), `OR_MAX_STEPS` (default: 25), `OR_MAX_COST` (default: 1.00), `OR_SESSION_ID` (resume a session).
+Requires `OPENROUTER_API_KEY` env var. See `.env.example` for all options. Optional: `OPENROUTER_BASE_URL` (default: production OpenRouter), `OR_MODEL` (default: `~anthropic/claude-sonnet-latest`), `OR_MAX_STEPS` (default: 25), `OR_MAX_COST` (default: 1.00), `OR_SESSION_ID` (resume a session).
 
 ## Architecture
 
