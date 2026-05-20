@@ -3,9 +3,32 @@
 import { createInterface } from 'node:readline';
 import { createAgent, runPrompt } from './agent.js';
 import { createSessionId, logSessionStart } from './logging/logger.js';
+import { getLastSession } from './logging/session-registry.js';
 
-const sessionId = process.env.OR_SESSION_ID ?? createSessionId();
-const session = createAgent(sessionId);
+async function resolveSessionId(): Promise<{ sessionId: string; resumed: boolean }> {
+  // Honour explicit OR_SESSION_ID env-var first (original behaviour).
+  if (process.env.OR_SESSION_ID) {
+    return { sessionId: process.env.OR_SESSION_ID, resumed: false };
+  }
+
+  // Strip --continue from argv and check if it was present.
+  const rawArgs = process.argv.slice(2);
+  const continueIdx = rawArgs.indexOf('--continue');
+  if (continueIdx !== -1) {
+    rawArgs.splice(continueIdx, 1);
+    // Mutate argv so the rest of the CLI only sees the prompt args.
+    process.argv = [...process.argv.slice(0, 2), ...rawArgs];
+
+    const last = await getLastSession();
+    if (last) {
+      return { sessionId: last.sessionId, resumed: true };
+    }
+    // No previous session found — fall through and start fresh.
+    console.warn('No previous session found — starting a new session.\n');
+  }
+
+  return { sessionId: createSessionId(), resumed: false };
+}
 
 async function main(): Promise<void> {
   if (!process.env.OPENROUTER_API_KEY) {
@@ -13,12 +36,18 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const { sessionId, resumed } = await resolveSessionId();
+  const session = createAgent(sessionId);
+
   await logSessionStart(sessionId);
 
   const singlePrompt = process.argv.slice(2).join(' ').trim();
 
   if (singlePrompt) {
-    await executePrompt(singlePrompt);
+    if (resumed) {
+      console.log(`Continuing session: ${sessionId}\n`);
+    }
+    await executePrompt(session, singlePrompt);
     return;
   }
 
@@ -29,12 +58,19 @@ async function main(): Promise<void> {
     }
     const input = chunks.join('').trim();
     if (input) {
-      await executePrompt(input);
+      if (resumed) {
+        console.log(`Continuing session: ${sessionId}\n`);
+      }
+      await executePrompt(session, input);
     }
     return;
   }
 
-  console.log(`or-coder session: ${sessionId}`);
+  if (resumed) {
+    console.log(`Continuing session: ${sessionId}`);
+  } else {
+    console.log(`or-coder session: ${sessionId}`);
+  }
   console.log('Type your prompt (Ctrl+D to exit)\n');
 
   const rl = createInterface({
@@ -53,7 +89,7 @@ async function main(): Promise<void> {
     }
 
     rl.pause();
-    await executePrompt(input);
+    await executePrompt(session, input);
     rl.resume();
     rl.prompt();
   });
@@ -64,7 +100,7 @@ async function main(): Promise<void> {
   });
 }
 
-async function executePrompt(prompt: string): Promise<void> {
+async function executePrompt(session: ReturnType<typeof createAgent>, prompt: string): Promise<void> {
   try {
     // Print a leading newline to separate the prompt echo from the response.
     process.stdout.write('\n');
