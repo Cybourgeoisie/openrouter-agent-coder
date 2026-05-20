@@ -20,6 +20,9 @@ import {
 const DEFAULT_MODEL = process.env.OR_MODEL ?? '~anthropic/claude-sonnet-latest';
 const MAX_STEPS = parseInt(process.env.OR_MAX_STEPS ?? '25', 10);
 const MAX_COST = parseFloat(process.env.OR_MAX_COST ?? '1.00');
+console.log('DEFAULT_MODEL', DEFAULT_MODEL);
+console.log('MAX_STEPS', MAX_STEPS);
+console.log('MAX_COST', MAX_COST);
 
 export interface AgentSession {
   sessionId: string;
