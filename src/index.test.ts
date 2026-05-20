@@ -14,7 +14,7 @@ describe('CLI entry point', () => {
   it('exits with error when OPENROUTER_API_KEY is missing', async () => {
     try {
       await execFileAsync('node', [DIST_INDEX, 'test'], {
-        env: { ...process.env, OPENROUTER_API_KEY: '' },
+        env: { ...process.env, OPENROUTER_API_KEY: '', DOTENV_SKIP: '1' },
         timeout: 5000,
       });
       expect.fail('should have exited with non-zero');
@@ -27,7 +27,7 @@ describe('CLI entry point', () => {
 
   it('dist/index.js exists and is loadable', async () => {
     await execFileAsync('node', ['-e', `require("${DIST_INDEX}")`], {
-      env: { ...process.env, OPENROUTER_API_KEY: '' },
+      env: { ...process.env, OPENROUTER_API_KEY: '', DOTENV_SKIP: '1' },
       timeout: 5000,
     }).catch(() => {});
   });
@@ -47,7 +47,7 @@ describe('--continue flag', () => {
         'node',
         [DIST_INDEX, '--continue', 'hi'],
         {
-          env: { ...process.env, OPENROUTER_API_KEY: 'sk-fake-for-test' },
+          env: { ...process.env, OPENROUTER_API_KEY: 'sk-fake-for-test', DOTENV_SKIP: '1' },
           timeout: 10000,
         },
       ).catch((e) => e as { code?: number; stderr?: string; stdout?: string });
@@ -84,7 +84,7 @@ describe('--continue flag', () => {
         'node',
         [DIST_INDEX, '--continue', 'what is 1+1?'],
         {
-          env: { ...process.env, OPENROUTER_API_KEY: 'sk-fake-for-test' },
+          env: { ...process.env, OPENROUTER_API_KEY: 'sk-fake-for-test', DOTENV_SKIP: '1' },
           timeout: 10000,
         },
       ).catch((e) => e as { code?: number; stderr?: string; stdout?: string });

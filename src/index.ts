@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import 'dotenv/config';
+import './env.js';
 import { createInterface } from 'node:readline';
 import { createAgent, runPrompt } from './agent.js';
 import { createSessionId, logSessionStart } from './logging/logger.js';

@@ -22,11 +22,17 @@ const DEFAULT_MODEL = process.env.OR_MODEL ?? '~anthropic/claude-sonnet-latest';
 const MAX_STEPS = parseInt(process.env.OR_MAX_STEPS ?? '25', 10);
 const MAX_COST = parseFloat(process.env.OR_MAX_COST ?? '1.00');
 
-console.log('Env variables:', {
-  DEFAULT_MODEL,
-  MAX_STEPS,
-  MAX_COST,
-});
+if (process.env.DEBUG) {
+  const key = process.env.OPENROUTER_API_KEY;
+  const maskedKey = key ? `${key.slice(0, 10)}...${key.slice(-4)}` : '(not set)';
+  console.log('Config:', {
+    model: DEFAULT_MODEL,
+    maxSteps: MAX_STEPS,
+    maxCost: MAX_COST,
+    apiKey: maskedKey,
+    baseUrl: process.env.OPENROUTER_BASE_URL ?? '(default)',
+  });
+}
 
 export interface AgentSession {
   sessionId: string;

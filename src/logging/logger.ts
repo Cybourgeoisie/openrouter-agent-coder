@@ -1,8 +1,10 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { appendSessionToRegistry, setSessionFirstPrompt } from './session-registry.js';
 
-const LOG_BASE = join(process.cwd(), 'logs');
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const LOG_BASE = join(__dirname, '..', '..', 'logs');
 
 export interface RequestLog {
   sessionId: string;

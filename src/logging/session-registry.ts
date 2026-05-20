@@ -1,7 +1,9 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
-const LOG_BASE = join(process.cwd(), 'logs');
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const LOG_BASE = join(__dirname, '..', '..', 'logs');
 const REGISTRY_PATH = join(LOG_BASE, 'sessions.json');
 
 export interface SessionEntry {
