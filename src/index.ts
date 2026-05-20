@@ -54,7 +54,6 @@ async function main(): Promise<void> {
 
     rl.pause();
     await executePrompt(input);
-    console.log();
     rl.resume();
     rl.prompt();
   });
@@ -67,10 +66,12 @@ async function main(): Promise<void> {
 
 async function executePrompt(prompt: string): Promise<void> {
   try {
+    // Print a leading newline to separate the prompt echo from the response.
+    process.stdout.write('\n');
+
     await runPrompt(session, prompt, (delta) => {
       process.stdout.write(delta);
     });
-    console.log();
   } catch (err) {
     console.error('\nError:', err instanceof Error ? err.message : err);
   }
