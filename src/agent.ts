@@ -5,6 +5,7 @@ import {
   isTurnStartEvent,
   isTurnEndEvent,
   isToolResultEvent,
+  isToolCallOutputEvent,
 } from '@openrouter/agent';
 import type { ConversationState } from '@openrouter/agent';
 import { allTools } from './tools/index.js';
@@ -109,6 +110,9 @@ export async function runPrompt(
   let currentTurnNumber = 0;
   // Highest turn number seen (used to report turn count after streaming ends).
   let maxTurnNumber = 0;
+  // Map from tool callId → tool name, populated when we see the arguments.done
+  // event so we can label results with the originating tool name.
+  const toolCallNames = new Map<string, string>();
 
   for await (const event of result.getFullResponsesStream()) {
     if (isTurnStartEvent(event)) {
@@ -141,6 +145,34 @@ export async function runPrompt(
         lastCharInTurn = delta[delta.length - 1];
         turnHadText = true;
       }
+    } else if ('type' in event && event.type === 'response.output_item.done') {
+      // A response output item is complete. If it's a function_call, render a
+      // one-liner with the tool name and argument payload size.
+      const doneEvent = event as {
+        type: string;
+        item: { type: string; name?: string; arguments?: string; callId?: string; id?: string };
+      };
+      const item = doneEvent.item;
+      if (item.type === 'function_call' && item.name) {
+        const argSize = Buffer.byteLength(item.arguments ?? '', 'utf8');
+        // Record callId → name so we can label the result when it arrives.
+        const callId = item.callId ?? item.id ?? '';
+        if (callId) toolCallNames.set(callId, item.name);
+        onTextDelta(`\n⚙ ${item.name}(${argSize} bytes)\n`);
+        turnHadText = true;
+        lastCharInTurn = '\n';
+      }
+    } else if (isToolCallOutputEvent(event)) {
+      // A tool result — look up the tool name via the callId and show result size.
+      const { output } = event;
+      const toolName = toolCallNames.get(output.callId) ?? output.callId;
+      const resultStr = typeof output.output === 'string'
+        ? output.output
+        : JSON.stringify(output.output);
+      const resultSize = Buffer.byteLength(resultStr, 'utf8');
+      onTextDelta(`  ↳ ${toolName}: ${resultSize} bytes\n`);
+      turnHadText = true;
+      lastCharInTurn = '\n';
     }
   }
 
