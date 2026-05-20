@@ -100,6 +100,70 @@ export async function runPrompt(
     },
   });
 
+  // ── Tool-display helpers ────────────────────────────────────────────────
+
+  /** Truncate a string to 100 chars, appending '...' when cut. */
+  function truncate(s: string, max = 100): string {
+    const flat = s.replace(/\s+/g, ' ').trim();
+    return flat.length <= max ? flat : `${flat.slice(0, max)}...`;
+  }
+
+  /**
+   * Derive the extra context to show on the ⚙ call line, alongside the
+   * tool name. For file tools this is the filename; for run_command it is
+   * the command string (both truncated to 100 chars).
+   */
+  function callSnippet(toolName: string, args: Record<string, unknown>): string {
+    switch (toolName) {
+      case 'read_file':
+      case 'write_file':
+      case 'edit_file':
+        return truncate(String(args.path ?? ''));
+      case 'list_directory':
+        return truncate(String(args.path ?? '.'));
+      case 'run_command':
+        return truncate(String(args.command ?? ''));
+      default:
+        return '';
+    }
+  }
+
+  /**
+   * Derive the extra context to show on the ↳ result line — the first 100
+   * chars of the most informative field in the result payload.
+   */
+  function resultSnippet(toolName: string, resultStr: string): string {
+    try {
+      const parsed = JSON.parse(resultStr) as Record<string, unknown>;
+      switch (toolName) {
+        case 'read_file':
+          return truncate(String(parsed.content ?? resultStr));
+        case 'write_file':
+          return `${parsed.bytesWritten ?? '?'} bytes written`;
+        case 'edit_file':
+          return parsed.replaced ? 'replaced' : 'not replaced';
+        case 'list_directory': {
+          const entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+          return truncate(entries.join(', '));
+        }
+        case 'run_command': {
+          const out = String(parsed.stdout ?? '');
+          const err = String(parsed.stderr ?? '');
+          const code = parsed.exitCode ?? 0;
+          const body = (out || err || '(no output)').trim();
+          const prefix = code !== 0 ? `exit ${code} · ` : '';
+          return prefix + truncate(body);
+        }
+        default:
+          return truncate(resultStr);
+      }
+    } catch {
+      return truncate(resultStr);
+    }
+  }
+
+  // ── Stream state ────────────────────────────────────────────────────────
+
   // Track state across turns so we can emit a blank line between whole
   // message turns (e.g. turn 0 text → tool calls → turn 1 text) while
   // letting the content itself supply newlines within a single turn.
@@ -110,8 +174,8 @@ export async function runPrompt(
   let currentTurnNumber = 0;
   // Highest turn number seen (used to report turn count after streaming ends).
   let maxTurnNumber = 0;
-  // Map from tool callId → tool name, populated when we see the arguments.done
-  // event so we can label results with the originating tool name.
+  // Map from callId → tool name, populated from the output_item.done event
+  // so the result line can label itself with the originating tool name.
   const toolCallNames = new Map<string, string>();
 
   for await (const event of result.getFullResponsesStream()) {
@@ -147,30 +211,33 @@ export async function runPrompt(
       }
     } else if ('type' in event && event.type === 'response.output_item.done') {
       // A response output item is complete. If it's a function_call, render a
-      // one-liner with the tool name and argument payload size.
+      // one-liner with the tool name plus a context snippet from its arguments.
       const doneEvent = event as {
         type: string;
         item: { type: string; name?: string; arguments?: string; callId?: string; id?: string };
       };
       const item = doneEvent.item;
       if (item.type === 'function_call' && item.name) {
-        const argSize = Buffer.byteLength(item.arguments ?? '', 'utf8');
-        // Record callId → name so we can label the result when it arrives.
+        // Record callId → name/args so we can label the result when it arrives.
         const callId = item.callId ?? item.id ?? '';
+        let args: Record<string, unknown> = {};
+        try { args = JSON.parse(item.arguments ?? '{}') as Record<string, unknown>; } catch { /* ignore */ }
         if (callId) toolCallNames.set(callId, item.name);
-        onTextDelta(`\n⚙ ${item.name}(${argSize} bytes)\n`);
+        const snippet = callSnippet(item.name, args);
+        const detail = snippet ? ` ${snippet}` : ` ${Buffer.byteLength(item.arguments ?? '', 'utf8')} bytes`;
+        onTextDelta(`\n⚙ ${item.name}${detail}\n`);
         turnHadText = true;
         lastCharInTurn = '\n';
       }
     } else if (isToolCallOutputEvent(event)) {
-      // A tool result — look up the tool name via the callId and show result size.
+      // A tool result — look up the tool name via the callId and show a snippet.
       const { output } = event;
       const toolName = toolCallNames.get(output.callId) ?? output.callId;
       const resultStr = typeof output.output === 'string'
         ? output.output
         : JSON.stringify(output.output);
-      const resultSize = Buffer.byteLength(resultStr, 'utf8');
-      onTextDelta(`  ↳ ${toolName}: ${resultSize} bytes\n`);
+      const snippet = resultSnippet(toolName, resultStr);
+      onTextDelta(`  ↳ ${toolName}: ${snippet}\n`);
       turnHadText = true;
       lastCharInTurn = '\n';
     }
