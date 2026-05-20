@@ -8,6 +8,7 @@ import {
 } from '@openrouter/agent';
 import type { ConversationState } from '@openrouter/agent';
 import { allTools } from './tools/index.js';
+import { createServerToolsHooks } from './tools/server-tools.js';
 import { createFileStateAccessor } from './state/file-state.js';
 import {
   createRequestId,
@@ -45,7 +46,8 @@ export function createAgent(sessionId: string): AgentSession {
     apiKey: process.env.OPENROUTER_API_KEY,
     ...(process.env.OPENROUTER_BASE_URL && { serverURL: process.env.OPENROUTER_BASE_URL }),
     appTitle: 'OR/Agent Coder',
-  });
+    hooks: createServerToolsHooks(),
+  } as ConstructorParameters<typeof OpenRouter>[0]);
   return { sessionId, client, totalCost: 0, totalTurns: 0 };
 }
 

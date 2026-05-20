@@ -26,7 +26,7 @@ The agent uses OpenRouter's `callModel()` to run an agentic loop: the model rece
 
 Every conversation gets a **session ID** passed to OpenRouter for server-side tracking. State is persisted locally so sessions can be resumed, and every API response is logged to disk.
 
-### Tools
+### Client Tools
 
 | Tool | Description |
 |---|---|
@@ -35,6 +35,16 @@ Every conversation gets a **session ID** passed to OpenRouter for server-side tr
 | `edit_file` | Find-and-replace a unique string in a file |
 | `list_directory` | List files and directories |
 | `run_command` | Execute shell commands (30s timeout) |
+
+### Server Tools (OpenRouter-hosted)
+
+These run server-side on OpenRouter — no local execution needed:
+
+| Tool | Description |
+|---|---|
+| `datetime` | Returns the current date and time |
+| `web_search` | Searches the web for real-time information |
+| `web_fetch` | Fetches full content from a URL (web page or PDF) |
 
 ### Logging
 

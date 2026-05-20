@@ -34,7 +34,8 @@ Requires `OPENROUTER_API_KEY` env var. See `.env.example` for all options. Optio
 
 - `src/index.ts` — CLI entry point (REPL + single-prompt + pipe modes)
 - `src/agent.ts` — Agent core: `callModel` with tools, streaming, session/state management
-- `src/tools/` — Five tools: `read_file`, `write_file`, `edit_file`, `list_directory`, `run_command`
+- `src/tools/` — Five client tools: `read_file`, `write_file`, `edit_file`, `list_directory`, `run_command`
+- `src/tools/server-tools.ts` — OpenRouter server tools: `datetime`, `web_search`, `web_fetch` (injected via SDK hooks)
 - `src/logging/logger.ts` — Logs to `logs/[session_id]/[request_id]/[generation_id]/response.json`
 - `src/state/file-state.ts` — `StateAccessor` impl using atomic file writes
 
