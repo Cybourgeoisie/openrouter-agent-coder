@@ -6,11 +6,12 @@ import {
   editFileTool,
   listDirectoryTool,
   runCommandTool,
+  grepFilesTool,
 } from './index.js';
 
 describe('tools barrel', () => {
-  it('exports all five tools', () => {
-    expect(allTools).toHaveLength(5);
+  it('exports all six tools', () => {
+    expect(allTools).toHaveLength(6);
   });
 
   it('includes every tool by name', () => {
@@ -21,6 +22,7 @@ describe('tools barrel', () => {
       'edit_file',
       'list_directory',
       'run_command',
+      'grep_files',
     ]);
   });
 
@@ -30,6 +32,7 @@ describe('tools barrel', () => {
     expect(editFileTool.function.name).toBe('edit_file');
     expect(listDirectoryTool.function.name).toBe('list_directory');
     expect(runCommandTool.function.name).toBe('run_command');
+    expect(grepFilesTool.function.name).toBe('grep_files');
   });
 
   it('all tools have execute functions', () => {

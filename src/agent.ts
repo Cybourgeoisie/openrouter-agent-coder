@@ -115,7 +115,13 @@ export async function runPrompt(
    */
   function callSnippet(toolName: string, args: Record<string, unknown>): string {
     switch (toolName) {
-      case 'read_file':
+      case 'read_file': {
+        const range =
+          args.start_line !== undefined
+            ? `:${args.start_line}${args.end_line !== undefined ? `-${args.end_line}` : '+'}`
+            : '';
+        return truncate(`${args.path ?? ''}${range}`);
+      }
       case 'write_file':
       case 'edit_file':
         return truncate(String(args.path ?? ''));
@@ -123,6 +129,8 @@ export async function runPrompt(
         return truncate(String(args.path ?? '.'));
       case 'run_command':
         return truncate(String(args.command ?? ''));
+      case 'grep_files':
+        return truncate(`/${args.pattern ?? ''}/  ${args.path ?? '.'}`);
       default:
         return '';
     }
@@ -153,6 +161,11 @@ export async function runPrompt(
           const body = (out || err || '(no output)').trim();
           const prefix = code !== 0 ? `exit ${code} · ` : '';
           return prefix + truncate(body);
+        }
+        case 'grep_files': {
+          const count = parsed.matchCount ?? 0;
+          const trunc = parsed.truncated ? '+' : '';
+          return `${count}${trunc} match${count === 1 ? '' : 'es'}`;
         }
         default:
           return truncate(resultStr);
