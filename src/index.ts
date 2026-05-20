@@ -70,7 +70,7 @@ async function main(): Promise<void> {
   if (resumed) {
     console.log(`Continuing session: ${sessionId}`);
   } else {
-    console.log(`or-coder session: ${sessionId}`);
+    console.log(`oracode session: ${sessionId}`);
   }
   console.log('Type your prompt (Ctrl+D to exit)\n');
 
