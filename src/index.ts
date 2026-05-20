@@ -69,9 +69,19 @@ async function executePrompt(prompt: string): Promise<void> {
     // Print a leading newline to separate the prompt echo from the response.
     process.stdout.write('\n');
 
-    await runPrompt(session, prompt, (delta) => {
+    const result = await runPrompt(session, prompt, (delta) => {
       process.stdout.write(delta);
     });
+
+    // ── Turn / cost summary ─────────────────────────────────────────────────
+    // Printed after every response so the user always knows where they stand.
+    const { turnCount, promptCost, totalCost } = result;
+    const turnLabel = turnCount === 0 ? '1 turn' : `${turnCount + 1} turns`;
+    const fmtCost = (n: number) =>
+      n === 0 ? '$0.000000' : `${n.toFixed(6)}`;
+    process.stdout.write(
+      `\n╌╌ ${turnLabel} · last prompt: ${fmtCost(promptCost)} · session total: ${fmtCost(totalCost)} ╌╌\n`,
+    );
   } catch (err) {
     console.error('\nError:', err instanceof Error ? err.message : err);
   }
