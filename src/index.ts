@@ -111,12 +111,12 @@ async function executePrompt(session: ReturnType<typeof createAgent>, prompt: st
 
     // ── Turn / cost summary ─────────────────────────────────────────────────
     // Printed after every response so the user always knows where they stand.
-    const { turnCount, promptCost, totalCost } = result;
+    const { model, turnCount, promptCost, totalCost } = result;
     const turnLabel = turnCount === 0 ? '1 turn' : `${turnCount + 1} turns`;
     const fmtCost = (n: number) =>
       n === 0 ? '$0.000000' : `${n.toFixed(6)}`;
     process.stdout.write(
-      `\n╌╌ ${turnLabel} · last prompt: ${fmtCost(promptCost)} · session total: ${fmtCost(totalCost)} ╌╌\n`,
+      `\n╌╌ ${model} · ${turnLabel} · prompt: ${fmtCost(promptCost)} · session: ${fmtCost(totalCost)} ╌╌\n`,
     );
   } catch (err) {
     console.error('\nError:', err instanceof Error ? err.message : err);

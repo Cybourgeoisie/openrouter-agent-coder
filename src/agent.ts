@@ -33,6 +33,8 @@ export interface AgentSession {
 /** Metrics returned by a single runPrompt call. */
 export interface PromptResult {
   text: string;
+  /** The model that actually served this prompt (resolved from alias). */
+  model: string;
   /** Number of inner-loop turns (tool-call round-trips) in this prompt. */
   turnCount: number;
   /** Cost incurred by this prompt (USD). */
@@ -73,7 +75,7 @@ export async function runPrompt(
   const result = client.callModel({
     model: DEFAULT_MODEL,
     sessionId,
-    input: prompt,
+    input: [{ role: 'user' as const, content: prompt }],
     instructions:
       'You are a code editing agent. You can read, write, and edit files, list directories, and run shell commands. Work step by step: read files to understand the codebase, then make changes. Always verify your changes.',
     tools: allTools,
@@ -168,5 +170,5 @@ export async function runPrompt(
   const turnCount = maxTurnNumber;
   session.totalTurns += turnCount;
 
-  return { text, turnCount, promptCost, totalCost: session.totalCost };
+  return { text, model: response.model, turnCount, promptCost, totalCost: session.totalCost };
 }
