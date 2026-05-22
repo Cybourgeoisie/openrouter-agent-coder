@@ -1,0 +1,33 @@
+{
+  "data": [
+    {
+      "id": "anthropic/claude-sonnet-4.5",
+      "name": "Anthropic: Claude Sonnet 4.5",
+      "description": "Claude Sonnet 4.5 is Anthropic's mid-tier model optimized for coding and tool use.",
+      "context_length": 200000,
+      "pricing": {
+        "prompt": "0.000003",
+        "completion": "0.000015"
+      }
+    },
+    {
+      "id": "openai/gpt-4o",
+      "name": "OpenAI: GPT-4o",
+      "description": "GPT-4o is OpenAI's flagship multimodal model.",
+      "context_length": 128000,
+      "pricing": {
+        "prompt": "0.0000025",
+        "completion": "0.00001"
+      }
+    },
+    {
+      "id": "google/gemini-2.5-pro",
+      "description": "Gemini 2.5 Pro is Google's frontier reasoning model.",
+      "context_length": 2000000,
+      "pricing": {
+        "prompt": "0.00000125",
+        "completion": "0.00001"
+      }
+    }
+  ]
+}
