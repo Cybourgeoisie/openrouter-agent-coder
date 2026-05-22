@@ -8,6 +8,7 @@ import {
   type Tool,
 } from '@openrouter/agent';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { allTools } from './tools/index.js';
 import { createServerToolsHooks } from './tools/server-tools.js';
 import { type ToolContext } from './tools/context.js';
@@ -19,7 +20,13 @@ import {
   logGeneration,
   logSessionStart,
 } from './logging/logger.js';
-import type { AgentCoreEvent, AgentCoreEventStatus, TokenUsage } from './events.js';
+import type {
+  AgentCoreEvent,
+  AgentCoreEventStatus,
+  HookEvent,
+  HookPayload,
+  TokenUsage,
+} from './events.js';
 
 const DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
 const DEFAULT_MAX_TURNS = 25;
@@ -51,7 +58,13 @@ export type CanUseTool = (
   input: unknown,
 ) => Promise<CanUseToolResult> | CanUseToolResult;
 
-export type OnHook = (eventName: string, payload: Record<string, unknown>) => void | Promise<void>;
+/**
+ * Lifecycle hook callback. Invoked with a {@link HookEvent} discriminator and
+ * the matching {@link HookPayload} variant. Hooks are awaited but are
+ * audit-only: thrown errors are logged via {@link AgentLogger} and swallowed,
+ * the return value is discarded, and the agent run continues unmodified.
+ */
+export type OnHook = (event: HookEvent, payload: HookPayload) => void | Promise<void>;
 
 export interface OpenRouterAgentRunOptions {
   /** OpenRouter API key. Required — no env fallback. */
@@ -88,7 +101,15 @@ export interface OpenRouterAgentRunOptions {
    * execute on OpenRouter's servers and bypass this hook.
    */
   canUseTool?: CanUseTool;
-  /** Lifecycle hook callback. TODO(phase 1.7): wire into pre/post tool use events. */
+  /**
+   * Lifecycle hook callback. Fires `SessionStart` once after the
+   * `session_started` event, `PreToolUse` before each client tool's
+   * `canUseTool` decision (audit always fires, even when denied),
+   * `PostToolUse` after each tool result is computed (with `isError` matching
+   * the subsequent `tool_result.isError`), and `SessionEnd` once after
+   * `stream_complete`. Hooks are awaited; thrown errors are logged via
+   * {@link AgentLogger} and swallowed so they cannot break a run.
+   */
   onHook?: OnHook;
   /**
    * External AbortSignal. When aborted, the run cancels the underlying OR
@@ -208,6 +229,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       logsRoot,
       baseUrl,
       logger,
+      onHook,
     } = this.opts;
 
     const startMs = Date.now();
@@ -215,6 +237,20 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     let totalCostUsd = 0;
     let finalUsage: TokenUsage | null = null;
     const signal = this.compositeSignal;
+    // Captured at every stream_complete yield site so the outer finally can
+    // fire exactly one SessionEnd hook with matching status/usage/cost. Null
+    // when the run somehow exits without yielding stream_complete (should be
+    // unreachable — every path ends in a stream_complete).
+    let sessionEndPayload: Extract<HookPayload, { event: 'SessionEnd' }> | null = null;
+
+    const safeFireHook = async (event: HookEvent, payload: HookPayload): Promise<void> => {
+      if (!onHook) return;
+      try {
+        await onHook(event, payload);
+      } catch (err) {
+        logger?.('error', 'Hook threw', { event, error: err });
+      }
+    };
 
     logger?.('debug', 'OpenRouterAgentRun starting', {
       sessionId,
@@ -225,65 +261,89 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       logsRoot,
     });
 
-    // Pre-aborted at construction time → no session_started; jump straight to
-    // a terminal stream_complete event.
-    if (signal.aborted) {
-      yield {
-        type: 'stream_complete',
-        status: 'error',
-        durationMs: Date.now() - startMs,
-        reason: ABORT_REASON,
-      };
-      return;
-    }
-
-    let client: OpenRouter;
-    try {
-      client = new OpenRouter({
-        apiKey,
-        ...(baseUrl && { serverURL: baseUrl }),
-        appTitle,
-        hooks: createServerToolsHooks(),
-      } as ConstructorParameters<typeof OpenRouter>[0]);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      yield { type: 'error', message, cause: err };
-      yield {
-        type: 'stream_complete',
-        status: 'error',
-        durationMs: Date.now() - startMs,
-        reason: message,
-      };
-      return;
-    }
-
-    await logSessionStart(logsRoot, sessionId, cwd);
-
-    yield { type: 'session_started', sessionId };
-
-    const requestId = createRequestId();
-    const state = createFileStateAccessor(logsRoot, sessionId);
-    // Note: server-side tools (datetime/web_search/web_fetch) are injected
-    // via OR SDK hooks and execute on OpenRouter's servers — they bypass this
-    // wrapper, so canUseTool only ever sees client tools.
-    const ctx: ToolContext = { cwd, signal };
-    // Order: bind ctx first (so the unwrapped tool's execute closes over
-    // ctx.cwd / ctx.signal), THEN wrap with the permission gate so the
-    // permission decision is evaluated before the ctx-aware execute runs.
-    const baseTools: readonly Tool[] = this.hasCustomTools ? userTools : allTools(ctx);
-    const toolsForRun = this.opts.canUseTool
-      ? baseTools.map((t) => wrapToolWithPermission(t, this.opts.canUseTool!))
-      : baseTools;
-
     // Use a holder so the abort listener can fire result.cancel() once the
     // call has been issued. result is undefined briefly before callModel().
     let resultHandle: { cancel(): Promise<void> } | undefined;
     const onAbort = (): void => {
       if (resultHandle) void resultHandle.cancel().catch(() => undefined);
     };
-    signal.addEventListener('abort', onAbort, { once: true });
+    let abortListenerInstalled = false;
 
     try {
+      // Pre-aborted at construction time → no session_started, no SessionStart
+      // hook; jump straight to a terminal stream_complete event. SessionEnd
+      // still fires (it bookends stream_complete, not session_started).
+      if (signal.aborted) {
+        yield {
+          type: 'stream_complete',
+          status: 'error',
+          durationMs: Date.now() - startMs,
+          reason: ABORT_REASON,
+        };
+        sessionEndPayload = {
+          event: 'SessionEnd',
+          sessionId,
+          status: 'error',
+          usage: null,
+          costUsd: 0,
+        };
+        return;
+      }
+
+      let client: OpenRouter;
+      try {
+        client = new OpenRouter({
+          apiKey,
+          ...(baseUrl && { serverURL: baseUrl }),
+          appTitle,
+          hooks: createServerToolsHooks(),
+        } as ConstructorParameters<typeof OpenRouter>[0]);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        yield { type: 'error', message, cause: err };
+        yield {
+          type: 'stream_complete',
+          status: 'error',
+          durationMs: Date.now() - startMs,
+          reason: message,
+        };
+        sessionEndPayload = {
+          event: 'SessionEnd',
+          sessionId,
+          status: 'error',
+          usage: null,
+          costUsd: 0,
+        };
+        return;
+      }
+
+      await logSessionStart(logsRoot, sessionId, cwd);
+
+      yield { type: 'session_started', sessionId };
+      await safeFireHook('SessionStart', { event: 'SessionStart', sessionId, cwd, model });
+
+      const requestId = createRequestId();
+      const state = createFileStateAccessor(logsRoot, sessionId);
+      // Note: server-side tools (datetime/web_search/web_fetch) are injected
+      // via OR SDK hooks and execute on OpenRouter's servers — they bypass this
+      // wrapper, so canUseTool only ever sees client tools.
+      const ctx: ToolContext = { cwd, signal };
+      // Order of wraps (innermost → outermost): ctx-bound execute, then
+      // canUseTool gate, then hook wrapper. The hook wrapper is outermost so
+      // PreToolUse fires before the canUseTool decision (audit always fires,
+      // even on deny), and PostToolUse fires after the inner result/error is
+      // resolved — including the synth-deny payload from a canUseTool denial.
+      const baseTools: readonly Tool[] = this.hasCustomTools ? userTools : allTools(ctx);
+      const permissionedTools = this.opts.canUseTool
+        ? baseTools.map((t) => wrapToolWithPermission(t, this.opts.canUseTool!))
+        : baseTools;
+      const toolsForRun = onHook
+        ? permissionedTools.map((t) => wrapToolWithHooks(t, safeFireHook))
+        : permissionedTools;
+
+      signal.addEventListener('abort', onAbort, { once: true });
+      abortListenerInstalled = true;
+
       await logRequest(logsRoot, {
         sessionId,
         requestId,
@@ -394,6 +454,13 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           durationMs: Date.now() - startMs,
           reason: ABORT_REASON,
         };
+        sessionEndPayload = {
+          event: 'SessionEnd',
+          sessionId,
+          status: 'error',
+          usage: finalUsage,
+          costUsd: totalCostUsd,
+        };
         return;
       }
 
@@ -429,6 +496,13 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         costUsd: totalCostUsd,
         durationMs: Date.now() - startMs,
       };
+      sessionEndPayload = {
+        event: 'SessionEnd',
+        sessionId,
+        status,
+        usage: finalUsage,
+        costUsd: totalCostUsd,
+      };
     } catch (err) {
       if (signal.aborted) {
         yield {
@@ -438,6 +512,13 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           costUsd: totalCostUsd,
           durationMs: Date.now() - startMs,
           reason: ABORT_REASON,
+        };
+        sessionEndPayload = {
+          event: 'SessionEnd',
+          sessionId,
+          status: 'error',
+          usage: finalUsage,
+          costUsd: totalCostUsd,
         };
         return;
       }
@@ -452,8 +533,20 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         durationMs: Date.now() - startMs,
         reason: message,
       };
+      sessionEndPayload = {
+        event: 'SessionEnd',
+        sessionId,
+        status: 'error',
+        usage: finalUsage,
+        costUsd: totalCostUsd,
+      };
     } finally {
-      signal.removeEventListener('abort', onAbort);
+      if (abortListenerInstalled) {
+        signal.removeEventListener('abort', onAbort);
+      }
+      if (sessionEndPayload) {
+        await safeFireHook('SessionEnd', sessionEndPayload);
+      }
     }
   }
 }
@@ -494,6 +587,64 @@ function wrapToolWithPermission(t: Tool, canUseTool: CanUseTool): Tool {
     }
     const effectiveInput = decision.updatedInput !== undefined ? decision.updatedInput : input;
     return originalExecute(effectiveInput, ctx);
+  };
+  return {
+    ...t,
+    function: {
+      ...t.function,
+      execute: wrappedExecute,
+    },
+  } as Tool;
+}
+
+/**
+ * Wrap a Tool's execute with PreToolUse / PostToolUse hook firings. Composed
+ * OUTSIDE {@link wrapToolWithPermission} so that PreToolUse fires before the
+ * canUseTool decision (audit always fires, even on deny) and PostToolUse fires
+ * after the inner execute resolves — propagating any thrown error (including
+ * the synth-deny payload from a permission denial) as the PostToolUse output.
+ *
+ * The OR SDK's `ToolExecuteContext` carries the live `FunctionCallItem` on
+ * `ctx.toolCall`, so the SDK-issued call id is preferred. When that is absent
+ * (custom tools wired without the standard SDK context, or tests that pass a
+ * bare `{}`), a synthetic UUID is generated for the hook payload — the two
+ * payloads of a single Pre/Post pair always share the same id.
+ */
+function wrapToolWithHooks(
+  t: Tool,
+  safeFireHook: (event: HookEvent, payload: HookPayload) => Promise<void>,
+): Tool {
+  const fn = t.function as { name: string; execute?: (i: unknown, c?: unknown) => unknown };
+  const name = fn.name;
+  const originalExecute = fn.execute;
+  if (typeof originalExecute !== 'function') return t;
+  const wrappedExecute = async (input: unknown, ctx?: unknown): Promise<unknown> => {
+    const sdkCallId = (ctx as { toolCall?: { callId?: unknown } } | undefined)?.toolCall?.callId;
+    const callId = typeof sdkCallId === 'string' && sdkCallId.length > 0 ? sdkCallId : randomUUID();
+    await safeFireHook('PreToolUse', { event: 'PreToolUse', toolName: name, input, callId });
+    try {
+      const output = await originalExecute(input, ctx);
+      await safeFireHook('PostToolUse', {
+        event: 'PostToolUse',
+        toolName: name,
+        input,
+        output,
+        isError: false,
+        callId,
+      });
+      return output;
+    } catch (err) {
+      const output = err instanceof Error ? err.message : String(err);
+      await safeFireHook('PostToolUse', {
+        event: 'PostToolUse',
+        toolName: name,
+        input,
+        output,
+        isError: true,
+        callId,
+      });
+      throw err;
+    }
   };
   return {
     ...t,

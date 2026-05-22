@@ -1513,3 +1513,466 @@ describe('OpenRouterAgentRun session.json (Phase 1.6)', () => {
     }
   });
 });
+
+describe('OpenRouterAgentRun onHook (Phase 1.7)', () => {
+  // Mirror the local singleToolCallModel helper used by canUseTool tests, but
+  // exposed here so the onHook block can drive the wrapped tool path itself.
+  function singleToolCallModel(args: { toolName: string; callId: string; input: unknown }) {
+    return (request: {
+      tools: Array<{ function: { name: string; execute?: (i: unknown, c?: unknown) => unknown } }>;
+    }) => {
+      const tool = request.tools.find((t) => t.function.name === args.toolName);
+      return {
+        async *getFullResponsesStream() {
+          yield { type: 'turn.start', turnNumber: 0 };
+          yield {
+            type: 'response.output_item.done',
+            outputIndex: 0,
+            sequenceNumber: 1,
+            item: {
+              type: 'function_call',
+              callId: args.callId,
+              name: args.toolName,
+              arguments: JSON.stringify(args.input),
+            },
+          };
+          let output: unknown;
+          let status: 'completed' | 'incomplete' = 'completed';
+          try {
+            output = await tool!.function.execute!(args.input, {
+              // The SDK normally surfaces the active FunctionCallItem on
+              // ctx.toolCall; provide a matching shape so the hook wrapper
+              // picks the SDK-issued callId over a synthetic UUID.
+              toolCall: { callId: args.callId },
+            });
+          } catch (e) {
+            output = (e as Error).message;
+            status = 'incomplete';
+          }
+          yield {
+            type: 'tool.call_output',
+            timestamp: 1,
+            output: {
+              callId: args.callId,
+              type: 'function_call_output',
+              output,
+              status,
+            },
+          };
+          yield { type: 'turn.end', turnNumber: 0 };
+        },
+        async getResponse() {
+          return {
+            id: 'r',
+            model: 'm',
+            usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            output: [],
+          };
+        },
+      };
+    };
+  }
+
+  function makeEchoTool() {
+    return {
+      type: 'function' as const,
+      function: {
+        name: 'echo_tool',
+        description: 'echo',
+        execute: async (input: unknown) => ({ echoed: input }),
+      },
+    };
+  }
+
+  it('fires SessionStart exactly once, after session_started, with sessionId/cwd/model', async () => {
+    callModelMock.mockImplementation(
+      fakeCallModel({
+        events: [
+          { type: 'turn.start', turnNumber: 0 },
+          { type: 'turn.end', turnNumber: 0 },
+        ],
+      }),
+    );
+
+    const hookOrder: string[] = [];
+    const hookCalls: Array<{ event: string; payload: unknown }> = [];
+    const events: AgentCoreEvent[] = [];
+    const onHook = vi.fn(async (event: string, payload: unknown) => {
+      hookOrder.push(`hook:${event}`);
+      hookCalls.push({ event, payload });
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      model: 'my-test-model',
+      cwd: '/tmp/explicit-cwd',
+      logsRoot: join(process.cwd(), '.test-tmp', 'session-start-logs'),
+      onHook,
+    });
+    for await (const e of run) {
+      if (e.type === 'session_started') hookOrder.push('event:session_started');
+      events.push(e);
+    }
+
+    const sessionStartCalls = hookCalls.filter((c) => c.event === 'SessionStart');
+    expect(sessionStartCalls).toHaveLength(1);
+    expect(sessionStartCalls[0].payload).toEqual({
+      event: 'SessionStart',
+      sessionId: TEST_SESSION,
+      cwd: '/tmp/explicit-cwd',
+      model: 'my-test-model',
+    });
+
+    // SessionStart fires AFTER the session_started event is yielded.
+    const sessionStartedIdx = hookOrder.indexOf('event:session_started');
+    const sessionStartIdx = hookOrder.indexOf('hook:SessionStart');
+    expect(sessionStartedIdx).toBeGreaterThanOrEqual(0);
+    expect(sessionStartIdx).toBeGreaterThan(sessionStartedIdx);
+
+    await rm(join(process.cwd(), '.test-tmp', 'session-start-logs'), {
+      recursive: true,
+      force: true,
+    });
+  });
+
+  it('fires PreToolUse for every tool call BEFORE the canUseTool decision (audit on deny)', async () => {
+    const orderTrace: string[] = [];
+    const canUseTool = vi.fn(async () => {
+      orderTrace.push('canUseTool');
+      return { behavior: 'deny' as const, reason: 'nope' };
+    });
+    const onHook = vi.fn<(event: string, payload: unknown) => Promise<void>>(async (event) => {
+      orderTrace.push(`hook:${event}`);
+    });
+
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'echo_tool', callId: 'c-pre-deny', input: { x: 1 } }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool()] as unknown as never,
+      canUseTool,
+      onHook,
+    });
+    const events = await collect(run);
+
+    const preCalls = onHook.mock.calls.filter((c) => c[0] === 'PreToolUse');
+    expect(preCalls).toHaveLength(1);
+    expect(preCalls[0][1]).toEqual({
+      event: 'PreToolUse',
+      toolName: 'echo_tool',
+      input: { x: 1 },
+      callId: 'c-pre-deny',
+    });
+
+    // PreToolUse must come before the canUseTool decision.
+    const preIdx = orderTrace.indexOf('hook:PreToolUse');
+    const cutIdx = orderTrace.indexOf('canUseTool');
+    expect(preIdx).toBeGreaterThanOrEqual(0);
+    expect(cutIdx).toBeGreaterThan(preIdx);
+
+    // Denial still flows through as tool_result.isError.
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(true);
+  });
+
+  it('fires PostToolUse for every tool result with isError matching tool_result.isError', async () => {
+    const onHook = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'echo_tool', callId: 'c-post', input: { msg: 'ok' } }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool()] as unknown as never,
+      onHook,
+    });
+    const events = await collect(run);
+
+    const postCalls = onHook.mock.calls.filter((c) => c[0] === 'PostToolUse');
+    expect(postCalls).toHaveLength(1);
+    expect(postCalls[0][1]).toMatchObject({
+      event: 'PostToolUse',
+      toolName: 'echo_tool',
+      input: { msg: 'ok' },
+      output: { echoed: { msg: 'ok' } },
+      isError: false,
+      callId: 'c-post',
+    });
+
+    const toolResult = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect((postCalls[0][1] as { isError: boolean }).isError).toBe(toolResult.isError);
+  });
+
+  it('PostToolUse carries the synth-deny payload when canUseTool denies', async () => {
+    const onHook = vi.fn();
+    const canUseTool = vi
+      .fn()
+      .mockResolvedValue({ behavior: 'deny', reason: 'forbidden by policy' });
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'echo_tool', callId: 'c-deny-post', input: {} }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool()] as unknown as never,
+      canUseTool,
+      onHook,
+    });
+    const events = await collect(run);
+
+    const postCall = onHook.mock.calls.find((c) => c[0] === 'PostToolUse');
+    expect(postCall).toBeDefined();
+    const postPayload = postCall![1] as { isError: boolean; output: unknown };
+    expect(postPayload.isError).toBe(true);
+    expect(JSON.parse(String(postPayload.output))).toEqual({
+      error: 'forbidden by policy',
+      denied: true,
+    });
+
+    // The same payload appears on tool_result.output → invariant cross-check.
+    const toolResult = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(toolResult.output).toBe(postPayload.output);
+  });
+
+  it('fires SessionEnd exactly once after stream_complete, with status matching stream_complete.status', async () => {
+    callModelMock.mockImplementation(
+      fakeCallModel({
+        events: [
+          { type: 'turn.start', turnNumber: 0 },
+          { type: 'turn.end', turnNumber: 0 },
+        ],
+        response: {
+          id: 'r',
+          model: 'm',
+          usage: { cost: 0.0123, inputTokens: 5, outputTokens: 7, totalTokens: 12 },
+          output: [],
+        },
+      }),
+    );
+
+    const hookOrder: string[] = [];
+    const events: AgentCoreEvent[] = [];
+    const hookCalls: Array<{ event: string; payload: unknown }> = [];
+    const onHook = vi.fn(async (event: string, payload: unknown) => {
+      hookOrder.push(`hook:${event}`);
+      hookCalls.push({ event, payload });
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      onHook,
+    });
+    for await (const e of run) {
+      if (e.type === 'stream_complete') hookOrder.push('event:stream_complete');
+      events.push(e);
+    }
+
+    const sessionEndCalls = hookCalls.filter((c) => c.event === 'SessionEnd');
+    expect(sessionEndCalls).toHaveLength(1);
+    const payload = sessionEndCalls[0].payload as {
+      status: string;
+      usage: { totalTokens: number };
+      costUsd: number;
+      sessionId: string;
+    };
+    const complete = events.find((e) => e.type === 'stream_complete') as Extract<
+      AgentCoreEvent,
+      { type: 'stream_complete' }
+    >;
+    expect(payload.status).toBe(complete.status);
+    expect(payload.sessionId).toBe(TEST_SESSION);
+    expect(payload.costUsd).toBe(complete.costUsd);
+    expect(payload.usage?.totalTokens).toBe(complete.usage?.totalTokens);
+
+    const completeIdx = hookOrder.indexOf('event:stream_complete');
+    const sessionEndIdx = hookOrder.indexOf('hook:SessionEnd');
+    expect(completeIdx).toBeGreaterThanOrEqual(0);
+    expect(sessionEndIdx).toBeGreaterThan(completeIdx);
+  });
+
+  it('contains a throwing hook: logs the error and continues the run unmodified', async () => {
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'echo_tool', callId: 'c-throw-hook', input: { ok: 1 } }),
+    );
+
+    const logCalls: Array<[string, string, Record<string, unknown> | undefined]> = [];
+    const logger = (
+      level: 'debug' | 'info' | 'warn' | 'error',
+      msg: string,
+      fields?: Record<string, unknown>,
+    ): void => {
+      logCalls.push([level, msg, fields]);
+    };
+    // Throw on every hook event so we exercise PreToolUse, PostToolUse,
+    // SessionStart, and SessionEnd all at once.
+    const onHook = vi.fn<(event: string, payload: unknown) => Promise<void>>(async (event) => {
+      throw new Error(`hook-${event}-failed`);
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool()] as unknown as never,
+      onHook,
+      logger,
+    });
+    const events = await collect(run);
+
+    // Run completes despite every hook throwing.
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.type).toBe('stream_complete');
+    expect(complete.status).toBe('success');
+
+    // Tool result still surfaced normally (no state mutation from hook).
+    const toolResult = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(toolResult.isError).toBe(false);
+
+    // Logger called with 'error' for each thrown hook (at least 4: Start, Pre,
+    // Post, End).
+    const errorLogs = logCalls.filter(([level, msg]) => level === 'error' && msg === 'Hook threw');
+    expect(errorLogs.length).toBeGreaterThanOrEqual(4);
+    const hookEvents = errorLogs.map(([, , fields]) => (fields as { event: string }).event);
+    expect(new Set(hookEvents)).toEqual(
+      new Set(['SessionStart', 'PreToolUse', 'PostToolUse', 'SessionEnd']),
+    );
+  });
+
+  it('does not fire any hook when onHook is omitted (backward compat)', async () => {
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'echo_tool', callId: 'c-no-hook', input: {} }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool()] as unknown as never,
+    });
+    const events = await collect(run);
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.type).toBe('stream_complete');
+    expect(complete.status).toBe('success');
+    // No assertion needed on hook calls — there is no onHook to inspect.
+    // The lack of crash is the entire contract here.
+  });
+
+  it('orders hooks: PreToolUse → canUseTool → tool execute → PostToolUse → tool_result yield', async () => {
+    const trace: string[] = [];
+    const canUseTool = vi.fn(async () => {
+      trace.push('canUseTool');
+      return { behavior: 'allow' as const };
+    });
+    const onHook = vi.fn<(event: string, payload: unknown) => Promise<void>>(async (event) => {
+      trace.push(`hook:${event}`);
+    });
+
+    callModelMock.mockImplementation(
+      (request: {
+        tools: Array<{
+          function: { name: string; execute?: (i: unknown, c?: unknown) => unknown };
+        }>;
+      }) => {
+        const tool = request.tools.find((t) => t.function.name === 'trace_tool');
+        return {
+          async *getFullResponsesStream() {
+            yield { type: 'turn.start', turnNumber: 0 };
+            yield {
+              type: 'response.output_item.done',
+              outputIndex: 0,
+              sequenceNumber: 1,
+              item: {
+                type: 'function_call',
+                callId: 'c-order',
+                name: 'trace_tool',
+                arguments: '{}',
+              },
+            };
+            const out = await tool!.function.execute!({}, { toolCall: { callId: 'c-order' } });
+            yield {
+              type: 'tool.call_output',
+              timestamp: 1,
+              output: {
+                callId: 'c-order',
+                type: 'function_call_output',
+                output: out,
+                status: 'completed',
+              },
+            };
+            yield { type: 'turn.end', turnNumber: 0 };
+          },
+          async getResponse() {
+            return {
+              id: 'r',
+              model: 'm',
+              usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              output: [],
+            };
+          },
+        };
+      },
+    );
+
+    const traceTool = {
+      type: 'function' as const,
+      function: {
+        name: 'trace_tool',
+        description: 'trace',
+        execute: async () => {
+          trace.push('exec');
+          return 'ok';
+        },
+      },
+    };
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [traceTool] as unknown as never,
+      canUseTool,
+      onHook,
+    });
+    const events: AgentCoreEvent[] = [];
+    for await (const e of run) {
+      if (e.type === 'tool_result') trace.push('yield:tool_result');
+      events.push(e);
+    }
+
+    // PreToolUse → canUseTool → exec → PostToolUse → tool_result yielded.
+    const preIdx = trace.indexOf('hook:PreToolUse');
+    const cutIdx = trace.indexOf('canUseTool');
+    const execIdx = trace.indexOf('exec');
+    const postIdx = trace.indexOf('hook:PostToolUse');
+    const yieldIdx = trace.indexOf('yield:tool_result');
+    expect(preIdx).toBeGreaterThanOrEqual(0);
+    expect(cutIdx).toBeGreaterThan(preIdx);
+    expect(execIdx).toBeGreaterThan(cutIdx);
+    expect(postIdx).toBeGreaterThan(execIdx);
+    expect(yieldIdx).toBeGreaterThan(postIdx);
+  });
+});

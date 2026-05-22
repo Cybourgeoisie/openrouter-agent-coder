@@ -7,6 +7,12 @@ export type {
   CanUseToolResult,
   OnHook,
 } from './agent.js';
-export type { AgentCoreEvent, AgentCoreEventStatus, TokenUsage } from './events.js';
+export type {
+  AgentCoreEvent,
+  AgentCoreEventStatus,
+  HookEvent,
+  HookPayload,
+  TokenUsage,
+} from './events.js';
 export { allTools, DEFAULT_TOOL_CONTEXT } from './tools/index.js';
 export type { ToolContext } from './tools/index.js';
