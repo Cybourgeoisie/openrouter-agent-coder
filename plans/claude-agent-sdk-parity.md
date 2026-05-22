@@ -1,16 +1,18 @@
 # Claude Agent SDK vs OpenRouter Agent Coder — Parity Analysis
 
 > Comparison of the [Claude Code Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) (TypeScript) against the openrouter-agent-coder feature set.
-> Generated 2026-05-21.
+> Originally generated 2026-05-21. **Last reviewed against this codebase: 2026-05-22** (after Phase 0 + Phase 1 + 1.11–1.15 landed — see [`callboard-compatibility.md`](./callboard-compatibility.md)).
 
 ## Summary
 
 | Status             | Count  |
 | ------------------ | ------ |
-| Full parity        | 8      |
-| Partial parity     | 7      |
-| Missing            | 26     |
-| **Total features** | **41** |
+| Full parity        | 10     |
+| Partial parity     | 11     |
+| Missing            | 25     |
+| **Total features** | **46** |
+
+Net change vs the original 2026-05-21 snapshot: **+2 Full** (`canUseTool`, new `Interrupt/abort` row), **+4 Partial** (`PreToolUse`/`PostToolUse` are audit-only — hooks can log but can't block/modify like the Claude SDK; `SessionStart`/`SessionEnd` half of lifecycle hooks; constructor-injected tools; constructor-supplied system prompt). Most "Missing" rows softened to "Partial" because their building blocks landed in Phase 1; the remaining gap is the ergonomic / discovery / block-modify layer on top.
 
 ---
 
@@ -18,16 +20,17 @@
 
 ### Core Agent Loop
 
-| Feature                  | Claude Agent SDK                                                                               | OpenRouter Agent Coder                                                        | Parity      |
-| ------------------------ | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ----------- |
-| Autonomous tool loop     | SDK handles tool calls, results, repeats until done                                            | Delegates to `@openrouter/agent` `callModel()` SDK                            | **Full**    |
-| Turn counting            | Tracks turns, exposes in ResultMessage                                                         | Tracks turns via streaming events                                             | **Full**    |
-| Max turns stop condition | `maxTurns` option                                                                              | `stepCountIs(MAX_STEPS)` stop condition                                       | **Full**    |
-| Max cost stop condition  | `maxBudgetUsd` option                                                                          | `maxCost(MAX_COST)` stop condition                                            | **Full**    |
-| Effort / reasoning level | `effort` option (low/medium/high/xhigh/max)                                                    | Not implemented                                                               | **None**    |
-| Context compaction       | Automatic summarization when context fills; PreCompact hook; manual `/compact`                 | Not implemented — relies on SDK's `previousResponseId`                        | **None**    |
-| Streaming output         | Rich message stream (SystemMessage, AssistantMessage, UserMessage, StreamEvent, ResultMessage) | Text delta streaming + tool call/result events via `getFullResponsesStream()` | **Partial** |
-| Streaming input          | AsyncGenerator-based input; mid-session messages, interrupts, image attachments                | Not implemented — REPL sends one prompt at a time                             | **None**    |
+| Feature                  | Claude Agent SDK                                                                               | OpenRouter Agent Coder                                                                                      | Parity      |
+| ------------------------ | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------- |
+| Autonomous tool loop     | SDK handles tool calls, results, repeats until done                                            | Delegates to `@openrouter/agent` `callModel()` SDK                                                          | **Full**    |
+| Turn counting            | Tracks turns, exposes in ResultMessage                                                         | Tracks turns via streaming events; surfaced on `turn_end` and `stream_complete`                             | **Full**    |
+| Max turns stop condition | `maxTurns` option                                                                              | `maxTurns` constructor option → `stepCountIs()`                                                             | **Full**    |
+| Max cost stop condition  | `maxBudgetUsd` option                                                                          | `maxBudgetUsd` constructor option → `maxCost()`                                                             | **Full**    |
+| Interrupt / abort        | `query.interrupt()` and streaming-input control messages                                       | `signal` constructor option + `run.abort()` method (combined internally via `AbortSignal.any`)              | **Full**    |
+| Effort / reasoning level | `effort` option (low/medium/high/xhigh/max)                                                    | Not implemented                                                                                             | **None**    |
+| Context compaction       | Automatic summarization when context fills; PreCompact hook; manual `/compact`                 | Not implemented — relies on SDK's `previousResponseId`                                                      | **None**    |
+| Streaming output         | Rich message stream (SystemMessage, AssistantMessage, UserMessage, StreamEvent, ResultMessage) | `AgentCoreEvent` discriminated union (text_delta, tool_call/result, turn_start/end, stream_complete, error) | **Partial** |
+| Streaming input          | AsyncGenerator-based input; mid-session messages, interrupts, image attachments                | Not implemented — one prompt per `OpenRouterAgentRun` instance                                              | **None**    |
 
 ### Built-in Tools
 
@@ -49,22 +52,22 @@
 
 ### Permissions & Safety
 
-| Feature                  | Claude Agent SDK                                                          | OpenRouter Agent Coder                                | Parity   |
-| ------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------------- | -------- |
-| Permission modes         | 6 modes: default, dontAsk, acceptEdits, bypassPermissions, plan, auto     | No permission system — all tools run without approval | **None** |
-| Allowed/disallowed tools | `allowedTools`, `disallowedTools` with scoped rules (e.g., `Bash(npm *)`) | Not implemented                                       | **None** |
-| canUseTool callback      | Runtime approval/deny/modify for each tool call                           | Not implemented                                       | **None** |
-| Plan mode (read-only)    | Restricts to read-only tools; explores before editing                     | Not implemented                                       | **None** |
+| Feature                  | Claude Agent SDK                                                          | OpenRouter Agent Coder                                                                                                         | Parity   |
+| ------------------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | -------- |
+| Permission modes         | 6 modes: default, dontAsk, acceptEdits, bypassPermissions, plan, auto     | No named-modes layer; `canUseTool` is the lower-level primitive                                                                | **None** |
+| Allowed/disallowed tools | `allowedTools`, `disallowedTools` with scoped rules (e.g., `Bash(npm *)`) | Not implemented as a separate concept; functionally expressible via `canUseTool`                                               | **None** |
+| canUseTool callback      | Runtime approval/deny/modify for each tool call                           | `canUseTool` constructor option — returns `{ behavior: 'allow' \| 'deny', reason?, updatedInput? }`. Server-side tools bypass. | **Full** |
+| Plan mode (read-only)    | Restricts to read-only tools; explores before editing                     | Not implemented                                                                                                                | **None** |
 
 ### Hooks System
 
-| Feature                  | Claude Agent SDK                                           | OpenRouter Agent Coder                          | Parity   |
-| ------------------------ | ---------------------------------------------------------- | ----------------------------------------------- | -------- |
-| PreToolUse / PostToolUse | Block, modify, log, audit tool calls with matcher patterns | Not implemented                                 | **None** |
-| Session lifecycle hooks  | SessionStart, SessionEnd, Stop, Setup                      | Not implemented (SDK `onTurnEnd` callback only) | **None** |
-| Subagent hooks           | SubagentStart, SubagentStop                                | No subagent system                              | **None** |
-| Notification hook        | Forward agent status to Slack/PagerDuty/etc.               | Not implemented                                 | **None** |
-| PreCompact hook          | Archive transcript before compaction                       | No compaction system                            | **None** |
+| Feature                  | Claude Agent SDK                                           | OpenRouter Agent Coder                                                                                                                                                                                                            | Parity      |
+| ------------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| PreToolUse / PostToolUse | Block, modify, log, audit tool calls with matcher patterns | `onHook` fires `PreToolUse` before the `canUseTool` decision (audit even on deny) and `PostToolUse` after each tool result (`isError` matches subsequent `tool_result.isError`). Audit-only — hooks cannot block or modify input. | **Partial** |
+| Session lifecycle hooks  | SessionStart, SessionEnd, Stop, Setup, Notification        | `onHook` fires `SessionStart` once after `session_started` and `SessionEnd` once after `stream_complete`. Stop / Setup / Notification not implemented.                                                                            | **Partial** |
+| Subagent hooks           | SubagentStart, SubagentStop                                | No subagent system                                                                                                                                                                                                                | **None**    |
+| Notification hook        | Forward agent status to Slack/PagerDuty/etc.               | Not implemented                                                                                                                                                                                                                   | **None**    |
+| PreCompact hook          | Archive transcript before compaction                       | No compaction system                                                                                                                                                                                                              | **None**    |
 
 ### Subagents & Orchestration
 
@@ -76,91 +79,104 @@
 
 ### Sessions & State
 
-| Feature                      | Claude Agent SDK                                                            | OpenRouter Agent Coder                                    | Parity      |
-| ---------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------- | ----------- |
-| Session persistence          | JSONL on disk under `~/.claude/projects/`                                   | `ConversationState` (`previousResponseId`) + `state.json` | **Partial** |
-| Session resume               | `resume` by ID, `continue` most recent, `fork` to branch                    | `--continue` flag (last session), `OR_SESSION_ID` env var | **Partial** |
-| Session forking              | Fork creates new session with copied history                                | Not implemented                                           | **None**    |
-| Session listing / management | `listSessions()`, `getSessionMessages()`, `renameSession()`, `tagSession()` | `sessions.json` registry (append, getLastSession only)    | **Partial** |
-| File checkpointing           | Track & rewind file changes to any checkpoint                               | Not implemented                                           | **None**    |
-| persistSession: false        | In-memory only sessions (no disk writes)                                    | Not implemented                                           | **None**    |
+| Feature                      | Claude Agent SDK                                                            | OpenRouter Agent Coder                                                                                                                                                                                       | Parity      |
+| ---------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------- |
+| Session persistence          | JSONL on disk under `~/.claude/projects/`                                   | `ConversationState` (`previousResponseId`) persisted to `<logsRoot>/<sessionId>/state.json` via `FileStateAccessor`                                                                                          | **Partial** |
+| Session resume               | `resume` by ID, `continue` most recent, `fork` to branch                    | `sessionId` constructor arg — host passes the same id to resume; library round-trips `previousResponseId` per turn                                                                                           | **Partial** |
+| Session forking              | Fork creates new session with copied history                                | Not implemented                                                                                                                                                                                              | **None**    |
+| Session listing / management | `listSessions()`, `getSessionMessages()`, `renameSession()`, `tagSession()` | Not implemented in-library. The callboard `OpenRouterSessionProvider` concept (Phase 2 in companion plan) scans `<logsRoot>/<id>/session.json` externally — Phase 1.6 captures `cwd` there for that purpose. | **None**    |
+| File checkpointing           | Track & rewind file changes to any checkpoint                               | Not implemented                                                                                                                                                                                              | **None**    |
+| persistSession: false        | In-memory only sessions (no disk writes)                                    | Not implemented (library always writes `<logsRoot>/<id>/`)                                                                                                                                                   | **None**    |
 
 ### Extensibility
 
-| Feature                     | Claude Agent SDK                                                                    | OpenRouter Agent Coder                       | Parity   |
-| --------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------- | -------- |
-| MCP server support          | stdio, HTTP/SSE, in-process SDK servers; `.mcp.json` config                         | Not implemented                              | **None** |
-| Custom tools (SDK MCP)      | `tool()` helper + `createSdkMcpServer()` — in-process custom tools with Zod schemas | Not implemented (tools are hardcoded)        | **None** |
-| Skills system               | Markdown-based skills in `.claude/skills/`                                          | Not implemented                              | **None** |
-| Slash commands              | Custom commands in `.claude/commands/`                                              | Not implemented                              | **None** |
-| Plugins                     | Extend with custom commands, agents, MCP servers                                    | Not implemented                              | **None** |
-| CLAUDE.md / project context | Loaded from `.claude/` and `~/`, configurable via `settingSources`                  | Not implemented (system prompt is hardcoded) | **None** |
+| Feature                     | Claude Agent SDK                                                                    | OpenRouter Agent Coder                                                                                                                                                      | Parity      |
+| --------------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| MCP server support          | stdio, HTTP/SSE, in-process SDK servers; `.mcp.json` config                         | Not implemented                                                                                                                                                             | **None**    |
+| Custom tools                | `tool()` helper + `createSdkMcpServer()` — in-process custom tools with Zod schemas | `tools` constructor option accepts any `readonly Tool[]`; bundled `allTools(ctx)` is the default. No `tool()` helper / Zod-schema convenience / MCP-server bridging.        | **Partial** |
+| Skills system               | Markdown-based skills in `.claude/skills/`                                          | Not implemented                                                                                                                                                             | **None**    |
+| Slash commands              | Custom commands in `.claude/commands/`                                              | Not implemented                                                                                                                                                             | **None**    |
+| Plugins                     | Extend with custom commands, agents, MCP servers                                    | Not implemented                                                                                                                                                             | **None**    |
+| CLAUDE.md / project context | Loaded from `.claude/` and `~/`, configurable via `settingSources`                  | `instructions` constructor option accepts any system prompt (defaults to `DEFAULT_INSTRUCTIONS`). No auto-discovery from `.claude/` / `CLAUDE.md` files — host supplies it. | **Partial** |
+
+### Diagnostics & Accounts
+
+| Feature                | Claude Agent SDK                                 | OpenRouter Agent Coder                                                                                                       | Parity  |
+| ---------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | ------- |
+| Account / credit info  | Anthropic billing surfaced via console / API key | `accountInfo({ apiKey })` → `{ provider: 'openrouter', label, usageUsd, limitUsd }` (Phase 1.8). Returns `null` for 401/403. | **N/A** |
+| Supported models query | Models surfaced via Anthropic console            | `supportedModels({ apiKey })` → `{ value, displayName, description }[]` against `/api/v1/models` (Phase 1.8)                 | **N/A** |
+
+These rows mark provider-specific surface area without a directly-comparable Claude SDK feature; they're listed for completeness, not counted toward parity totals.
 
 ---
 
 ## Required Features for Parity — Prioritized
 
 > **P0** = core agent capability gaps
-> **P1** = important for production use  
+> **P1** = important for production use
 > **P2** = nice to have / advanced
+
+Items shipped in Phase 1 are crossed through with a back-pointer; the **layer-on-top** gap (e.g., the named-modes layer above `canUseTool`) is what remains in scope.
 
 ### P0 — Critical
 
-1. **Permission system** — Implement permission modes (at least default + acceptEdits + bypassPermissions) with `allowedTools`/`disallowedTools` filtering and `canUseTool` callback for runtime approval.
+1. **Permission modes layer.** Named modes (`default` / `acceptEdits` / `bypassPermissions` / `plan`) and an `allowedTools`/`disallowedTools` filtering syntax (e.g., `Bash(npm *)`) on top of the existing primitive. _`canUseTool` runtime callback shipped in Phase 1.4 — the named-modes layer would compose on top._
 
-2. **Context compaction** — Detect when context window is filling and automatically summarize older messages to free space while preserving key decisions.
+2. **Context compaction.** Detect context-window pressure and automatically summarize older messages.
 
-3. **Hooks system (PreToolUse/PostToolUse)** — Callback-based interception for tool calls: block, modify input, audit, or add context. Pattern matchers to filter by tool name.
+3. ~~**Hooks (PreToolUse / PostToolUse).**~~ _Shipped in Phase 1.7 via `onHook` (audit-only)._ Block-and-modify capability moves to P1.
 
-4. **Glob tool** — File pattern matching (e.g., `**/*.ts`) separate from directory listing. Current `list_directory` is too basic.
+4. **Glob tool.** File pattern matching (e.g., `**/*.ts`) separate from `list_directory`.
 
-5. **AskUserQuestion tool** — Let the agent ask the user clarifying questions with structured multiple-choice options during execution.
+5. **AskUserQuestion tool.** Structured multiple-choice clarifying questions during execution.
 
-6. **CLAUDE.md / project context** — Load project instructions from `.claude/` or `CLAUDE.md` files, injected into every request as persistent context.
+6. **CLAUDE.md / project-context auto-discovery.** Load instructions from `.claude/` / `CLAUDE.md` files automatically. _`instructions` constructor arg shipped in Phase 1.5 — auto-discovery layer would compose on top._
 
 ### P1 — Important
 
-7. **Subagent system** — Agent tool for spawning focused subtasks with isolated context, restricted tools, and optional model overrides.
+7. **Subagent system.** Agent tool for spawning focused subtasks with isolated context, restricted tools, optional model overrides.
 
-8. **Session forking** — Create a new session branching from an existing one's history to explore alternative approaches.
+8. **Session forking.** Branch a session from existing history to explore alternatives.
 
-9. **Streaming input mode** — AsyncGenerator-based input for mid-session messages, interruptions, and image attachments.
+9. **Streaming input mode.** AsyncGenerator-based input for mid-session messages, interruptions, image attachments. (Interrupt-only is already covered via `signal` / `abort()`.)
 
-10. **Rich message stream** — Typed message objects (SystemMessage, AssistantMessage, UserMessage, ResultMessage) instead of raw stream events.
+10. **Rich message stream.** Typed message objects (SystemMessage, AssistantMessage, UserMessage, ResultMessage) instead of raw stream events. (Partial overlap with the "Streaming output" matrix row.)
 
-11. **MCP server support** — Connect external tools via Model Context Protocol: stdio, HTTP/SSE transports, `.mcp.json` config.
+11. **MCP server support.** Connect external tools via Model Context Protocol — stdio, HTTP/SSE, `.mcp.json` config.
 
-12. **Custom tools API** — `tool()` helper + `createSdkMcpServer()` pattern for defining custom tools with Zod schemas and handlers.
+12. **Custom-tools ergonomics.** `tool()` helper / `createSdkMcpServer` / Zod-schema convenience. _Constructor-injected `tools` array shipped in Phase 1.2/1.5 — caller can pass any `Tool[]`. The helper / MCP-server bridge is the remaining gap._
 
-13. **Effort / reasoning level** — Control reasoning depth per query (low/medium/high/xhigh/max) to trade cost vs thoroughness.
+13. **Effort / reasoning level.** `effort` option to trade cost vs depth.
 
-14. **File checkpointing** — Track file changes and allow rewinding to any previous checkpoint state.
+14. **File checkpointing.** Track file changes and rewind to checkpoints.
 
-15. **Session lifecycle hooks** — SessionStart, SessionEnd, Stop, Notification, and other lifecycle callbacks.
+15. **Remaining session lifecycle hooks.** `Stop` (before exit), `Setup` (on first call), `Notification` (forward status externally). _`SessionStart` / `SessionEnd` shipped in Phase 1.7 via `onHook`._
 
-16. **Enhanced Bash tool** — Add description field, configurable timeout, better output handling to match Claude SDK's Bash.
+16. **Block-and-modify hook capability.** Today `onHook` is audit-only — to match the Claude SDK, `PreToolUse` should be able to short-circuit the call or rewrite input. (Currently that's done via `canUseTool`; merging the two surfaces is a design decision.)
 
-17. **Enhanced Grep tool** — Add context lines (-A/-B/-C), file type filters, output modes (content/files/count) to match SDK's Grep.
+17. **Enhanced Bash tool.** Add description field, configurable timeout, improved output handling.
+
+18. **Enhanced Grep tool.** Add context lines (`-A`/`-B`/`-C`), file-type filters, output modes (content/files/count).
 
 ### P2 — Nice to Have
 
-18. **Monitor tool** — Watch background processes and react to output lines as events.
+19. **Monitor tool.** Watch background processes and react to output lines as events.
 
-19. **NotebookEdit tool** — Edit Jupyter notebook cells.
+20. **NotebookEdit tool.** Edit Jupyter notebook cells.
 
-20. **ToolSearch** — Dynamic tool loading from large MCP tool sets to save context window space.
+21. **ToolSearch.** Dynamic tool loading from large MCP tool sets to save context.
 
-21. **TaskCreate / TaskUpdate** — Built-in task tracking tools for organizing multi-step work.
+22. **TaskCreate / TaskUpdate.** Built-in task tracking for multi-step work.
 
-22. **Skills system** — Markdown-based reusable capabilities in `.claude/skills/`.
+23. **Skills system.** Markdown-based reusable capabilities in `.claude/skills/`.
 
-23. **Slash commands** — Custom commands in `.claude/commands/`.
+24. **Slash commands.** Custom commands in `.claude/commands/`.
 
-24. **Plugins** — Extension system for custom commands, agents, MCP servers.
+25. **Plugins.** Extension system for custom commands, agents, MCP servers.
 
-25. **Plan mode** — Read-only mode for analysis without modifications.
+26. **Plan mode.** Read-only mode for analysis without modifications.
 
-26. **In-memory sessions** — `persistSession: false` for stateless/ephemeral usage.
+27. **In-memory sessions.** `persistSession: false` for stateless/ephemeral usage.
 
 ---
 
