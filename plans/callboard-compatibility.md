@@ -2,7 +2,9 @@
 
 Make openrouter-agent-coder consumable by [callboard](https://github.com/WolpertingerLabs/callboard) as a third `AgentProvider` + `SessionProvider`, alongside the in-tree `claude-code` adapter and the planned `codex` adapter.
 
-Status: **Not started.** Pre-requisites for this work landed in callboard via PR #125 (`AgentProvider`) and PR #126 (`SessionProvider`). The codex adapter (callboard's `plans/codex-adapter.md`) is the closest worked example to mirror.
+Status: **Phase 0 + Phase 1 complete (18 PRs merged, through Phase 1.15 on 2026-05-22).** Phase 2 (callboard adapter, ~40h) deferred — lands separately in the callboard repo whenever the integration becomes a priority. See the [Implementation Order](#implementation-order) section below for the per-card breakdown and final coverage numbers.
+
+Pre-requisites landed in callboard via PR #125 (`AgentProvider`) and PR #126 (`SessionProvider`). The codex adapter (callboard's `plans/codex-adapter.md`) is the closest worked example to mirror.
 
 Companion docs:
 
@@ -310,6 +312,29 @@ This repo currently has no linter, no formatter, no CI, and `src/agent.ts` is ex
 | 1.10 | **`package.json` + README:** single `main`/`types`/`exports` entry, drop `bin`, drop `dotenv` if not already done in 1.1, version bump to 0.2.0. Rewrite README around library usage; remove all CLI documentation. Document the public API surface (constructor opts, event union, helpers).                                                                                                                                                                                                                                                                                          | 2h   |
 
 **Phase 1 total:** ~28h (Phase 0 + Phase 1 = ~33h). Up from 21h after Phase 0 + integration tests + coverage re-inclusion got folded in.
+
+#### Phase 1.11–1.15 — Coverage stabilization (post-1.10 add-on, 2026-05-22)
+
+After Phase 1.10 landed, four cards (1.11–1.14) were carded to close coverage gaps the original plan had left open, plus an ad-hoc 1.15 polish. All five test-only — zero production-code touched after 1.10.
+
+| Step | What                                                                                                                                                                                                                                                              | PR  |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- |
+| 1.11 | **`run-command.ts` cancel + kill-signal coverage.** SIGTERM-then-SIGKILL timer path, abort-during-stdio path, stderr-only capture.                                                                                                                                | #32 |
+| 1.12 | **`agent.ts` error-path coverage.** Permission-denial synth-deny payload, hook-throw swallowing, constructor-throw → emit error event, abort during stream, max-budget exhaustion via `maxCost` SDK arg.                                                          | #33 |
+| 1.13 | **Tool FS error fallback coverage.** `chmod 000` patterns for `readdir`/`stat`/`readFile` fallbacks in `grep-files.ts`, broken-symlink skip, unreadable-file `continue`.                                                                                          | #34 |
+| 1.14 | **API/state edges + raise coverage thresholds.** `openrouter-api.ts` wrong-type `usage`/`limit`/`label` fallbacks; `file-state.ts` non-ENOENT rethrow via `chmod 000`. Ratcheted thresholds to 95/90/94/97.                                                       | #35 |
+| 1.15 | **Coverage gate polish (ad-hoc).** Excluded `src/__tests__/**` from coverage scope (was measuring test scaffolding). Added test for `wrapToolWithHooks`'s `randomUUID` callId fallback when SDK ctx omits `toolCall.callId`. Ratcheted thresholds to 96/92/94/98. | #36 |
+
+**Final coverage** (library scope, excluding test scaffolding): statements **97.51%**, branches **93.85%**, functions **95.45%**, lines **99.46%**. Thresholds locked at **96 / 92 / 94 / 98** (1.45–1.85pp buffer per axis). 166 tests, all green on CI.
+
+**Hard invariants verified at every merge** (grep-clean in non-test `src/`): no `process.env` reads, no `console.*`, no `process.exit`/`process.stdin`/`readline`; `bin` absent from `package.json`; `process.cwd` exactly once at `src/agent.ts:154`.
+
+**Coverage gaps deliberately left** (diminishing returns):
+
+- `agent.ts:547,620` wrapper early-returns when SDK tools have no local `execute` — defensive type guard, no realistic library-consumer input reaches it.
+- `openrouter-api.ts:59` final sub-branch — Phase 1.14 covered the substance; remainder is a combinatoric microbranch.
+- `run-command.ts:49-50` SIGTERM-already-gone `catch` — race-dependent, flaky to test, defensive only.
+- Various optional-chain micro-branches.
 
 ### Phase 2 — Callboard Adapter (~40h, callboard repo — deferred)
 
