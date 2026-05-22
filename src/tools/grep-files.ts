@@ -105,7 +105,7 @@ export const grepFilesTool = tool({
     try {
       regex = new RegExp(pattern, flags);
     } catch (err) {
-      throw new Error(`Invalid regex pattern: ${(err as Error).message}`);
+      throw new Error(`Invalid regex pattern: ${(err as Error).message}`, { cause: err });
     }
 
     const files = await collectFiles(path, file_glob);
