@@ -45,6 +45,19 @@ describe('accountInfo', () => {
     });
   });
 
+  it('falls back to defaults when usage/limit/label have wrong types', async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse(readFixture('auth-key-wrong-types.json')));
+
+    const info = await accountInfo({ apiKey: 'sk-test' });
+
+    expect(info).toEqual({
+      provider: 'openrouter',
+      label: '',
+      usageUsd: 0,
+      limitUsd: null,
+    });
+  });
+
   it('parses null limit as null', async () => {
     fetchMock.mockResolvedValueOnce(
       mockResponse({ data: { label: 'free', usage: 1.5, limit: null } }),

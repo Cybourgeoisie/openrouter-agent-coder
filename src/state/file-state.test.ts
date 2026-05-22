@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createFileStateAccessor } from './file-state.js';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ConversationState } from '@openrouter/agent';
@@ -74,6 +74,21 @@ describe('FileStateAccessor', () => {
     const raw = await readFile(statePath, 'utf-8');
     const parsed = JSON.parse(raw);
     expect(parsed.id).toBe('conv_test');
+  });
+
+  it('rethrows non-ENOENT errors from readFile (e.g. EACCES)', async () => {
+    const accessor = createFileStateAccessor(LOGS_ROOT, SESSION_ID);
+    await accessor.save(makeState());
+    const statePath = join(LOGS_ROOT, SESSION_ID, 'state.json');
+
+    await chmod(statePath, 0o000);
+    try {
+      await expect(accessor.load()).rejects.toMatchObject({
+        code: expect.stringMatching(/^(?!ENOENT$).+/),
+      });
+    } finally {
+      await chmod(statePath, 0o600);
+    }
   });
 
   it('preserves message history', async () => {
