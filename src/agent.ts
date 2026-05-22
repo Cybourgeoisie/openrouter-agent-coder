@@ -1,11 +1,4 @@
-import {
-  OpenRouter,
-  stepCountIs,
-  maxCost,
-  isTurnStartEvent,
-  isTurnEndEvent,
-  isToolCallOutputEvent,
-} from '@openrouter/agent';
+import { OpenRouter, stepCountIs, maxCost, isTurnStartEvent } from '@openrouter/agent';
 import { allTools } from './tools/index.js';
 import { createServerToolsHooks } from './tools/server-tools.js';
 import { createFileStateAccessor } from './state/file-state.js';
@@ -107,162 +100,19 @@ export async function runPrompt(
     },
   });
 
-  // ── Tool-display helpers ────────────────────────────────────────────────
-
-  /** Truncate a string to 100 chars, appending '...' when cut. */
-  function truncate(s: string, max = 100): string {
-    const flat = s.replace(/\s+/g, ' ').trim();
-    return flat.length <= max ? flat : `${flat.slice(0, max)}...`;
-  }
-
-  /**
-   * Derive the extra context to show on the ⚙ call line, alongside the
-   * tool name. For file tools this is the filename; for run_command it is
-   * the command string (both truncated to 100 chars).
-   */
-  function callSnippet(toolName: string, args: Record<string, unknown>): string {
-    switch (toolName) {
-      case 'read_file': {
-        const range =
-          args.start_line !== undefined
-            ? `:${args.start_line}${args.end_line !== undefined ? `-${args.end_line}` : '+'}`
-            : '';
-        return truncate(`${args.path ?? ''}${range}`);
-      }
-      case 'write_file':
-      case 'edit_file':
-        return truncate(String(args.path ?? ''));
-      case 'list_directory':
-        return truncate(String(args.path ?? '.'));
-      case 'run_command':
-        return truncate(String(args.command ?? ''));
-      case 'grep_files':
-        return truncate(`/${args.pattern ?? ''}/  ${args.path ?? '.'}`);
-      default:
-        return '';
-    }
-  }
-
-  /**
-   * Derive the extra context to show on the ↳ result line — the first 100
-   * chars of the most informative field in the result payload.
-   */
-  function resultSnippet(toolName: string, resultStr: string): string {
-    try {
-      const parsed = JSON.parse(resultStr) as Record<string, unknown>;
-      switch (toolName) {
-        case 'read_file':
-          return truncate(String(parsed.content ?? resultStr));
-        case 'write_file':
-          return `${parsed.bytesWritten ?? '?'} bytes written`;
-        case 'edit_file':
-          return parsed.replaced ? 'replaced' : 'not replaced';
-        case 'list_directory': {
-          const entries = Array.isArray(parsed.entries) ? parsed.entries : [];
-          return truncate(entries.join(', '));
-        }
-        case 'run_command': {
-          const out = String(parsed.stdout ?? '');
-          const err = String(parsed.stderr ?? '');
-          const code = parsed.exitCode ?? 0;
-          const body = (out || err || '(no output)').trim();
-          const prefix = code !== 0 ? `exit ${code} · ` : '';
-          return prefix + truncate(body);
-        }
-        case 'grep_files': {
-          const count = parsed.matchCount ?? 0;
-          const trunc = parsed.truncated ? '+' : '';
-          return `${count}${trunc} match${count === 1 ? '' : 'es'}`;
-        }
-        default:
-          return truncate(resultStr);
-      }
-    } catch {
-      return truncate(resultStr);
-    }
-  }
-
-  // ── Stream state ────────────────────────────────────────────────────────
-
-  // Track state across turns so we can emit a blank line between whole
-  // message turns (e.g. turn 0 text → tool calls → turn 1 text) while
-  // letting the content itself supply newlines within a single turn.
-  let turnHadText = false;
-  let lastCharInTurn = '';
   // Highest turn number seen across TurnStartEvents (used to report the turn
   // count after streaming ends). 0 means a single shot with no tool round-trips.
   let maxTurnNumber = 0;
-  // Map from callId → tool name, populated from the output_item.done event
-  // so the result line can label itself with the originating tool name.
-  const toolCallNames = new Map<string, string>();
 
   for await (const event of result.getFullResponsesStream()) {
     if (isTurnStartEvent(event)) {
       const currentTurnNumber = event.turnNumber;
       if (currentTurnNumber > maxTurnNumber) maxTurnNumber = currentTurnNumber;
-
-      // Reset per-turn tracking at the start of each new message turn.
-      turnHadText = false;
-      lastCharInTurn = '';
-
-      // Emit a visible turn-separator banner for every turn after the first
-      // so the user can see agentic round-trips happening in real time.
-      if (currentTurnNumber > 0) {
-        onTextDelta(`\n── Turn ${currentTurnNumber} ──\n`);
-      }
-    } else if (isTurnEndEvent(event)) {
-      // After a turn that produced visible text, emit a blank separator so
-      // the next turn (if any) is visually separated. Within a turn, newlines
-      // come naturally from the streamed content — we never inject extras.
-      if (turnHadText) {
-        if (lastCharInTurn !== '\n') {
-          onTextDelta('\n');
-        }
-        onTextDelta('\n');
-      }
     } else if ('type' in event && event.type === 'response.output_text.delta') {
       const delta = (event as { type: string; delta: string }).delta;
       if (delta) {
         onTextDelta(delta);
-        lastCharInTurn = delta[delta.length - 1];
-        turnHadText = true;
       }
-    } else if ('type' in event && event.type === 'response.output_item.done') {
-      // A response output item is complete. If it's a function_call, render a
-      // one-liner with the tool name plus a context snippet from its arguments.
-      const doneEvent = event as {
-        type: string;
-        item: { type: string; name?: string; arguments?: string; callId?: string; id?: string };
-      };
-      const item = doneEvent.item;
-      if (item.type === 'function_call' && item.name) {
-        // Record callId → name/args so we can label the result when it arrives.
-        const callId = item.callId ?? item.id ?? '';
-        let args: Record<string, unknown> = {};
-        try {
-          args = JSON.parse(item.arguments ?? '{}') as Record<string, unknown>;
-        } catch {
-          /* ignore */
-        }
-        if (callId) toolCallNames.set(callId, item.name);
-        const snippet = callSnippet(item.name, args);
-        const detail = snippet
-          ? ` ${snippet}`
-          : ` ${Buffer.byteLength(item.arguments ?? '', 'utf8')} bytes`;
-        onTextDelta(`\n⚙ ${item.name}${detail}\n`);
-        turnHadText = true;
-        lastCharInTurn = '\n';
-      }
-    } else if (isToolCallOutputEvent(event)) {
-      // A tool result — look up the tool name via the callId and show a snippet.
-      const { output } = event;
-      const toolName = toolCallNames.get(output.callId) ?? output.callId;
-      const resultStr =
-        typeof output.output === 'string' ? output.output : JSON.stringify(output.output);
-      const snippet = resultSnippet(toolName, resultStr);
-      onTextDelta(`  ↳ ${toolName}: ${snippet}\n`);
-      turnHadText = true;
-      lastCharInTurn = '\n';
     }
   }
 
