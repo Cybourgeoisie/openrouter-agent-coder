@@ -1,5 +1,15 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+
+export interface SessionLog {
+  sessionId: string;
+  startedAt: string;
+  /**
+   * Working directory captured at session-creation time. Optional so older
+   * session.json files (written before Phase 1.6) still parse cleanly.
+   */
+  cwd?: string;
+}
 
 export interface RequestLog {
   sessionId: string;
@@ -36,11 +46,24 @@ async function ensureDir(path: string): Promise<void> {
   await mkdir(path, { recursive: true });
 }
 
-export async function logSessionStart(logsRoot: string, sessionId: string): Promise<void> {
+export async function logSessionStart(
+  logsRoot: string,
+  sessionId: string,
+  cwd: string,
+): Promise<void> {
   const dir = join(logsRoot, sessionId);
   await ensureDir(dir);
-  const startedAt = new Date().toISOString();
-  await writeFile(join(dir, 'session.json'), JSON.stringify({ sessionId, startedAt }, null, 2));
+  const entry: SessionLog = {
+    sessionId,
+    startedAt: new Date().toISOString(),
+    cwd,
+  };
+  await writeFile(join(dir, 'session.json'), JSON.stringify(entry, null, 2));
+}
+
+export async function readSessionLog(logsRoot: string, sessionId: string): Promise<SessionLog> {
+  const raw = await readFile(join(logsRoot, sessionId, 'session.json'), 'utf-8');
+  return JSON.parse(raw) as SessionLog;
 }
 
 export async function logRequest(logsRoot: string, entry: RequestLog): Promise<void> {

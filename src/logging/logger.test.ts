@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import {
   createSessionId,
@@ -9,6 +9,7 @@ import {
   logSessionStart,
   logRequest,
   logGeneration,
+  readSessionLog,
 } from './logger.js';
 
 let LOGS_ROOT: string;
@@ -44,14 +45,40 @@ describe('ID generation', () => {
 });
 
 describe('logSessionStart', () => {
-  it('creates session.json under logsRoot', async () => {
-    await logSessionStart(LOGS_ROOT, 'test-session');
+  it('creates session.json under logsRoot with cwd captured', async () => {
+    await logSessionStart(LOGS_ROOT, 'test-session', '/tmp/cwd-fixture');
 
     const raw = await readFile(join(LOGS_ROOT, 'test-session', 'session.json'), 'utf-8');
     const data = JSON.parse(raw);
     expect(data.sessionId).toBe('test-session');
     expect(data.startedAt).toBeDefined();
     expect(() => new Date(data.startedAt)).not.toThrow();
+    expect(data.cwd).toBe('/tmp/cwd-fixture');
+  });
+});
+
+describe('readSessionLog', () => {
+  it('round-trips a session.json written by logSessionStart', async () => {
+    await logSessionStart(LOGS_ROOT, 'rt-session', '/some/where');
+    const data = await readSessionLog(LOGS_ROOT, 'rt-session');
+    expect(data.sessionId).toBe('rt-session');
+    expect(data.cwd).toBe('/some/where');
+  });
+
+  // Backward compatibility: session.json files written before Phase 1.6
+  // contained only { sessionId, startedAt }. They must still parse without
+  // throwing — cwd is optional on the SessionLog type.
+  it('parses a legacy session.json that lacks cwd', async () => {
+    const dir = join(LOGS_ROOT, 'legacy-session');
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, 'session.json'),
+      JSON.stringify({ sessionId: 'legacy-session', startedAt: '2024-01-01T00:00:00.000Z' }),
+    );
+    const data = await readSessionLog(LOGS_ROOT, 'legacy-session');
+    expect(data.sessionId).toBe('legacy-session');
+    expect(data.startedAt).toBe('2024-01-01T00:00:00.000Z');
+    expect(data.cwd).toBeUndefined();
   });
 });
 

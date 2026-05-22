@@ -1448,3 +1448,68 @@ describe('OpenRouterAgentRun cwd threading', () => {
     }
   });
 });
+
+describe('OpenRouterAgentRun session.json (Phase 1.6)', () => {
+  it('writes session.json with the cwd passed to the constructor', async () => {
+    const { mkdtemp, readFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const logsRoot = await mkdtemp(join(tmpdir(), 'agent-session-cwd-'));
+    const cwdFixture = await mkdtemp(join(tmpdir(), 'agent-session-cwd-target-'));
+
+    try {
+      callModelMock.mockImplementation(
+        fakeCallModel({
+          events: [
+            { type: 'turn.start', turnNumber: 0 },
+            { type: 'turn.end', turnNumber: 0 },
+          ],
+        }),
+      );
+      const run = new OpenRouterAgentRun({
+        apiKey: 'k',
+        sessionId: 'session-cwd-explicit',
+        prompt: 'p',
+        cwd: cwdFixture,
+        logsRoot,
+      });
+      await collect(run);
+      const raw = await readFile(join(logsRoot, 'session-cwd-explicit', 'session.json'), 'utf-8');
+      const data = JSON.parse(raw);
+      expect(data.sessionId).toBe('session-cwd-explicit');
+      expect(data.cwd).toBe(cwdFixture);
+      expect(data.startedAt).toBeDefined();
+    } finally {
+      await rm(logsRoot, { recursive: true, force: true });
+      await rm(cwdFixture, { recursive: true, force: true });
+    }
+  });
+
+  it('defaults the captured cwd to process.cwd() when none is passed', async () => {
+    const { mkdtemp, readFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const logsRoot = await mkdtemp(join(tmpdir(), 'agent-session-cwd-default-'));
+
+    try {
+      callModelMock.mockImplementation(
+        fakeCallModel({
+          events: [
+            { type: 'turn.start', turnNumber: 0 },
+            { type: 'turn.end', turnNumber: 0 },
+          ],
+        }),
+      );
+      const run = new OpenRouterAgentRun({
+        apiKey: 'k',
+        sessionId: 'session-cwd-default',
+        prompt: 'p',
+        logsRoot,
+      });
+      await collect(run);
+      const raw = await readFile(join(logsRoot, 'session-cwd-default', 'session.json'), 'utf-8');
+      const data = JSON.parse(raw);
+      expect(data.cwd).toBe(process.cwd());
+    } finally {
+      await rm(logsRoot, { recursive: true, force: true });
+    }
+  });
+});
