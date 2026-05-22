@@ -1,0 +1,15 @@
+{
+  "name": "max-turns",
+  "steps": [
+    { "type": "yield", "event": { "type": "turn.start", "turnNumber": 0, "timestamp": 1 } },
+    { "type": "yield", "event": { "type": "turn.end", "turnNumber": 0, "timestamp": 2 } },
+    { "type": "yield", "event": { "type": "turn.start", "turnNumber": 1, "timestamp": 3 } },
+    { "type": "yield", "event": { "type": "turn.end", "turnNumber": 1, "timestamp": 4 } }
+  ],
+  "response": {
+    "id": "resp-maxturns",
+    "model": "mock-model",
+    "usage": { "cost": 0.0001, "inputTokens": 4, "outputTokens": 2, "totalTokens": 6 },
+    "output": []
+  }
+}

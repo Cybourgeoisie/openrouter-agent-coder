@@ -1,0 +1,19 @@
+{
+  "name": "abort-mid-stream",
+  "steps": [
+    { "type": "yield", "event": { "type": "turn.start", "turnNumber": 0, "timestamp": 1 } },
+    { "type": "yield", "event": { "type": "response.output_text.delta", "delta": "starting..." } },
+    { "type": "wait_until", "signal": "paused" },
+    {
+      "type": "yield",
+      "event": { "type": "response.output_text.delta", "delta": "should-be-dropped" }
+    },
+    { "type": "yield", "event": { "type": "turn.end", "turnNumber": 0, "timestamp": 2 } }
+  ],
+  "response": {
+    "id": "resp-aborted",
+    "model": "mock-model",
+    "usage": { "cost": 0, "inputTokens": 1, "outputTokens": 0, "totalTokens": 1 },
+    "output": []
+  }
+}
