@@ -33,14 +33,14 @@ export type AgentLogger = (
   fields?: Record<string, unknown>,
 ) => void;
 
-export type CanUseToolDecision =
+export type CanUseToolResult =
   | { behavior: 'allow'; updatedInput?: unknown }
-  | { behavior: 'deny'; reason?: string };
+  | { behavior: 'deny'; reason: string };
 
 export type CanUseTool = (
   toolName: string,
   input: unknown,
-) => Promise<CanUseToolDecision> | CanUseToolDecision;
+) => Promise<CanUseToolResult> | CanUseToolResult;
 
 export type OnHook = (eventName: string, payload: Record<string, unknown>) => void | Promise<void>;
 
@@ -69,7 +69,15 @@ export interface OpenRouterAgentRunOptions {
    * own cancellation if needed.
    */
   tools?: readonly Tool[];
-  /** Permission check invoked before each client tool call. TODO(phase 1.4): wire into tool execute wrappers. */
+  /**
+   * Permission gate invoked before each client tool's execute. Resolve to
+   * `{ behavior: 'allow' }` to run the handler as-is, `{ behavior: 'allow',
+   * updatedInput }` to substitute the handler's input, or `{ behavior:
+   * 'deny', reason }` to skip the handler and surface a denial as the tool
+   * result. Errors thrown from this callback are treated as denials using
+   * the thrown message. Server-side tools (datetime/web_search/web_fetch)
+   * execute on OpenRouter's servers and bypass this hook.
+   */
   canUseTool?: CanUseTool;
   /** Lifecycle hook callback. TODO(phase 1.7): wire into pre/post tool use events. */
   onHook?: OnHook;
@@ -236,7 +244,13 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
 
     const requestId = createRequestId();
     const state = createFileStateAccessor(sessionId);
-    const toolsForRun: readonly Tool[] = this.hasCustomTools ? userTools : allTools(signal);
+    // Note: server-side tools (datetime/web_search/web_fetch) are injected
+    // via OR SDK hooks and execute on OpenRouter's servers — they bypass this
+    // wrapper, so canUseTool only ever sees client tools.
+    const baseTools: readonly Tool[] = this.hasCustomTools ? userTools : allTools(signal);
+    const toolsForRun = this.opts.canUseTool
+      ? baseTools.map((t) => wrapToolWithPermission(t, this.opts.canUseTool!))
+      : baseTools;
 
     // Use a holder so the abort listener can fire result.cancel() once the
     // call has been issued. result is undefined briefly before callModel().
@@ -426,6 +440,45 @@ interface DeriveCompletionInput {
   maxBudgetUsd: number;
   maxTurnNumber: number;
   maxTurns: number;
+}
+
+/**
+ * Wrap a Tool's execute with a canUseTool permission check. The original
+ * tool is shallow-cloned (preserving inputSchema, description, etc.) and only
+ * `execute` is replaced. On `deny`, the wrapper throws an Error whose message
+ * is `JSON.stringify({ error, denied: true })`, which the OR SDK turns into a
+ * tool-call output with status `'incomplete'` (surfaced as `isError: true`).
+ * Consumers wanting to distinguish denial from generic failure can
+ * `JSON.parse(toolResult.output)` and check `denied === true`.
+ */
+function wrapToolWithPermission(t: Tool, canUseTool: CanUseTool): Tool {
+  const fn = t.function as { name: string; execute?: (i: unknown, c?: unknown) => unknown };
+  const name = fn.name;
+  const originalExecute = fn.execute;
+  // Tools without a local execute (e.g. SDK "manual" or generator forms) run
+  // outside our wrapper; pass them through unchanged.
+  if (typeof originalExecute !== 'function') return t;
+  const wrappedExecute = async (input: unknown, ctx?: unknown): Promise<unknown> => {
+    let decision: CanUseToolResult;
+    try {
+      decision = await canUseTool(name, input);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(JSON.stringify({ error: reason, denied: true }), { cause: err });
+    }
+    if (decision.behavior === 'deny') {
+      throw new Error(JSON.stringify({ error: decision.reason, denied: true }));
+    }
+    const effectiveInput = decision.updatedInput !== undefined ? decision.updatedInput : input;
+    return originalExecute(effectiveInput, ctx);
+  };
+  return {
+    ...t,
+    function: {
+      ...t.function,
+      execute: wrappedExecute,
+    },
+  } as Tool;
 }
 
 function deriveCompletionStatus(input: DeriveCompletionInput): AgentCoreEventStatus {
