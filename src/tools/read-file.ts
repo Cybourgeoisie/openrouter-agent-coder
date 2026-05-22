@@ -34,13 +34,11 @@ export const readFileTool = tool({
     const lines = raw.split('\n');
     const totalLines = lines.length;
 
-    const from = (start_line ?? 1) - 1;                   // convert to 0-indexed
+    const from = (start_line ?? 1) - 1; // convert to 0-indexed
     const to = end_line !== undefined ? end_line : totalLines; // end_line is inclusive, slice is exclusive
 
     if (from < 0 || from >= totalLines) {
-      throw new Error(
-        `start_line ${start_line} is out of range — file has ${totalLines} lines`,
-      );
+      throw new Error(`start_line ${start_line} is out of range — file has ${totalLines} lines`);
     }
     if (to < from + 1) {
       throw new Error(`end_line ${end_line} must be >= start_line ${start_line}`);

@@ -52,9 +52,9 @@ describe('edit_file tool', () => {
     const filePath = join(TMP, 'dupe.txt');
     await writeFile(filePath, 'aaa bbb aaa', 'utf-8');
 
-    await expect(
-      execute({ path: filePath, old_string: 'aaa', new_string: 'ccc' }),
-    ).rejects.toThrow('found 2 times');
+    await expect(execute({ path: filePath, old_string: 'aaa', new_string: 'ccc' })).rejects.toThrow(
+      'found 2 times',
+    );
   });
 
   it('handles multi-line replacements', async () => {

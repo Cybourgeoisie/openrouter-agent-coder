@@ -13,7 +13,9 @@ afterEach(async () => {
   await rm(TMP, { recursive: true, force: true });
 });
 
-const execute = listDirectoryTool.function.execute as (params: { path: string }) => Promise<{ path: string; entries: string[] }>;
+const execute = listDirectoryTool.function.execute as (params: {
+  path: string;
+}) => Promise<{ path: string; entries: string[] }>;
 
 describe('list_directory tool', () => {
   it('has correct name', () => {

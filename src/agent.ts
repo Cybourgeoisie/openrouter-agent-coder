@@ -243,10 +243,16 @@ export async function runPrompt(
         // Record callId → name/args so we can label the result when it arrives.
         const callId = item.callId ?? item.id ?? '';
         let args: Record<string, unknown> = {};
-        try { args = JSON.parse(item.arguments ?? '{}') as Record<string, unknown>; } catch { /* ignore */ }
+        try {
+          args = JSON.parse(item.arguments ?? '{}') as Record<string, unknown>;
+        } catch {
+          /* ignore */
+        }
         if (callId) toolCallNames.set(callId, item.name);
         const snippet = callSnippet(item.name, args);
-        const detail = snippet ? ` ${snippet}` : ` ${Buffer.byteLength(item.arguments ?? '', 'utf8')} bytes`;
+        const detail = snippet
+          ? ` ${snippet}`
+          : ` ${Buffer.byteLength(item.arguments ?? '', 'utf8')} bytes`;
         onTextDelta(`\n⚙ ${item.name}${detail}\n`);
         turnHadText = true;
         lastCharInTurn = '\n';
@@ -255,9 +261,8 @@ export async function runPrompt(
       // A tool result — look up the tool name via the callId and show a snippet.
       const { output } = event;
       const toolName = toolCallNames.get(output.callId) ?? output.callId;
-      const resultStr = typeof output.output === 'string'
-        ? output.output
-        : JSON.stringify(output.output);
+      const resultStr =
+        typeof output.output === 'string' ? output.output : JSON.stringify(output.output);
       const snippet = resultSnippet(toolName, resultStr);
       onTextDelta(`  ↳ ${toolName}: ${snippet}\n`);
       turnHadText = true;

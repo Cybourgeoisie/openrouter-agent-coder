@@ -32,7 +32,12 @@ async function collectFiles(dir: string, globPattern: string): Promise<string[]>
     await Promise.all(
       entries.map(async (name) => {
         // Skip hidden files/directories (dot-prefixed) and common noise dirs.
-        if (name.startsWith('.') || name === 'node_modules' || name === 'dist' || name === 'coverage') {
+        if (
+          name.startsWith('.') ||
+          name === 'node_modules' ||
+          name === 'dist' ||
+          name === 'coverage'
+        ) {
           return;
         }
         const fullPath = join(current, name);
@@ -84,10 +89,7 @@ export const grepFilesTool = tool({
     'Search for a regex pattern across files in a directory tree. Returns structured matches with file path, line number, and matched line text. Skips node_modules, dist, coverage, hidden files, and files larger than 1 MiB.',
   inputSchema: z.object({
     pattern: z.string().describe('Regular expression to search for'),
-    path: z
-      .string()
-      .describe('Directory to search in')
-      .default('.'),
+    path: z.string().describe('Directory to search in').default('.'),
     file_glob: z
       .string()
       .describe('Glob pattern to filter filenames (e.g. "*.ts", "*.md"). Defaults to all files.')

@@ -101,7 +101,10 @@ async function main(): Promise<void> {
   });
 }
 
-async function executePrompt(session: ReturnType<typeof createAgent>, prompt: string): Promise<void> {
+async function executePrompt(
+  session: ReturnType<typeof createAgent>,
+  prompt: string,
+): Promise<void> {
   try {
     // Print a leading newline to separate the prompt echo from the response.
     process.stdout.write('\n');
@@ -114,8 +117,7 @@ async function executePrompt(session: ReturnType<typeof createAgent>, prompt: st
     // Printed after every response so the user always knows where they stand.
     const { model, turnCount, promptCost, totalCost } = result;
     const turnLabel = turnCount === 0 ? '1 turn' : `${turnCount + 1} turns`;
-    const fmtCost = (n: number) =>
-      n === 0 ? '$0.000000' : `${n.toFixed(6)}`;
+    const fmtCost = (n: number) => (n === 0 ? '$0.000000' : `${n.toFixed(6)}`);
     process.stdout.write(
       `\n╌╌ ${model} · ${turnLabel} · prompt: ${fmtCost(promptCost)} · session: ${fmtCost(totalCost)} ╌╌\n`,
     );

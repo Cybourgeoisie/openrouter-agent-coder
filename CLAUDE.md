@@ -52,6 +52,7 @@ npm run test:coverage # vitest run --coverage (enforces thresholds)
 Tests live alongside source files as `*.test.ts`. Uses Vitest with ESM. Test files that touch the filesystem use `.test-tmp/` (gitignored, cleaned up in afterEach).
 
 **Requirements:**
+
 - Every new module must have a corresponding `.test.ts` file
 - Tests must pass (`npm test`) before code is considered complete
 - Tool execute functions must be tested with real filesystem operations (no mocks for I/O)

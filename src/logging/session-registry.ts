@@ -56,10 +56,7 @@ export async function appendSessionToRegistry(entry: SessionEntry): Promise<void
  * Persist the `firstPrompt` for an existing registry entry.
  * No-ops silently when the entry is not found.
  */
-export async function setSessionFirstPrompt(
-  sessionId: string,
-  firstPrompt: string,
-): Promise<void> {
+export async function setSessionFirstPrompt(sessionId: string, firstPrompt: string): Promise<void> {
   const entries = await readSessionRegistry();
   const entry = entries.find((e) => e.sessionId === sessionId);
   if (!entry) return;

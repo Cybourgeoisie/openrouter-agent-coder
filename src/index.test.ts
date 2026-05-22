@@ -38,19 +38,17 @@ describe('--continue flag', () => {
     let backup: string | null = null;
     try {
       backup = await readFile(REGISTRY_PATH, 'utf-8');
-    } catch { /* no prior registry */ }
+    } catch {
+      /* no prior registry */
+    }
 
     try {
       await rm(REGISTRY_PATH, { force: true });
 
-      const result = await execFileAsync(
-        'node',
-        [DIST_INDEX, '--continue', 'hi'],
-        {
-          env: { ...process.env, OPENROUTER_API_KEY: 'sk-fake-for-test', DOTENV_SKIP: '1' },
-          timeout: 10000,
-        },
-      ).catch((e) => e as { code?: number; stderr?: string; stdout?: string });
+      const result = await execFileAsync('node', [DIST_INDEX, '--continue', 'hi'], {
+        env: { ...process.env, OPENROUTER_API_KEY: 'sk-fake-for-test', DOTENV_SKIP: '1' },
+        timeout: 10000,
+      }).catch((e) => e as { code?: number; stderr?: string; stdout?: string });
 
       const combined = ((result as any).stderr ?? '') + ((result as any).stdout ?? '');
       expect(combined).toContain('No previous session found');
@@ -67,7 +65,9 @@ describe('--continue flag', () => {
     let backup: string | null = null;
     try {
       backup = await readFile(REGISTRY_PATH, 'utf-8');
-    } catch { /* no prior registry */ }
+    } catch {
+      /* no prior registry */
+    }
 
     try {
       await mkdir(LOG_BASE, { recursive: true });
@@ -80,14 +80,10 @@ describe('--continue flag', () => {
         ),
       );
 
-      const result = await execFileAsync(
-        'node',
-        [DIST_INDEX, '--continue', 'what is 1+1?'],
-        {
-          env: { ...process.env, OPENROUTER_API_KEY: 'sk-fake-for-test', DOTENV_SKIP: '1' },
-          timeout: 10000,
-        },
-      ).catch((e) => e as { code?: number; stderr?: string; stdout?: string });
+      const result = await execFileAsync('node', [DIST_INDEX, '--continue', 'what is 1+1?'], {
+        env: { ...process.env, OPENROUTER_API_KEY: 'sk-fake-for-test', DOTENV_SKIP: '1' },
+        timeout: 10000,
+      }).catch((e) => e as { code?: number; stderr?: string; stdout?: string });
 
       const combined = ((result as any).stderr ?? '') + ((result as any).stdout ?? '');
       expect(combined).toContain(previousId);

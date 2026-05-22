@@ -13,7 +13,10 @@ afterEach(async () => {
   await rm(TMP, { recursive: true, force: true });
 });
 
-const execute = writeFileTool.function.execute as (params: { path: string; content: string }) => Promise<{ path: string; bytesWritten: number }>;
+const execute = writeFileTool.function.execute as (params: {
+  path: string;
+  content: string;
+}) => Promise<{ path: string; bytesWritten: number }>;
 
 describe('write_file tool', () => {
   it('has correct name', () => {

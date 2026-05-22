@@ -82,10 +82,7 @@ describe('logRequest', () => {
     };
     await logRequest(entry);
 
-    const raw = await readFile(
-      join(LOG_BASE, 'test-session', 'req-1', 'request.json'),
-      'utf-8',
-    );
+    const raw = await readFile(join(LOG_BASE, 'test-session', 'req-1', 'request.json'), 'utf-8');
     const data = JSON.parse(raw);
     expect(data).toEqual(entry);
   });
