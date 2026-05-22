@@ -17,6 +17,7 @@ import {
   createGenerationId,
   logRequest,
   logGeneration,
+  logSessionStart,
 } from './logging/logger.js';
 import type { AgentCoreEvent, AgentCoreEventStatus, TokenUsage } from './events.js';
 
@@ -255,6 +256,8 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       };
       return;
     }
+
+    await logSessionStart(logsRoot, sessionId, cwd);
 
     yield { type: 'session_started', sessionId };
 
