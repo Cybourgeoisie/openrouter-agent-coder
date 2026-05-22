@@ -4,10 +4,8 @@ import {
   maxCost,
   isTurnStartEvent,
   isTurnEndEvent,
-  isToolResultEvent,
   isToolCallOutputEvent,
 } from '@openrouter/agent';
-import type { ConversationState } from '@openrouter/agent';
 import { allTools } from './tools/index.js';
 import { createServerToolsHooks } from './tools/server-tools.js';
 import { createFileStateAccessor } from './state/file-state.js';
@@ -191,10 +189,8 @@ export async function runPrompt(
   // letting the content itself supply newlines within a single turn.
   let turnHadText = false;
   let lastCharInTurn = '';
-  // turnNumber is the value from TurnStartEvent — 0 is the initial request,
-  // 1+ are follow-up tool-execution turns.
-  let currentTurnNumber = 0;
-  // Highest turn number seen (used to report turn count after streaming ends).
+  // Highest turn number seen across TurnStartEvents (used to report the turn
+  // count after streaming ends). 0 means a single shot with no tool round-trips.
   let maxTurnNumber = 0;
   // Map from callId → tool name, populated from the output_item.done event
   // so the result line can label itself with the originating tool name.
@@ -202,7 +198,7 @@ export async function runPrompt(
 
   for await (const event of result.getFullResponsesStream()) {
     if (isTurnStartEvent(event)) {
-      currentTurnNumber = event.turnNumber;
+      const currentTurnNumber = event.turnNumber;
       if (currentTurnNumber > maxTurnNumber) maxTurnNumber = currentTurnNumber;
 
       // Reset per-turn tracking at the start of each new message turn.
