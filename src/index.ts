@@ -4,7 +4,7 @@ export type {
   AgentLogger,
   AgentLoggerLevel,
   CanUseTool,
-  CanUseToolDecision,
+  CanUseToolResult,
   OnHook,
 } from './agent.js';
 export type { AgentCoreEvent, AgentCoreEventStatus, TokenUsage } from './events.js';

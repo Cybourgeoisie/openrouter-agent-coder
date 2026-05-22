@@ -870,3 +870,280 @@ describe('OpenRouterAgentRun abort behavior', () => {
     expect(complete.reason).toBeUndefined();
   });
 });
+
+describe('OpenRouterAgentRun canUseTool', () => {
+  // Drives a single tool invocation through the mock OR SDK by reaching into
+  // the wrapped tool's execute. Mirrors how the real SDK ferries tool calls.
+  function singleToolCallModel(args: {
+    toolName: string;
+    callId: string;
+    input: unknown;
+    captureExecuteResult?: (r: { output: unknown; status: 'completed' | 'incomplete' }) => void;
+  }) {
+    return (request: {
+      tools: Array<{ function: { name: string; execute?: (i: unknown, c?: unknown) => unknown } }>;
+    }) => {
+      const tool = request.tools.find((t) => t.function.name === args.toolName);
+      return {
+        async *getFullResponsesStream() {
+          yield { type: 'turn.start', turnNumber: 0 };
+          yield {
+            type: 'response.output_item.done',
+            outputIndex: 0,
+            sequenceNumber: 1,
+            item: {
+              type: 'function_call',
+              callId: args.callId,
+              name: args.toolName,
+              arguments: JSON.stringify(args.input),
+            },
+          };
+          let output: unknown;
+          let status: 'completed' | 'incomplete' = 'completed';
+          try {
+            output = await tool!.function.execute!(args.input, {});
+          } catch (e) {
+            output = (e as Error).message;
+            status = 'incomplete';
+          }
+          args.captureExecuteResult?.({ output, status });
+          yield {
+            type: 'tool.call_output',
+            timestamp: 1,
+            output: {
+              callId: args.callId,
+              type: 'function_call_output',
+              output,
+              status,
+            },
+          };
+          yield { type: 'turn.end', turnNumber: 0 };
+        },
+        async getResponse() {
+          return {
+            id: 'r',
+            model: 'm',
+            usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            output: [],
+          };
+        },
+      };
+    };
+  }
+
+  function makeEchoTool(execSpy?: (input: unknown) => void) {
+    return {
+      type: 'function' as const,
+      function: {
+        name: 'echo_tool',
+        description: 'echo back the input',
+        execute: async (input: unknown) => {
+          execSpy?.(input);
+          return { echoed: input };
+        },
+      },
+    };
+  }
+
+  it('runs the handler normally when canUseTool returns allow', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'echo_tool',
+        callId: 'c-allow',
+        input: { msg: 'hi' },
+      }),
+    );
+
+    const canUseTool = vi.fn().mockResolvedValue({ behavior: 'allow' });
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+      canUseTool,
+    });
+    const events = await collect(run);
+
+    expect(canUseTool).toHaveBeenCalledWith('echo_tool', { msg: 'hi' });
+    expect(execSpy).toHaveBeenCalledWith({ msg: 'hi' });
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(false);
+    expect(result.output).toEqual({ echoed: { msg: 'hi' } });
+  });
+
+  it('passes updatedInput to the handler instead of the original input', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'echo_tool',
+        callId: 'c-upd',
+        input: { msg: 'original' },
+      }),
+    );
+
+    const canUseTool = vi
+      .fn()
+      .mockResolvedValue({ behavior: 'allow', updatedInput: { msg: 'rewritten' } });
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+      canUseTool,
+    });
+    const events = await collect(run);
+
+    expect(execSpy).toHaveBeenCalledTimes(1);
+    expect(execSpy).toHaveBeenCalledWith({ msg: 'rewritten' });
+    expect(execSpy).not.toHaveBeenCalledWith({ msg: 'original' });
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.output).toEqual({ echoed: { msg: 'rewritten' } });
+  });
+
+  it('skips the handler and surfaces tool_result.isError with the deny reason on deny', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'echo_tool',
+        callId: 'c-deny',
+        input: { msg: 'no' },
+      }),
+    );
+
+    const canUseTool = vi
+      .fn()
+      .mockResolvedValue({ behavior: 'deny', reason: 'not allowed in tests' });
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+      canUseTool,
+    });
+    const events = await collect(run);
+
+    expect(execSpy).not.toHaveBeenCalled();
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(String(result.output));
+    expect(parsed).toEqual({ error: 'not allowed in tests', denied: true });
+  });
+
+  it('executes tools normally when canUseTool is omitted (backward compat)', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'echo_tool',
+        callId: 'c-none',
+        input: { msg: 'free' },
+      }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+    });
+    const events = await collect(run);
+
+    expect(execSpy).toHaveBeenCalledWith({ msg: 'free' });
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(false);
+  });
+
+  it('treats a thrown canUseTool as a deny with the thrown message', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'echo_tool',
+        callId: 'c-throw',
+        input: {},
+      }),
+    );
+
+    const canUseTool = vi.fn().mockRejectedValue(new Error('policy backend down'));
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+      canUseTool,
+    });
+    const events = await collect(run);
+
+    expect(execSpy).not.toHaveBeenCalled();
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(String(result.output));
+    expect(parsed).toEqual({ error: 'policy backend down', denied: true });
+    // Run must finish (not crash) — stream_complete should still arrive.
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.type).toBe('stream_complete');
+  });
+
+  it('does not invoke canUseTool for server-side tools (web_search/web_fetch/datetime)', async () => {
+    // Server tools execute on OR's servers and never appear in the local
+    // request.tools array — they're injected via hooks. Our model mock here
+    // emits a tool.call_output for `web_search` without ever calling a local
+    // execute, mirroring how the real SDK surfaces server-side tool results.
+    const canUseTool = vi.fn().mockResolvedValue({ behavior: 'allow' });
+    callModelMock.mockImplementation(() => ({
+      async *getFullResponsesStream() {
+        yield { type: 'turn.start', turnNumber: 0 };
+        yield {
+          type: 'tool.call_output',
+          timestamp: 1,
+          output: {
+            callId: 'c-srv',
+            type: 'function_call_output',
+            output: 'server-side result',
+            status: 'completed',
+          },
+        };
+        yield { type: 'turn.end', turnNumber: 0 };
+      },
+      async getResponse() {
+        return {
+          id: 'r',
+          model: 'm',
+          usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          output: [],
+        };
+      },
+    }));
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'search the web',
+      canUseTool,
+    });
+    const events = await collect(run);
+
+    expect(canUseTool).not.toHaveBeenCalled();
+    // The web_search tool_result is still surfaced normally.
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result).toBeDefined();
+    expect(result.isError).toBe(false);
+  });
+});
