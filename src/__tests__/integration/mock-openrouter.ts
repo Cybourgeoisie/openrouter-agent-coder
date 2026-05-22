@@ -13,7 +13,16 @@ export interface FixtureResponse {
 
 export type FixtureStep =
   | { type: 'yield'; event: Record<string, unknown> }
-  | { type: 'tool_execute'; toolName: string; input: unknown; callId: string }
+  | {
+      type: 'tool_execute';
+      toolName: string;
+      input: unknown;
+      callId: string;
+      /** When true, invoke the tool with an empty ctx — simulating an SDK
+       *  build that does not pass `toolCall.callId` through. Exercises the
+       *  hook wrapper's randomUUID fallback. */
+      sdkOmitsCallId?: boolean;
+    }
   | { type: 'wait_until'; signal: 'paused' | 'aborted' }
   | { type: 'invoke_turn_end'; turnNumber?: number }
   | { type: 'throw'; message: string };
@@ -143,7 +152,8 @@ export function createOpenRouterMockModule(state: MockState): Record<string, unk
               output = `tool ${step.toolName} not found`;
             } else {
               try {
-                output = await execute(step.input, { toolCall: { callId: step.callId } });
+                const ctx = step.sdkOmitsCallId ? {} : { toolCall: { callId: step.callId } };
+                output = await execute(step.input, ctx);
               } catch (err) {
                 status = 'incomplete';
                 output = err instanceof Error ? err.message : String(err);
