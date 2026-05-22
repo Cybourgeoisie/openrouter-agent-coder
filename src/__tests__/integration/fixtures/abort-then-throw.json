@@ -1,0 +1,40 @@
+{
+  "name": "abort-then-throw",
+  "steps": [
+    { "type": "yield", "event": { "type": "turn.start", "turnNumber": 0, "timestamp": 1 } },
+    { "type": "yield", "event": { "type": "response.output_text.delta", "delta": "partial" } },
+    { "type": "yield", "event": { "type": "response.output_text.delta", "delta": "" } },
+    {
+      "type": "yield",
+      "event": {
+        "type": "response.output_item.done",
+        "outputIndex": 0,
+        "item": { "type": "message", "content": "ignored" }
+      }
+    },
+    { "type": "invoke_turn_end" },
+    { "type": "yield", "event": { "type": "turn.end", "turnNumber": 0, "timestamp": 2 } },
+    { "type": "wait_until", "signal": "paused" },
+    { "type": "yield", "event": { "type": "turn.start", "turnNumber": 1, "timestamp": 3 } },
+    {
+      "type": "yield",
+      "event": {
+        "type": "response.output_item.done",
+        "outputIndex": 1,
+        "item": {
+          "type": "function_call",
+          "callId": "call_dropped",
+          "name": "echo",
+          "arguments": "{\"value\":\"dropped\"}"
+        }
+      }
+    },
+    { "type": "throw", "message": "stream torn after abort" }
+  ],
+  "response": {
+    "id": "resp-abort-throw",
+    "model": "mock-model",
+    "usage": { "cost": 0.05, "inputTokens": 4, "outputTokens": 2, "totalTokens": 6 },
+    "output": []
+  }
+}

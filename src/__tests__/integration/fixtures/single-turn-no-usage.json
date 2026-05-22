@@ -1,0 +1,13 @@
+{
+  "name": "single-turn-no-usage",
+  "steps": [
+    { "type": "yield", "event": { "type": "turn.start", "turnNumber": 0, "timestamp": 1 } },
+    { "type": "yield", "event": { "type": "response.output_text.delta", "delta": "ok" } },
+    { "type": "yield", "event": { "type": "turn.end", "turnNumber": 0, "timestamp": 2 } }
+  ],
+  "response": {
+    "id": "resp-no-usage",
+    "model": "mock-model",
+    "output": []
+  }
+}
