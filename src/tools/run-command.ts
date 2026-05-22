@@ -13,10 +13,7 @@ export const runCommandTool = tool({
     'Execute a shell command and return stdout/stderr. Use for running tests, builds, git commands, etc. Commands time out after 30 seconds.',
   inputSchema: z.object({
     command: z.string().describe('The shell command to execute'),
-    cwd: z
-      .string()
-      .describe('Working directory for the command')
-      .optional(),
+    cwd: z.string().describe('Working directory for the command').optional(),
   }),
   execute: async ({ command, cwd }) => {
     try {

@@ -28,23 +28,23 @@ Every conversation gets a **session ID** passed to OpenRouter for server-side tr
 
 ### Client Tools
 
-| Tool | Description |
-|---|---|
-| `read_file` | Read file contents |
-| `write_file` | Write/create files (auto-creates parent dirs) |
-| `edit_file` | Find-and-replace a unique string in a file |
-| `list_directory` | List files and directories |
-| `run_command` | Execute shell commands (30s timeout) |
+| Tool             | Description                                   |
+| ---------------- | --------------------------------------------- |
+| `read_file`      | Read file contents                            |
+| `write_file`     | Write/create files (auto-creates parent dirs) |
+| `edit_file`      | Find-and-replace a unique string in a file    |
+| `list_directory` | List files and directories                    |
+| `run_command`    | Execute shell commands (30s timeout)          |
 
 ### Server Tools (OpenRouter-hosted)
 
 These run server-side on OpenRouter — no local execution needed:
 
-| Tool | Description |
-|---|---|
-| `datetime` | Returns the current date and time |
-| `web_search` | Searches the web for real-time information |
-| `web_fetch` | Fetches full content from a URL (web page or PDF) |
+| Tool         | Description                                       |
+| ------------ | ------------------------------------------------- |
+| `datetime`   | Returns the current date and time                 |
+| `web_search` | Searches the web for real-time information        |
+| `web_fetch`  | Fetches full content from a URL (web page or PDF) |
 
 ### Logging
 
@@ -69,14 +69,14 @@ Copy `.env.example` to `.env` and fill in your values:
 cp .env.example .env
 ```
 
-| Env Variable | Default | Description |
-|---|---|---|
-| `OPENROUTER_API_KEY` | **(required)** | Your OpenRouter API key |
-| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | API base URL (override for local/staging) |
-| `OR_MODEL` | `~anthropic/claude-sonnet-latest` | Model to use |
-| `OR_MAX_STEPS` | `25` | Max agentic steps per prompt |
-| `OR_MAX_COST` | `1.00` | Max cost in USD per prompt |
-| `OR_SESSION_ID` | *(auto-generated)* | Resume a previous session |
+| Env Variable          | Default                           | Description                               |
+| --------------------- | --------------------------------- | ----------------------------------------- |
+| `OPENROUTER_API_KEY`  | **(required)**                    | Your OpenRouter API key                   |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1`    | API base URL (override for local/staging) |
+| `OR_MODEL`            | `~anthropic/claude-sonnet-latest` | Model to use                              |
+| `OR_MAX_STEPS`        | `25`                              | Max agentic steps per prompt              |
+| `OR_MAX_COST`         | `1.00`                            | Max cost in USD per prompt                |
+| `OR_SESSION_ID`       | _(auto-generated)_                | Resume a previous session                 |
 
 ## Development
 

@@ -45,10 +45,7 @@ export async function logSessionStart(sessionId: string): Promise<void> {
   const dir = join(LOG_BASE, sessionId);
   await ensureDir(dir);
   const startedAt = new Date().toISOString();
-  await writeFile(
-    join(dir, 'session.json'),
-    JSON.stringify({ sessionId, startedAt }, null, 2),
-  );
+  await writeFile(join(dir, 'session.json'), JSON.stringify({ sessionId, startedAt }, null, 2));
   // Register the session in the ordered registry so --continue can find it.
   await appendSessionToRegistry({ sessionId, startedAt });
 }

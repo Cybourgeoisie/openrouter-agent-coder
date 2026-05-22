@@ -5,11 +5,11 @@
 
 ## Summary
 
-| Status | Count |
-|--------|-------|
-| Full parity | 8 |
-| Partial parity | 7 |
-| Missing | 26 |
+| Status             | Count  |
+| ------------------ | ------ |
+| Full parity        | 8      |
+| Partial parity     | 7      |
+| Missing            | 26     |
 | **Total features** | **41** |
 
 ---
@@ -18,83 +18,83 @@
 
 ### Core Agent Loop
 
-| Feature | Claude Agent SDK | OpenRouter Agent Coder | Parity |
-|---------|-----------------|----------------------|--------|
-| Autonomous tool loop | SDK handles tool calls, results, repeats until done | Delegates to `@openrouter/agent` `callModel()` SDK | **Full** |
-| Turn counting | Tracks turns, exposes in ResultMessage | Tracks turns via streaming events | **Full** |
-| Max turns stop condition | `maxTurns` option | `stepCountIs(MAX_STEPS)` stop condition | **Full** |
-| Max cost stop condition | `maxBudgetUsd` option | `maxCost(MAX_COST)` stop condition | **Full** |
-| Effort / reasoning level | `effort` option (low/medium/high/xhigh/max) | Not implemented | **None** |
-| Context compaction | Automatic summarization when context fills; PreCompact hook; manual `/compact` | Not implemented — relies on SDK's `previousResponseId` | **None** |
-| Streaming output | Rich message stream (SystemMessage, AssistantMessage, UserMessage, StreamEvent, ResultMessage) | Text delta streaming + tool call/result events via `getFullResponsesStream()` | **Partial** |
-| Streaming input | AsyncGenerator-based input; mid-session messages, interrupts, image attachments | Not implemented — REPL sends one prompt at a time | **None** |
+| Feature                  | Claude Agent SDK                                                                               | OpenRouter Agent Coder                                                        | Parity      |
+| ------------------------ | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ----------- |
+| Autonomous tool loop     | SDK handles tool calls, results, repeats until done                                            | Delegates to `@openrouter/agent` `callModel()` SDK                            | **Full**    |
+| Turn counting            | Tracks turns, exposes in ResultMessage                                                         | Tracks turns via streaming events                                             | **Full**    |
+| Max turns stop condition | `maxTurns` option                                                                              | `stepCountIs(MAX_STEPS)` stop condition                                       | **Full**    |
+| Max cost stop condition  | `maxBudgetUsd` option                                                                          | `maxCost(MAX_COST)` stop condition                                            | **Full**    |
+| Effort / reasoning level | `effort` option (low/medium/high/xhigh/max)                                                    | Not implemented                                                               | **None**    |
+| Context compaction       | Automatic summarization when context fills; PreCompact hook; manual `/compact`                 | Not implemented — relies on SDK's `previousResponseId`                        | **None**    |
+| Streaming output         | Rich message stream (SystemMessage, AssistantMessage, UserMessage, StreamEvent, ResultMessage) | Text delta streaming + tool call/result events via `getFullResponsesStream()` | **Partial** |
+| Streaming input          | AsyncGenerator-based input; mid-session messages, interrupts, image attachments                | Not implemented — REPL sends one prompt at a time                             | **None**    |
 
 ### Built-in Tools
 
-| Feature | Claude Agent SDK | OpenRouter Agent Coder | Parity |
-|---------|-----------------|----------------------|--------|
-| Read file | `Read` tool — any file, line offsets | `read_file` — with `start_line`/`end_line` support | **Full** |
-| Write file | `Write` tool — create/overwrite | `write_file` — create/overwrite with auto-mkdir | **Full** |
-| Edit file | `Edit` tool — precise string replacement | `edit_file` — exact unique string replacement | **Full** |
-| Bash / run command | `Bash` — full shell with description, timeout | `run_command` — `sh -c`, 30s timeout, 1MB buffer | **Partial** |
-| Glob (file search) | `Glob` — find files by pattern | `list_directory` — flat listing only, no glob patterns | **Partial** |
-| Grep (content search) | `Grep` — regex search with context lines, file types | `grep_files` — regex with glob filter, recursion, match limits | **Partial** |
-| WebSearch | Built-in WebSearch tool | Server-side `openrouter:web_search` | **Full** |
-| WebFetch | Built-in WebFetch tool | Server-side `openrouter:web_fetch` | **Partial** |
-| Monitor (background script) | Watch background process, react to output lines | Not implemented | **None** |
-| NotebookEdit | Edit Jupyter notebook cells | Not implemented | **None** |
-| AskUserQuestion | Multiple-choice clarifying questions with previews | Not implemented | **None** |
-| ToolSearch | Dynamically load tools on demand from large tool sets | Not implemented | **None** |
-| TaskCreate / TaskUpdate | Track subtasks within agent execution | Not implemented | **None** |
+| Feature                     | Claude Agent SDK                                      | OpenRouter Agent Coder                                         | Parity      |
+| --------------------------- | ----------------------------------------------------- | -------------------------------------------------------------- | ----------- |
+| Read file                   | `Read` tool — any file, line offsets                  | `read_file` — with `start_line`/`end_line` support             | **Full**    |
+| Write file                  | `Write` tool — create/overwrite                       | `write_file` — create/overwrite with auto-mkdir                | **Full**    |
+| Edit file                   | `Edit` tool — precise string replacement              | `edit_file` — exact unique string replacement                  | **Full**    |
+| Bash / run command          | `Bash` — full shell with description, timeout         | `run_command` — `sh -c`, 30s timeout, 1MB buffer               | **Partial** |
+| Glob (file search)          | `Glob` — find files by pattern                        | `list_directory` — flat listing only, no glob patterns         | **Partial** |
+| Grep (content search)       | `Grep` — regex search with context lines, file types  | `grep_files` — regex with glob filter, recursion, match limits | **Partial** |
+| WebSearch                   | Built-in WebSearch tool                               | Server-side `openrouter:web_search`                            | **Full**    |
+| WebFetch                    | Built-in WebFetch tool                                | Server-side `openrouter:web_fetch`                             | **Partial** |
+| Monitor (background script) | Watch background process, react to output lines       | Not implemented                                                | **None**    |
+| NotebookEdit                | Edit Jupyter notebook cells                           | Not implemented                                                | **None**    |
+| AskUserQuestion             | Multiple-choice clarifying questions with previews    | Not implemented                                                | **None**    |
+| ToolSearch                  | Dynamically load tools on demand from large tool sets | Not implemented                                                | **None**    |
+| TaskCreate / TaskUpdate     | Track subtasks within agent execution                 | Not implemented                                                | **None**    |
 
 ### Permissions & Safety
 
-| Feature | Claude Agent SDK | OpenRouter Agent Coder | Parity |
-|---------|-----------------|----------------------|--------|
-| Permission modes | 6 modes: default, dontAsk, acceptEdits, bypassPermissions, plan, auto | No permission system — all tools run without approval | **None** |
-| Allowed/disallowed tools | `allowedTools`, `disallowedTools` with scoped rules (e.g., `Bash(npm *)`) | Not implemented | **None** |
-| canUseTool callback | Runtime approval/deny/modify for each tool call | Not implemented | **None** |
-| Plan mode (read-only) | Restricts to read-only tools; explores before editing | Not implemented | **None** |
+| Feature                  | Claude Agent SDK                                                          | OpenRouter Agent Coder                                | Parity   |
+| ------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------------- | -------- |
+| Permission modes         | 6 modes: default, dontAsk, acceptEdits, bypassPermissions, plan, auto     | No permission system — all tools run without approval | **None** |
+| Allowed/disallowed tools | `allowedTools`, `disallowedTools` with scoped rules (e.g., `Bash(npm *)`) | Not implemented                                       | **None** |
+| canUseTool callback      | Runtime approval/deny/modify for each tool call                           | Not implemented                                       | **None** |
+| Plan mode (read-only)    | Restricts to read-only tools; explores before editing                     | Not implemented                                       | **None** |
 
 ### Hooks System
 
-| Feature | Claude Agent SDK | OpenRouter Agent Coder | Parity |
-|---------|-----------------|----------------------|--------|
-| PreToolUse / PostToolUse | Block, modify, log, audit tool calls with matcher patterns | Not implemented | **None** |
-| Session lifecycle hooks | SessionStart, SessionEnd, Stop, Setup | Not implemented (SDK `onTurnEnd` callback only) | **None** |
-| Subagent hooks | SubagentStart, SubagentStop | No subagent system | **None** |
-| Notification hook | Forward agent status to Slack/PagerDuty/etc. | Not implemented | **None** |
-| PreCompact hook | Archive transcript before compaction | No compaction system | **None** |
+| Feature                  | Claude Agent SDK                                           | OpenRouter Agent Coder                          | Parity   |
+| ------------------------ | ---------------------------------------------------------- | ----------------------------------------------- | -------- |
+| PreToolUse / PostToolUse | Block, modify, log, audit tool calls with matcher patterns | Not implemented                                 | **None** |
+| Session lifecycle hooks  | SessionStart, SessionEnd, Stop, Setup                      | Not implemented (SDK `onTurnEnd` callback only) | **None** |
+| Subagent hooks           | SubagentStart, SubagentStop                                | No subagent system                              | **None** |
+| Notification hook        | Forward agent status to Slack/PagerDuty/etc.               | Not implemented                                 | **None** |
+| PreCompact hook          | Archive transcript before compaction                       | No compaction system                            | **None** |
 
 ### Subagents & Orchestration
 
-| Feature | Claude Agent SDK | OpenRouter Agent Coder | Parity |
-|---------|-----------------|----------------------|--------|
-| Subagent spawning | Agent tool: programmatic or filesystem-based definitions | Not implemented | **None** |
-| Subagent tool restrictions | Per-subagent tool/model/effort overrides | Not implemented | **None** |
-| Parallel subagents | Multiple subagents run concurrently | Not implemented | **None** |
+| Feature                    | Claude Agent SDK                                         | OpenRouter Agent Coder | Parity   |
+| -------------------------- | -------------------------------------------------------- | ---------------------- | -------- |
+| Subagent spawning          | Agent tool: programmatic or filesystem-based definitions | Not implemented        | **None** |
+| Subagent tool restrictions | Per-subagent tool/model/effort overrides                 | Not implemented        | **None** |
+| Parallel subagents         | Multiple subagents run concurrently                      | Not implemented        | **None** |
 
 ### Sessions & State
 
-| Feature | Claude Agent SDK | OpenRouter Agent Coder | Parity |
-|---------|-----------------|----------------------|--------|
-| Session persistence | JSONL on disk under `~/.claude/projects/` | `ConversationState` (`previousResponseId`) + `state.json` | **Partial** |
-| Session resume | `resume` by ID, `continue` most recent, `fork` to branch | `--continue` flag (last session), `OR_SESSION_ID` env var | **Partial** |
-| Session forking | Fork creates new session with copied history | Not implemented | **None** |
-| Session listing / management | `listSessions()`, `getSessionMessages()`, `renameSession()`, `tagSession()` | `sessions.json` registry (append, getLastSession only) | **Partial** |
-| File checkpointing | Track & rewind file changes to any checkpoint | Not implemented | **None** |
-| persistSession: false | In-memory only sessions (no disk writes) | Not implemented | **None** |
+| Feature                      | Claude Agent SDK                                                            | OpenRouter Agent Coder                                    | Parity      |
+| ---------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------- | ----------- |
+| Session persistence          | JSONL on disk under `~/.claude/projects/`                                   | `ConversationState` (`previousResponseId`) + `state.json` | **Partial** |
+| Session resume               | `resume` by ID, `continue` most recent, `fork` to branch                    | `--continue` flag (last session), `OR_SESSION_ID` env var | **Partial** |
+| Session forking              | Fork creates new session with copied history                                | Not implemented                                           | **None**    |
+| Session listing / management | `listSessions()`, `getSessionMessages()`, `renameSession()`, `tagSession()` | `sessions.json` registry (append, getLastSession only)    | **Partial** |
+| File checkpointing           | Track & rewind file changes to any checkpoint                               | Not implemented                                           | **None**    |
+| persistSession: false        | In-memory only sessions (no disk writes)                                    | Not implemented                                           | **None**    |
 
 ### Extensibility
 
-| Feature | Claude Agent SDK | OpenRouter Agent Coder | Parity |
-|---------|-----------------|----------------------|--------|
-| MCP server support | stdio, HTTP/SSE, in-process SDK servers; `.mcp.json` config | Not implemented | **None** |
-| Custom tools (SDK MCP) | `tool()` helper + `createSdkMcpServer()` — in-process custom tools with Zod schemas | Not implemented (tools are hardcoded) | **None** |
-| Skills system | Markdown-based skills in `.claude/skills/` | Not implemented | **None** |
-| Slash commands | Custom commands in `.claude/commands/` | Not implemented | **None** |
-| Plugins | Extend with custom commands, agents, MCP servers | Not implemented | **None** |
-| CLAUDE.md / project context | Loaded from `.claude/` and `~/`, configurable via `settingSources` | Not implemented (system prompt is hardcoded) | **None** |
+| Feature                     | Claude Agent SDK                                                                    | OpenRouter Agent Coder                       | Parity   |
+| --------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------- | -------- |
+| MCP server support          | stdio, HTTP/SSE, in-process SDK servers; `.mcp.json` config                         | Not implemented                              | **None** |
+| Custom tools (SDK MCP)      | `tool()` helper + `createSdkMcpServer()` — in-process custom tools with Zod schemas | Not implemented (tools are hardcoded)        | **None** |
+| Skills system               | Markdown-based skills in `.claude/skills/`                                          | Not implemented                              | **None** |
+| Slash commands              | Custom commands in `.claude/commands/`                                              | Not implemented                              | **None** |
+| Plugins                     | Extend with custom commands, agents, MCP servers                                    | Not implemented                              | **None** |
+| CLAUDE.md / project context | Loaded from `.claude/` and `~/`, configurable via `settingSources`                  | Not implemented (system prompt is hardcoded) | **None** |
 
 ---
 

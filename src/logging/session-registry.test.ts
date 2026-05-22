@@ -82,7 +82,10 @@ describe('appendSessionToRegistry', () => {
     await backupRegistry();
     await rm(REGISTRY_PATH, { force: true });
 
-    await appendSessionToRegistry({ sessionId: 'sess_json', startedAt: '2024-01-01T00:00:00.000Z' });
+    await appendSessionToRegistry({
+      sessionId: 'sess_json',
+      startedAt: '2024-01-01T00:00:00.000Z',
+    });
     const raw = await readFile(REGISTRY_PATH, 'utf-8');
     expect(() => JSON.parse(raw)).not.toThrow();
   });
@@ -135,8 +138,14 @@ describe('getLastSession', () => {
     await backupRegistry();
     await rm(REGISTRY_PATH, { force: true });
 
-    await appendSessionToRegistry({ sessionId: 'sess_first', startedAt: '2024-01-01T00:00:00.000Z' });
-    await appendSessionToRegistry({ sessionId: 'sess_last', startedAt: '2024-01-02T00:00:00.000Z' });
+    await appendSessionToRegistry({
+      sessionId: 'sess_first',
+      startedAt: '2024-01-01T00:00:00.000Z',
+    });
+    await appendSessionToRegistry({
+      sessionId: 'sess_last',
+      startedAt: '2024-01-02T00:00:00.000Z',
+    });
     const last = await getLastSession();
     expect(last?.sessionId).toBe('sess_last');
   });
@@ -146,7 +155,10 @@ describe('getLastSession', () => {
     await rm(REGISTRY_PATH, { force: true });
 
     for (let i = 1; i <= 5; i++) {
-      await appendSessionToRegistry({ sessionId: `sess_${i}`, startedAt: `2024-01-0${i}T00:00:00.000Z` });
+      await appendSessionToRegistry({
+        sessionId: `sess_${i}`,
+        startedAt: `2024-01-0${i}T00:00:00.000Z`,
+      });
     }
     const last = await getLastSession();
     expect(last?.sessionId).toBe('sess_5');

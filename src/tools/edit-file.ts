@@ -8,7 +8,9 @@ export const editFileTool = tool({
     'Edit a file by replacing an exact string match with new content. The old_string must appear exactly once in the file. Use read_file first to see the current content.',
   inputSchema: z.object({
     path: z.string().describe('Path to the file to edit'),
-    old_string: z.string().describe('The exact string to find and replace (must be unique in file)'),
+    old_string: z
+      .string()
+      .describe('The exact string to find and replace (must be unique in file)'),
     new_string: z.string().describe('The replacement string'),
   }),
   execute: async ({ path, old_string, new_string }) => {
