@@ -1,9 +1,10 @@
 import { tool } from '@openrouter/agent';
 import { z } from 'zod/v4';
 import { writeFile, mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
 
-export function writeFileTool(signal?: AbortSignal) {
+export function writeFileTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
   return tool({
     name: 'write_file',
     description:
@@ -13,9 +14,10 @@ export function writeFileTool(signal?: AbortSignal) {
       content: z.string().describe('The full content to write to the file'),
     }),
     execute: async ({ path, content }) => {
-      if (signal?.aborted) throw new Error('write_file cancelled');
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, content, 'utf-8');
+      if (ctx.signal?.aborted) throw new Error('write_file cancelled');
+      const resolved = resolve(ctx.cwd, path);
+      await mkdir(dirname(resolved), { recursive: true });
+      await writeFile(resolved, content, 'utf-8');
       return { path, bytesWritten: Buffer.byteLength(content, 'utf-8') };
     },
   });

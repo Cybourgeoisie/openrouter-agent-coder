@@ -1,8 +1,10 @@
 import { tool } from '@openrouter/agent';
 import { z } from 'zod/v4';
 import { readFile, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
 
-export function editFileTool(signal?: AbortSignal) {
+export function editFileTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
   return tool({
     name: 'edit_file',
     description:
@@ -15,8 +17,9 @@ export function editFileTool(signal?: AbortSignal) {
       new_string: z.string().describe('The replacement string'),
     }),
     execute: async ({ path, old_string, new_string }) => {
-      if (signal?.aborted) throw new Error('edit_file cancelled');
-      const content = await readFile(path, 'utf-8');
+      if (ctx.signal?.aborted) throw new Error('edit_file cancelled');
+      const resolved = resolve(ctx.cwd, path);
+      const content = await readFile(resolved, 'utf-8');
       const occurrences = content.split(old_string).length - 1;
 
       if (occurrences === 0) {
@@ -29,7 +32,7 @@ export function editFileTool(signal?: AbortSignal) {
       }
 
       const updated = content.replace(old_string, new_string);
-      await writeFile(path, updated, 'utf-8');
+      await writeFile(resolved, updated, 'utf-8');
       return { path, replaced: true };
     },
   });

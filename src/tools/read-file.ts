@@ -1,8 +1,10 @@
 import { tool } from '@openrouter/agent';
 import { z } from 'zod/v4';
 import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
 
-export function readFileTool(signal?: AbortSignal) {
+export function readFileTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
   return tool({
     name: 'read_file',
     description:
@@ -28,8 +30,9 @@ export function readFileTool(signal?: AbortSignal) {
         .optional(),
     }),
     execute: async ({ path, start_line, end_line }) => {
-      if (signal?.aborted) throw new Error('read_file cancelled');
-      const raw = await readFile(path, 'utf-8');
+      if (ctx.signal?.aborted) throw new Error('read_file cancelled');
+      const resolved = resolve(ctx.cwd, path);
+      const raw = await readFile(resolved, 'utf-8');
 
       if (start_line === undefined && end_line === undefined) {
         return { content: raw, path };

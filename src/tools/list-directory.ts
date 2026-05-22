@@ -1,9 +1,10 @@
 import { tool } from '@openrouter/agent';
 import { z } from 'zod/v4';
 import { readdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
 
-export function listDirectoryTool(signal?: AbortSignal) {
+export function listDirectoryTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
   return tool({
     name: 'list_directory',
     description:
@@ -12,11 +13,12 @@ export function listDirectoryTool(signal?: AbortSignal) {
       path: z.string().describe('Path to the directory to list').default('.'),
     }),
     execute: async ({ path }) => {
-      if (signal?.aborted) throw new Error('list_directory cancelled');
-      const entries = await readdir(path);
+      if (ctx.signal?.aborted) throw new Error('list_directory cancelled');
+      const resolved = resolve(ctx.cwd, path);
+      const entries = await readdir(resolved);
       const detailed = await Promise.all(
         entries.map(async (name) => {
-          const fullPath = join(path, name);
+          const fullPath = join(resolved, name);
           try {
             const s = await stat(fullPath);
             return s.isDirectory() ? `${name}/` : name;

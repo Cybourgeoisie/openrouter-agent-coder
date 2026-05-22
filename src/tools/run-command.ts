@@ -1,6 +1,8 @@
 import { tool } from '@openrouter/agent';
 import { z } from 'zod/v4';
 import { spawn } from 'node:child_process';
+import { resolve } from 'node:path';
+import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
 
 const TIMEOUT_MS = 30_000;
 const KILL_GRACE_MS = 250;
@@ -11,22 +13,29 @@ export interface RunCommandResult {
   stderr: string;
 }
 
-export function runCommandTool(signal?: AbortSignal) {
+export function runCommandTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
   return tool({
     name: 'run_command',
     description:
       'Execute a shell command and return stdout/stderr. Use for running tests, builds, git commands, etc. Commands time out after 30 seconds.',
     inputSchema: z.object({
       command: z.string().describe('The shell command to execute'),
-      cwd: z.string().describe('Working directory for the command').optional(),
+      cwd: z
+        .string()
+        .describe(
+          "Working directory for the command. Resolved against the run's cwd if relative. Omit to inherit the run's cwd.",
+        )
+        .optional(),
     }),
-    execute: async ({ command, cwd }): Promise<RunCommandResult> => {
-      if (signal?.aborted) {
+    execute: async ({ command, cwd: argCwd }): Promise<RunCommandResult> => {
+      if (ctx.signal?.aborted) {
         return { exitCode: 1, stdout: '', stderr: 'run_command cancelled before start' };
       }
 
-      return new Promise<RunCommandResult>((resolve) => {
-        const child = spawn('sh', ['-c', command], { cwd: cwd ?? process.cwd() });
+      const effectiveCwd = argCwd ? resolve(ctx.cwd, argCwd) : ctx.cwd;
+
+      return new Promise<RunCommandResult>((resolveResult) => {
+        const child = spawn('sh', ['-c', command], { cwd: effectiveCwd });
 
         let stdout = '';
         let stderr = '';
@@ -59,7 +68,7 @@ export function runCommandTool(signal?: AbortSignal) {
             }
           }, KILL_GRACE_MS);
         };
-        if (signal) signal.addEventListener('abort', onAbort, { once: true });
+        if (ctx.signal) ctx.signal.addEventListener('abort', onAbort, { once: true });
 
         child.stdout?.on('data', (chunk: Buffer) => {
           if (stdoutBytes >= MAX_BUFFER) return;
@@ -77,8 +86,8 @@ export function runCommandTool(signal?: AbortSignal) {
         const finish = (result: RunCommandResult): void => {
           clearTimeout(timeoutTimer);
           if (killTimer) clearTimeout(killTimer);
-          if (signal) signal.removeEventListener('abort', onAbort);
-          resolve(result);
+          if (ctx.signal) ctx.signal.removeEventListener('abort', onAbort);
+          resolveResult(result);
         };
 
         child.on('error', (err) => {

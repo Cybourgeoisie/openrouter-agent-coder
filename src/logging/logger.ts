@@ -1,9 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const LOG_BASE = join(__dirname, '..', '..', 'logs');
+import { join } from 'node:path';
 
 export interface RequestLog {
   sessionId: string;
@@ -40,21 +36,21 @@ async function ensureDir(path: string): Promise<void> {
   await mkdir(path, { recursive: true });
 }
 
-export async function logSessionStart(sessionId: string): Promise<void> {
-  const dir = join(LOG_BASE, sessionId);
+export async function logSessionStart(logsRoot: string, sessionId: string): Promise<void> {
+  const dir = join(logsRoot, sessionId);
   await ensureDir(dir);
   const startedAt = new Date().toISOString();
   await writeFile(join(dir, 'session.json'), JSON.stringify({ sessionId, startedAt }, null, 2));
 }
 
-export async function logRequest(entry: RequestLog): Promise<void> {
-  const dir = join(LOG_BASE, entry.sessionId, entry.requestId);
+export async function logRequest(logsRoot: string, entry: RequestLog): Promise<void> {
+  const dir = join(logsRoot, entry.sessionId, entry.requestId);
   await ensureDir(dir);
   await writeFile(join(dir, 'request.json'), JSON.stringify(entry, null, 2));
 }
 
-export async function logGeneration(entry: GenerationLog): Promise<void> {
-  const dir = join(LOG_BASE, entry.sessionId, entry.requestId, entry.generationId);
+export async function logGeneration(logsRoot: string, entry: GenerationLog): Promise<void> {
+  const dir = join(logsRoot, entry.sessionId, entry.requestId, entry.generationId);
   await ensureDir(dir);
   await writeFile(join(dir, 'response.json'), JSON.stringify(entry, null, 2));
 }

@@ -1,17 +1,9 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { StateAccessor, ConversationState } from '@openrouter/agent';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const STATE_DIR = join(__dirname, '..', '..', 'logs');
-
-function statePath(sessionId: string): string {
-  return join(STATE_DIR, sessionId, 'state.json');
-}
-
-export function createFileStateAccessor(sessionId: string): StateAccessor {
-  const path = statePath(sessionId);
+export function createFileStateAccessor(logsRoot: string, sessionId: string): StateAccessor {
+  const path = join(logsRoot, sessionId, 'state.json');
 
   return {
     load: async () => {
