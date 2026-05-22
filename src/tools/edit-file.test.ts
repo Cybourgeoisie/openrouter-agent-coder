@@ -13,7 +13,8 @@ afterEach(async () => {
   await rm(TMP, { recursive: true, force: true });
 });
 
-const execute = editFileTool.function.execute as (params: {
+const tool = editFileTool();
+const execute = tool.function.execute as (params: {
   path: string;
   old_string: string;
   new_string: string;
@@ -21,7 +22,7 @@ const execute = editFileTool.function.execute as (params: {
 
 describe('edit_file tool', () => {
   it('has correct name', () => {
-    expect(editFileTool.function.name).toBe('edit_file');
+    expect(tool.function.name).toBe('edit_file');
   });
 
   it('replaces a unique string', async () => {

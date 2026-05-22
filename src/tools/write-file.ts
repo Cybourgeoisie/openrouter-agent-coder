@@ -3,17 +3,20 @@ import { z } from 'zod/v4';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-export const writeFileTool = tool({
-  name: 'write_file',
-  description:
-    'Write content to a file, creating it if it does not exist or overwriting if it does. Parent directories are created automatically.',
-  inputSchema: z.object({
-    path: z.string().describe('Absolute or relative path to the file to write'),
-    content: z.string().describe('The full content to write to the file'),
-  }),
-  execute: async ({ path, content }) => {
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, content, 'utf-8');
-    return { path, bytesWritten: Buffer.byteLength(content, 'utf-8') };
-  },
-});
+export function writeFileTool(signal?: AbortSignal) {
+  return tool({
+    name: 'write_file',
+    description:
+      'Write content to a file, creating it if it does not exist or overwriting if it does. Parent directories are created automatically.',
+    inputSchema: z.object({
+      path: z.string().describe('Absolute or relative path to the file to write'),
+      content: z.string().describe('The full content to write to the file'),
+    }),
+    execute: async ({ path, content }) => {
+      if (signal?.aborted) throw new Error('write_file cancelled');
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, content, 'utf-8');
+      return { path, bytesWritten: Buffer.byteLength(content, 'utf-8') };
+    },
+  });
+}

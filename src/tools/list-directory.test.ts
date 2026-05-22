@@ -13,13 +13,14 @@ afterEach(async () => {
   await rm(TMP, { recursive: true, force: true });
 });
 
-const execute = listDirectoryTool.function.execute as (params: {
+const tool = listDirectoryTool();
+const execute = tool.function.execute as (params: {
   path: string;
 }) => Promise<{ path: string; entries: string[] }>;
 
 describe('list_directory tool', () => {
   it('has correct name', () => {
-    expect(listDirectoryTool.function.name).toBe('list_directory');
+    expect(tool.function.name).toBe('list_directory');
   });
 
   it('lists files and directories', async () => {

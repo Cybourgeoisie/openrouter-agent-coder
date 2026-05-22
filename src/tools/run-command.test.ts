@@ -1,14 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { runCommandTool } from './run-command.js';
 
-const execute = runCommandTool.function.execute as (params: {
+const tool = runCommandTool();
+const execute = tool.function.execute as (params: {
   command: string;
   cwd?: string;
 }) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 
 describe('run_command tool', () => {
   it('has correct name', () => {
-    expect(runCommandTool.function.name).toBe('run_command');
+    expect(tool.function.name).toBe('run_command');
   });
 
   it('runs a command and returns stdout', async () => {
