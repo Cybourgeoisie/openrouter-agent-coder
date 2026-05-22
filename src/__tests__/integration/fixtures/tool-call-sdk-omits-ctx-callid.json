@@ -1,0 +1,34 @@
+{
+  "name": "tool-call-sdk-omits-ctx-callid",
+  "steps": [
+    { "type": "yield", "event": { "type": "turn.start", "turnNumber": 0, "timestamp": 1 } },
+    {
+      "type": "yield",
+      "event": {
+        "type": "response.output_item.done",
+        "outputIndex": 0,
+        "sequenceNumber": 1,
+        "item": {
+          "type": "function_call",
+          "callId": "call_x",
+          "name": "echo",
+          "arguments": "{\"value\":\"v\"}"
+        }
+      }
+    },
+    {
+      "type": "tool_execute",
+      "toolName": "echo",
+      "input": { "value": "v" },
+      "callId": "call_x",
+      "sdkOmitsCallId": true
+    },
+    { "type": "yield", "event": { "type": "turn.end", "turnNumber": 0, "timestamp": 2 } }
+  ],
+  "response": {
+    "id": "resp-no-ctx",
+    "model": "mock-model",
+    "usage": { "cost": 0.001, "inputTokens": 5, "outputTokens": 2, "totalTokens": 7 },
+    "output": []
+  }
+}

@@ -341,6 +341,34 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     expect(complete.costUsd).toBe(0);
   });
 
+  it('synthesizes a hook callId when the SDK ctx omits toolCall.callId', async () => {
+    state.fixture = loadFixture('tool-call-sdk-omits-ctx-callid');
+    const hookEvents: Array<{ event: HookEvent; payload: HookPayload }> = [];
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'no-ctx-callid',
+      tools: [echoTool()] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+      onHook: (event, payload) => {
+        hookEvents.push({ event, payload });
+      },
+    });
+    await collect(run);
+
+    const pre = hookEvents.find((h) => h.event === 'PreToolUse');
+    const post = hookEvents.find((h) => h.event === 'PostToolUse');
+    expect(pre).toBeDefined();
+    expect(post).toBeDefined();
+    const preId = (pre!.payload as { callId: string }).callId;
+    const postId = (post!.payload as { callId: string }).callId;
+    expect(preId).toBe(postId);
+    expect(preId).not.toBe('call_x');
+    expect(preId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+
   it('reports stream_complete{status:max_turns} when the turn count reaches maxTurns', async () => {
     state.fixture = loadFixture('max-turns');
     const run = new OpenRouterAgentRun({
