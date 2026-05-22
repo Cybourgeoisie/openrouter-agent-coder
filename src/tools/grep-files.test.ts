@@ -1,15 +1,42 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { grepFilesTool } from './grep-files.js';
-import { writeFile, mkdir, rm } from 'node:fs/promises';
+import { writeFile, mkdir, rm, symlink, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const TMP = join(import.meta.dirname, '../../.test-tmp/grep-files');
+
+async function restoreModes(path: string): Promise<void> {
+  if (process.platform === 'win32') return;
+  try {
+    const { readdir, stat } = await import('node:fs/promises');
+    await chmod(path, 0o755);
+    let entries: string[];
+    try {
+      entries = await readdir(path);
+    } catch {
+      return;
+    }
+    for (const name of entries) {
+      const full = join(path, name);
+      try {
+        const s = await stat(full);
+        await chmod(full, 0o755);
+        if (s.isDirectory()) await restoreModes(full);
+      } catch {
+        // ignore broken symlinks etc.
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
 
 beforeEach(async () => {
   await mkdir(TMP, { recursive: true });
 });
 
 afterEach(async () => {
+  await restoreModes(TMP);
   await rm(TMP, { recursive: true, force: true });
 });
 
@@ -214,5 +241,60 @@ describe('grep_files tool', () => {
 
     expect(result.pattern).toBe('x');
     expect(result.path).toBe(TMP);
+  });
+
+  describe('filesystem error fallbacks', () => {
+    const isRoot = process.getuid?.() === 0;
+    const skipChmod = process.platform === 'win32' || isRoot;
+
+    it.skipIf(skipChmod)('swallows readdir errors on unreadable subdirectory', async () => {
+      await writeFile(join(TMP, 'top.ts'), 'findme\n', 'utf-8');
+      const locked = join(TMP, 'locked');
+      await mkdir(locked);
+      await writeFile(join(locked, 'hidden.ts'), 'findme\n', 'utf-8');
+      await chmod(locked, 0o000);
+
+      const result = await execute({
+        pattern: 'findme',
+        path: TMP,
+        file_glob: '*.ts',
+        case_sensitive: true,
+      });
+
+      expect(result.matchCount).toBe(1);
+      expect(result.matches[0].file).toBe('top.ts');
+    });
+
+    it('skips entries whose stat() rejects (broken symlink)', async () => {
+      await writeFile(join(TMP, 'real.ts'), 'findme\n', 'utf-8');
+      await symlink(join(TMP, 'does-not-exist'), join(TMP, 'broken.ts'));
+
+      const result = await execute({
+        pattern: 'findme',
+        path: TMP,
+        file_glob: '*.ts',
+        case_sensitive: true,
+      });
+
+      expect(result.matchCount).toBe(1);
+      expect(result.matches[0].file).toBe('real.ts');
+    });
+
+    it.skipIf(skipChmod)('skips unreadable files and continues to other matches', async () => {
+      await writeFile(join(TMP, 'readable.ts'), 'findme\n', 'utf-8');
+      const locked = join(TMP, 'locked.ts');
+      await writeFile(locked, 'findme\n', 'utf-8');
+      await chmod(locked, 0o000);
+
+      const result = await execute({
+        pattern: 'findme',
+        path: TMP,
+        file_glob: '*.ts',
+        case_sensitive: true,
+      });
+
+      expect(result.matchCount).toBe(1);
+      expect(result.matches[0].file).toBe('readable.ts');
+    });
   });
 });

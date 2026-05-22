@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { listDirectoryTool } from './list-directory.js';
-import { writeFile, mkdir, rm } from 'node:fs/promises';
+import { writeFile, mkdir, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const TMP = join(import.meta.dirname, '../../.test-tmp/list-dir');
@@ -50,5 +50,15 @@ describe('list_directory tool', () => {
 
   it('throws when directory does not exist', async () => {
     await expect(execute({ path: join(TMP, 'nope') })).rejects.toThrow();
+  });
+
+  it('falls back to bare name when stat rejects (broken symlink)', async () => {
+    await writeFile(join(TMP, 'real.txt'), 'x', 'utf-8');
+    await symlink(join(TMP, 'does-not-exist'), join(TMP, 'broken'));
+
+    const result = await execute({ path: TMP });
+    expect(result.entries).toContain('real.txt');
+    expect(result.entries).toContain('broken');
+    expect(result.entries).not.toContain('broken/');
   });
 });
