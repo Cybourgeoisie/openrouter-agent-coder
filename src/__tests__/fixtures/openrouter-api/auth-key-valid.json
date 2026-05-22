@@ -1,0 +1,12 @@
+{
+  "data": {
+    "label": "sk-or-v1-test-key",
+    "usage": 12.3456,
+    "limit": 50.0,
+    "is_free_tier": false,
+    "rate_limit": {
+      "requests": 200,
+      "interval": "10s"
+    }
+  }
+}
