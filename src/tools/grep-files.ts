@@ -1,7 +1,8 @@
 import { tool } from '@openrouter/agent';
 import { z } from 'zod/v4';
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { join, relative, resolve } from 'node:path';
+import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
 
 export interface GrepMatch {
   file: string;
@@ -70,7 +71,7 @@ function matchesGlob(filename: string, pattern: string): boolean {
   return re.test(filename);
 }
 
-export function grepFilesTool(signal?: AbortSignal) {
+export function grepFilesTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
   return tool({
     name: 'grep_files',
     description:
@@ -88,7 +89,7 @@ export function grepFilesTool(signal?: AbortSignal) {
         .default(true),
     }),
     execute: async ({ pattern, path, file_glob, case_sensitive }) => {
-      if (signal?.aborted) throw new Error('grep_files cancelled');
+      if (ctx.signal?.aborted) throw new Error('grep_files cancelled');
       const flags = case_sensitive ? '' : 'i';
       let regex: RegExp;
       try {
@@ -97,12 +98,13 @@ export function grepFilesTool(signal?: AbortSignal) {
         throw new Error(`Invalid regex pattern: ${(err as Error).message}`, { cause: err });
       }
 
-      const files = await collectFiles(path, file_glob);
+      const resolvedRoot = resolve(ctx.cwd, path);
+      const files = await collectFiles(resolvedRoot, file_glob);
       const matches: GrepMatch[] = [];
 
       for (const file of files) {
         if (matches.length >= MAX_MATCHES) break;
-        if (signal?.aborted) throw new Error('grep_files cancelled');
+        if (ctx.signal?.aborted) throw new Error('grep_files cancelled');
 
         let text: string;
         try {
@@ -116,7 +118,7 @@ export function grepFilesTool(signal?: AbortSignal) {
           if (matches.length >= MAX_MATCHES) break;
           if (regex.test(lines[i])) {
             matches.push({
-              file: relative(path, file),
+              file: relative(resolvedRoot, file),
               line: i + 1,
               text: lines[i],
             });

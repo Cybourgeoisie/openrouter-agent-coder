@@ -44,7 +44,7 @@ vi.mock('./tools/server-tools.js', () => ({
   createServerToolsHooks: () => ({}),
 }));
 
-import { OpenRouterAgentRun } from './agent.js';
+import { OpenRouterAgentRun, DEFAULT_INSTRUCTIONS } from './agent.js';
 import type { AgentCoreEvent } from './events.js';
 import { allTools } from './tools/index.js';
 
@@ -1145,5 +1145,306 @@ describe('OpenRouterAgentRun canUseTool', () => {
     >;
     expect(result).toBeDefined();
     expect(result.isError).toBe(false);
+  });
+});
+
+describe('OpenRouterAgentRun constructor options', () => {
+  it('throws if apiKey is missing', () => {
+    expect(
+      () =>
+        new OpenRouterAgentRun({
+          apiKey: '',
+          sessionId: TEST_SESSION,
+          prompt: 'p',
+        }),
+    ).toThrow(/apiKey is required/);
+    expect(
+      () =>
+        new OpenRouterAgentRun({
+          // @ts-expect-error - exercising missing-required-field handling
+          apiKey: undefined,
+          sessionId: TEST_SESSION,
+          prompt: 'p',
+        }),
+    ).toThrow(/apiKey is required/);
+  });
+
+  it('defaults numeric options to maxTurns: 25 and maxBudgetUsd: 1.0', async () => {
+    callModelMock.mockImplementation(
+      fakeCallModel({
+        events: [
+          { type: 'turn.start', turnNumber: 0 },
+          { type: 'turn.end', turnNumber: 0 },
+        ],
+      }),
+    );
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+    });
+    await collect(run);
+    const args = callModelMock.mock.calls[0][0];
+    const stopWhen = args.stopWhen as Array<{ kind: string; n: number }>;
+    const step = stopWhen.find((s) => s.kind === 'stepCountIs');
+    const cost = stopWhen.find((s) => s.kind === 'maxCost');
+    expect(step?.n).toBe(25);
+    expect(cost?.n).toBe(1.0);
+  });
+
+  it('defaults model to ~anthropic/claude-sonnet-latest and instructions to DEFAULT_INSTRUCTIONS', async () => {
+    callModelMock.mockImplementation(
+      fakeCallModel({
+        events: [
+          { type: 'turn.start', turnNumber: 0 },
+          { type: 'turn.end', turnNumber: 0 },
+        ],
+      }),
+    );
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+    });
+    await collect(run);
+    const args = callModelMock.mock.calls[0][0];
+    expect(args.model).toBe('~anthropic/claude-sonnet-latest');
+    expect(args.instructions).toBe(DEFAULT_INSTRUCTIONS);
+    expect(DEFAULT_INSTRUCTIONS).toMatch(/code editing agent/i);
+  });
+
+  it('omits serverURL on the OR client when baseUrl is unset', async () => {
+    callModelMock.mockImplementation(
+      fakeCallModel({
+        events: [
+          { type: 'turn.start', turnNumber: 0 },
+          { type: 'turn.end', turnNumber: 0 },
+        ],
+      }),
+    );
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+    });
+    await collect(run);
+    const ctorArgs = openRouterCtorMock.mock.calls[0][0];
+    expect('serverURL' in ctorArgs).toBe(false);
+  });
+});
+
+describe('OpenRouterAgentRun cwd threading', () => {
+  it('captures process.cwd() as the default cwd', async () => {
+    // Drive a tool call through the wrapped read_file tool and observe that
+    // a relative path resolves against process.cwd() (the constructor default).
+    const tmpDir = join(process.cwd(), '.test-tmp', 'agent-default-cwd');
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    await mkdir(tmpDir, { recursive: true });
+    const file = join(tmpDir, 'hello.txt');
+    await writeFile(file, 'cwd-default', 'utf-8');
+
+    try {
+      callModelMock.mockImplementation(
+        (request: {
+          tools: Array<{
+            function: { name: string; execute?: (i: unknown, c?: unknown) => unknown };
+          }>;
+        }) => {
+          const tool = request.tools.find((t) => t.function.name === 'read_file');
+          return {
+            async *getFullResponsesStream() {
+              yield { type: 'turn.start', turnNumber: 0 };
+              const out = await tool!.function.execute!(
+                { path: '.test-tmp/agent-default-cwd/hello.txt' },
+                {},
+              );
+              yield {
+                type: 'tool.call_output',
+                timestamp: 1,
+                output: {
+                  callId: 'c1',
+                  type: 'function_call_output',
+                  output: out,
+                  status: 'completed',
+                },
+              };
+              yield { type: 'turn.end', turnNumber: 0 };
+            },
+            async getResponse() {
+              return {
+                id: 'r',
+                model: 'm',
+                usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                output: [],
+              };
+            },
+          };
+        },
+      );
+
+      const run = new OpenRouterAgentRun({
+        apiKey: 'k',
+        sessionId: TEST_SESSION,
+        prompt: 'read',
+      });
+      const events = await collect(run);
+      const result = events.find((e) => e.type === 'tool_result') as Extract<
+        AgentCoreEvent,
+        { type: 'tool_result' }
+      >;
+      expect((result.output as { content: string }).content).toBe('cwd-default');
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('honours explicit cwd, flowing it into FS tools (read_file resolves relative paths under it)', async () => {
+    const { mkdtemp, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmpRoot = await mkdtemp(join(tmpdir(), 'agent-cwd-explicit-'));
+    await writeFile(join(tmpRoot, 'sample.txt'), 'sample-contents', 'utf-8');
+
+    try {
+      callModelMock.mockImplementation(
+        (request: {
+          tools: Array<{
+            function: { name: string; execute?: (i: unknown, c?: unknown) => unknown };
+          }>;
+        }) => {
+          const tool = request.tools.find((t) => t.function.name === 'read_file');
+          return {
+            async *getFullResponsesStream() {
+              yield { type: 'turn.start', turnNumber: 0 };
+              const out = await tool!.function.execute!({ path: 'sample.txt' }, {});
+              yield {
+                type: 'tool.call_output',
+                timestamp: 1,
+                output: {
+                  callId: 'c1',
+                  type: 'function_call_output',
+                  output: out,
+                  status: 'completed',
+                },
+              };
+              yield { type: 'turn.end', turnNumber: 0 };
+            },
+            async getResponse() {
+              return {
+                id: 'r',
+                model: 'm',
+                usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                output: [],
+              };
+            },
+          };
+        },
+      );
+
+      const run = new OpenRouterAgentRun({
+        apiKey: 'k',
+        sessionId: TEST_SESSION,
+        prompt: 'read',
+        cwd: tmpRoot,
+        logsRoot: join(tmpRoot, 'logs'),
+      });
+      const events = await collect(run);
+      const result = events.find((e) => e.type === 'tool_result') as Extract<
+        AgentCoreEvent,
+        { type: 'tool_result' }
+      >;
+      expect((result.output as { content: string }).content).toBe('sample-contents');
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('threads cwd through run_command (child process spawns in ctx.cwd)', async () => {
+    const { mkdtemp, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmpRoot = await mkdtemp(join(tmpdir(), 'agent-cwd-run-'));
+    await writeFile(join(tmpRoot, 'marker.txt'), 'marker', 'utf-8');
+
+    try {
+      callModelMock.mockImplementation(
+        (request: {
+          tools: Array<{
+            function: { name: string; execute?: (i: unknown, c?: unknown) => unknown };
+          }>;
+        }) => {
+          const tool = request.tools.find((t) => t.function.name === 'run_command');
+          return {
+            async *getFullResponsesStream() {
+              yield { type: 'turn.start', turnNumber: 0 };
+              const out = await tool!.function.execute!({ command: 'ls' }, {});
+              yield {
+                type: 'tool.call_output',
+                timestamp: 1,
+                output: {
+                  callId: 'c1',
+                  type: 'function_call_output',
+                  output: out,
+                  status: 'completed',
+                },
+              };
+              yield { type: 'turn.end', turnNumber: 0 };
+            },
+            async getResponse() {
+              return {
+                id: 'r',
+                model: 'm',
+                usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                output: [],
+              };
+            },
+          };
+        },
+      );
+
+      const run = new OpenRouterAgentRun({
+        apiKey: 'k',
+        sessionId: TEST_SESSION,
+        prompt: 'list',
+        cwd: tmpRoot,
+        logsRoot: join(tmpRoot, 'logs'),
+      });
+      const events = await collect(run);
+      const result = events.find((e) => e.type === 'tool_result') as Extract<
+        AgentCoreEvent,
+        { type: 'tool_result' }
+      >;
+      const out = result.output as { exitCode: number; stdout: string };
+      expect(out.exitCode).toBe(0);
+      expect(out.stdout).toContain('marker.txt');
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('writes logs under the explicit logsRoot when provided', async () => {
+    const { mkdtemp, stat } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const logsRoot = await mkdtemp(join(tmpdir(), 'agent-logsroot-'));
+
+    try {
+      callModelMock.mockImplementation(
+        fakeCallModel({
+          events: [
+            { type: 'turn.start', turnNumber: 0 },
+            { type: 'turn.end', turnNumber: 0 },
+          ],
+        }),
+      );
+      const run = new OpenRouterAgentRun({
+        apiKey: 'k',
+        sessionId: 'logs-root-session',
+        prompt: 'p',
+        logsRoot,
+      });
+      await collect(run);
+      const s = await stat(join(logsRoot, 'logs-root-session'));
+      expect(s.isDirectory()).toBe(true);
+    } finally {
+      await rm(logsRoot, { recursive: true, force: true });
+    }
   });
 });

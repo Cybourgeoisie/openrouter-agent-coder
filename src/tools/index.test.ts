@@ -50,7 +50,7 @@ describe('tools barrel', () => {
 
   it('passes the same signal to every tool factory in the bundle', async () => {
     const ctrl = new AbortController();
-    const tools = allTools(ctrl.signal);
+    const tools = allTools({ cwd: '.', signal: ctrl.signal });
     ctrl.abort();
     // Every client tool's execute should reject promptly once the signal aborts.
     for (const t of tools) {

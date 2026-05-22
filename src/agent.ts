@@ -7,8 +7,10 @@ import {
   isToolCallOutputEvent,
   type Tool,
 } from '@openrouter/agent';
+import { join } from 'node:path';
 import { allTools } from './tools/index.js';
 import { createServerToolsHooks } from './tools/server-tools.js';
+import { type ToolContext } from './tools/context.js';
 import { createFileStateAccessor } from './state/file-state.js';
 import {
   createRequestId,
@@ -22,9 +24,15 @@ const DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
 const DEFAULT_MAX_TURNS = 25;
 const DEFAULT_MAX_BUDGET_USD = 1.0;
 const DEFAULT_APP_TITLE = 'openrouter-agent-coder';
-const DEFAULT_INSTRUCTIONS =
-  'You are a code editing agent. You can read, write, and edit files, list directories, and run shell commands. Work step by step: read files to understand the codebase, then make changes. Always verify your changes.';
 const ABORT_REASON = 'aborted';
+
+/**
+ * Default system instructions for the built-in code-editing agent. Exported so
+ * library consumers can extend, prefix, or replace the string without
+ * re-deriving it from source.
+ */
+export const DEFAULT_INSTRUCTIONS =
+  'You are a code editing agent. You can read, write, and edit files, list directories, and run shell commands. Work step by step: read files to understand the codebase, then make changes. Always verify your changes.';
 
 export type AgentLoggerLevel = 'debug' | 'info' | 'warn' | 'error';
 export type AgentLogger = (
@@ -51,11 +59,11 @@ export interface OpenRouterAgentRunOptions {
   sessionId: string;
   /** The user prompt for this run. */
   prompt: string;
-  /** System instructions (defaults to a code-editing-agent prompt). */
+  /** System instructions. Defaults to {@link DEFAULT_INSTRUCTIONS}. */
   instructions?: string;
   /** Model alias or id. Defaults to `~anthropic/claude-sonnet-latest`. */
   model?: string;
-  /** Working directory tools should resolve paths against. TODO(phase 1.5): plumb through to tools. */
+  /** Working directory tools resolve relative paths against. Defaults to the host process's current directory. */
   cwd?: string;
   /** Max inner-loop turns. Defaults to 25. */
   maxTurns?: number;
@@ -63,10 +71,10 @@ export interface OpenRouterAgentRunOptions {
   maxBudgetUsd?: number;
   /**
    * Tool set passed to the model. Defaults to the built-in 5-client-tool set
-   * (built with the run's composite AbortSignal); server tools
-   * (datetime/web_search/web_fetch) are injected via hooks. Custom tools
-   * supplied here are NOT signal-wrapped — callers are responsible for their
-   * own cancellation if needed.
+   * bound to a {@link ToolContext} derived from the run's `cwd` and composite
+   * AbortSignal; server tools (datetime/web_search/web_fetch) are injected via
+   * hooks. Custom tools supplied here are NOT context-bound — callers are
+   * responsible for their own cwd resolution and cancellation if needed.
    */
   tools?: readonly Tool[];
   /**
@@ -88,51 +96,55 @@ export interface OpenRouterAgentRunOptions {
    * `abort()` method via `AbortSignal.any`.
    */
   signal?: AbortSignal;
-  /** Override for the logs directory. TODO(phase 1.5): plumb into logger/state accessor. */
+  /** Override for the logs directory. Defaults to `<cwd>/logs`. */
   logsRoot?: string;
   /** Override the OpenRouter API base URL. */
   baseUrl?: string;
-  /** App title sent in OR client metadata. */
+  /** App title sent in OR client metadata. Defaults to `'openrouter-agent-coder'`. */
   appTitle?: string;
   /** Optional diagnostic logger. No logger → silent. */
   logger?: AgentLogger;
 }
 
-interface ResolvedOptions extends Required<Omit<OpenRouterAgentRunOptions, OptionalOnlyKeys>> {
-  cwd?: string;
+interface ResolvedOptions {
+  apiKey: string;
+  sessionId: string;
+  prompt: string;
+  instructions: string;
+  model: string;
+  cwd: string;
+  maxTurns: number;
+  maxBudgetUsd: number;
+  tools: readonly Tool[];
+  appTitle: string;
+  logsRoot: string;
   canUseTool?: CanUseTool;
   onHook?: OnHook;
   signal?: AbortSignal;
-  logsRoot?: string;
   baseUrl?: string;
   logger?: AgentLogger;
 }
 
-type OptionalOnlyKeys =
-  | 'cwd'
-  | 'canUseTool'
-  | 'onHook'
-  | 'signal'
-  | 'logsRoot'
-  | 'baseUrl'
-  | 'logger';
-
 function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
+  if (!opts.apiKey) {
+    throw new Error('apiKey is required');
+  }
+  const cwd = opts.cwd ?? process.cwd();
   return {
     apiKey: opts.apiKey,
     sessionId: opts.sessionId,
     prompt: opts.prompt,
     instructions: opts.instructions ?? DEFAULT_INSTRUCTIONS,
     model: opts.model ?? DEFAULT_MODEL,
+    cwd,
     maxTurns: opts.maxTurns ?? DEFAULT_MAX_TURNS,
     maxBudgetUsd: opts.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD,
     tools: opts.tools ?? [],
     appTitle: opts.appTitle ?? DEFAULT_APP_TITLE,
-    cwd: opts.cwd,
+    logsRoot: opts.logsRoot ?? join(cwd, 'logs'),
     canUseTool: opts.canUseTool,
     onHook: opts.onHook,
     signal: opts.signal,
-    logsRoot: opts.logsRoot,
     baseUrl: opts.baseUrl,
     logger: opts.logger,
   };
@@ -187,10 +199,12 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       prompt,
       instructions,
       model,
+      cwd,
       maxTurns,
       maxBudgetUsd,
       tools: userTools,
       appTitle,
+      logsRoot,
       baseUrl,
       logger,
     } = this.opts;
@@ -206,6 +220,8 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       model,
       maxTurns,
       maxBudgetUsd,
+      cwd,
+      logsRoot,
     });
 
     // Pre-aborted at construction time → no session_started; jump straight to
@@ -243,11 +259,15 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     yield { type: 'session_started', sessionId };
 
     const requestId = createRequestId();
-    const state = createFileStateAccessor(sessionId);
+    const state = createFileStateAccessor(logsRoot, sessionId);
     // Note: server-side tools (datetime/web_search/web_fetch) are injected
     // via OR SDK hooks and execute on OpenRouter's servers — they bypass this
     // wrapper, so canUseTool only ever sees client tools.
-    const baseTools: readonly Tool[] = this.hasCustomTools ? userTools : allTools(signal);
+    const ctx: ToolContext = { cwd, signal };
+    // Order: bind ctx first (so the unwrapped tool's execute closes over
+    // ctx.cwd / ctx.signal), THEN wrap with the permission gate so the
+    // permission decision is evaluated before the ctx-aware execute runs.
+    const baseTools: readonly Tool[] = this.hasCustomTools ? userTools : allTools(ctx);
     const toolsForRun = this.opts.canUseTool
       ? baseTools.map((t) => wrapToolWithPermission(t, this.opts.canUseTool!))
       : baseTools;
@@ -261,7 +281,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     signal.addEventListener('abort', onAbort, { once: true });
 
     try {
-      await logRequest({
+      await logRequest(logsRoot, {
         sessionId,
         requestId,
         prompt,
@@ -278,7 +298,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         stopWhen: [stepCountIs(maxTurns), maxCost(maxBudgetUsd)],
         onTurnEnd: async (_ctx, response) => {
           const generationId = createGenerationId();
-          await logGeneration({
+          await logGeneration(logsRoot, {
             sessionId,
             requestId,
             generationId,
@@ -384,7 +404,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       }
 
       const finalGenId = createGenerationId();
-      await logGeneration({
+      await logGeneration(logsRoot, {
         sessionId,
         requestId,
         generationId: finalGenId,

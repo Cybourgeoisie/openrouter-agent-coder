@@ -1,6 +1,7 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
-import { readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import {
   createSessionId,
   createRequestId,
@@ -10,10 +11,14 @@ import {
   logGeneration,
 } from './logger.js';
 
-const LOG_BASE = join(process.cwd(), 'logs');
+let LOGS_ROOT: string;
+
+beforeEach(async () => {
+  LOGS_ROOT = await mkdtemp(join(tmpdir(), 'logger-test-'));
+});
 
 afterEach(async () => {
-  await rm(join(LOG_BASE, 'test-session'), { recursive: true, force: true });
+  await rm(LOGS_ROOT, { recursive: true, force: true });
 });
 
 describe('ID generation', () => {
@@ -39,10 +44,10 @@ describe('ID generation', () => {
 });
 
 describe('logSessionStart', () => {
-  it('creates session.json with correct structure', async () => {
-    await logSessionStart('test-session');
+  it('creates session.json under logsRoot', async () => {
+    await logSessionStart(LOGS_ROOT, 'test-session');
 
-    const raw = await readFile(join(LOG_BASE, 'test-session', 'session.json'), 'utf-8');
+    const raw = await readFile(join(LOGS_ROOT, 'test-session', 'session.json'), 'utf-8');
     const data = JSON.parse(raw);
     expect(data.sessionId).toBe('test-session');
     expect(data.startedAt).toBeDefined();
@@ -51,23 +56,23 @@ describe('logSessionStart', () => {
 });
 
 describe('logRequest', () => {
-  it('writes request.json with all fields', async () => {
+  it('writes request.json with all fields under logsRoot', async () => {
     const entry = {
       sessionId: 'test-session',
       requestId: 'req-1',
       prompt: 'hello',
       timestamp: '2024-01-01T00:00:00Z',
     };
-    await logRequest(entry);
+    await logRequest(LOGS_ROOT, entry);
 
-    const raw = await readFile(join(LOG_BASE, 'test-session', 'req-1', 'request.json'), 'utf-8');
+    const raw = await readFile(join(LOGS_ROOT, 'test-session', 'req-1', 'request.json'), 'utf-8');
     const data = JSON.parse(raw);
     expect(data).toEqual(entry);
   });
 });
 
 describe('logGeneration', () => {
-  it('writes response.json at correct path', async () => {
+  it('writes response.json at correct path under logsRoot', async () => {
     const entry = {
       sessionId: 'test-session',
       requestId: 'req-1',
@@ -75,9 +80,9 @@ describe('logGeneration', () => {
       response: { id: 'resp-123', model: 'test-model', output: [] },
       timestamp: '2024-01-01T00:00:00Z',
     };
-    await logGeneration(entry);
+    await logGeneration(LOGS_ROOT, entry);
 
-    const path = join(LOG_BASE, 'test-session', 'req-1', 'gen-1', 'response.json');
+    const path = join(LOGS_ROOT, 'test-session', 'req-1', 'gen-1', 'response.json');
     const raw = await readFile(path, 'utf-8');
     const data = JSON.parse(raw);
     expect(data.generationId).toBe('gen-1');
@@ -85,7 +90,7 @@ describe('logGeneration', () => {
   });
 
   it('creates nested directory structure', async () => {
-    await logGeneration({
+    await logGeneration(LOGS_ROOT, {
       sessionId: 'test-session',
       requestId: 'req-deep',
       generationId: 'gen-deep',
@@ -93,8 +98,20 @@ describe('logGeneration', () => {
       timestamp: '2024-01-01T00:00:00Z',
     });
 
-    const dir = join(LOG_BASE, 'test-session', 'req-deep', 'gen-deep');
+    const dir = join(LOGS_ROOT, 'test-session', 'req-deep', 'gen-deep');
     const s = await stat(dir);
     expect(s.isDirectory()).toBe(true);
+  });
+
+  it('honours an explicit logsRoot for the on-disk layout', async () => {
+    await logGeneration(LOGS_ROOT, {
+      sessionId: 'isolated-session',
+      requestId: 'r',
+      generationId: 'g',
+      response: {},
+      timestamp: '2024-01-01T00:00:00Z',
+    });
+    const s = await stat(join(LOGS_ROOT, 'isolated-session', 'r', 'g', 'response.json'));
+    expect(s.isFile()).toBe(true);
   });
 });

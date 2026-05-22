@@ -5,6 +5,7 @@ import { editFileTool } from './edit-file.js';
 import { listDirectoryTool } from './list-directory.js';
 import { runCommandTool } from './run-command.js';
 import { grepFilesTool } from './grep-files.js';
+import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
 
 export { readFileTool } from './read-file.js';
 export { writeFileTool } from './write-file.js';
@@ -13,19 +14,22 @@ export { listDirectoryTool } from './list-directory.js';
 export { runCommandTool } from './run-command.js';
 export { grepFilesTool } from './grep-files.js';
 export { SERVER_TOOLS, createServerToolsHooks } from './server-tools.js';
+export { DEFAULT_TOOL_CONTEXT } from './context.js';
+export type { ToolContext } from './context.js';
 
 /**
- * Build the default set of client tools wired to a single AbortSignal.
- * Each tool factory checks the signal on entry; `run_command` additionally
- * propagates SIGTERM (with a 250ms SIGKILL grace) to its child process.
+ * Build the default set of client tools bound to a {@link ToolContext}. Each
+ * tool factory checks `ctx.signal` on entry and resolves relative path inputs
+ * against `ctx.cwd`. `run_command` additionally propagates SIGTERM (with a
+ * 250ms SIGKILL grace) to its child process.
  */
-export function allTools(signal?: AbortSignal): readonly Tool[] {
+export function allTools(ctx: ToolContext = DEFAULT_TOOL_CONTEXT): readonly Tool[] {
   return [
-    readFileTool(signal),
-    writeFileTool(signal),
-    editFileTool(signal),
-    listDirectoryTool(signal),
-    runCommandTool(signal),
-    grepFilesTool(signal),
+    readFileTool(ctx),
+    writeFileTool(ctx),
+    editFileTool(ctx),
+    listDirectoryTool(ctx),
+    runCommandTool(ctx),
+    grepFilesTool(ctx),
   ];
 }
