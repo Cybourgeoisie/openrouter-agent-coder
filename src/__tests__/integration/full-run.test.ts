@@ -11,6 +11,7 @@ const { state } = vi.hoisted(() => {
     ctorArgs: [],
     callModelArgs: [],
     pausedGate: null,
+    constructorThrows: null,
   };
   return { state: sharedState };
 });
@@ -72,6 +73,7 @@ beforeEach(() => {
   state.ctorArgs.length = 0;
   state.callModelArgs.length = 0;
   state.pausedGate = null;
+  state.constructorThrows = null;
 });
 
 afterEach(async () => {
@@ -126,12 +128,15 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     expect(hookNames.at(-1)).toBe('SessionEnd');
   });
 
-  it('runs the tool when canUseTool resolves allow', async () => {
+  it('runs the tool with substituted input when canUseTool returns updatedInput', async () => {
     state.fixture = loadFixture('single-tool-call');
     const decisions: Array<{ name: string; input: unknown }> = [];
     const canUseTool: CanUseTool = (name, input): CanUseToolResult => {
       decisions.push({ name, input });
-      return { behavior: 'allow' };
+      // Substitute the input — exercises the `updatedInput !== undefined` arm
+      // of the permission wrapper so the wrapped execute receives the
+      // override rather than the original input.
+      return { behavior: 'allow', updatedInput: { value: 'rewritten' } };
     };
 
     const run = new OpenRouterAgentRun({
@@ -151,7 +156,7 @@ describe('integration: full run via OpenRouterAgentRun', () => {
       { type: 'tool_result' }
     >;
     expect(toolResult.isError).toBe(false);
-    expect(toolResult.output).toBe('echoed:gated');
+    expect(toolResult.output).toBe('echoed:rewritten');
     const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
     expect(complete.status).toBe('success');
   });
@@ -222,6 +227,118 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     const deltas = events.filter((e) => e.type === 'text_delta');
     expect(deltas.length).toBe(1);
     expect(deltas[0]).toMatchObject({ content: 'starting...' });
+  });
+
+  it('emits error + stream_complete when the OpenRouter constructor throws', async () => {
+    // No fixture needed — the constructor throws before callModel is invoked.
+    state.constructorThrows = 'invalid API key';
+    const hookEvents: Array<{ event: HookEvent; payload: HookPayload }> = [];
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-bad',
+      sessionId: TEST_SESSION,
+      prompt: 'never gets there',
+      tools: [echoTool()] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+      onHook: (event, payload) => {
+        hookEvents.push({ event, payload });
+      },
+    });
+    const events = await collect(run);
+    const types = events.map((e) => e.type);
+
+    // No session_started — construction failure short-circuits before that yield.
+    expect(types).not.toContain('session_started');
+    expect(types).toEqual(['error', 'stream_complete']);
+
+    const error = events[0] as Extract<AgentCoreEvent, { type: 'error' }>;
+    expect(error.message).toBe('invalid API key');
+    expect(error.cause).toBeInstanceOf(Error);
+
+    const complete = events[1] as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.status).toBe('error');
+    expect(complete.reason).toBe('invalid API key');
+
+    // SessionStart hook never fires because session_started was never yielded.
+    // SessionEnd still fires (it bookends stream_complete) with zeroed tallies.
+    const hookNames = hookEvents.map((h) => h.event);
+    expect(hookNames).not.toContain('SessionStart');
+    expect(hookNames).toEqual(['SessionEnd']);
+    const sessionEnd = hookEvents[0].payload as Extract<HookPayload, { event: 'SessionEnd' }>;
+    expect(sessionEnd.status).toBe('error');
+    expect(sessionEnd.usage).toBeNull();
+    expect(sessionEnd.costUsd).toBe(0);
+  });
+
+  it('catches an inner reject after abort and yields stream_complete{reason:aborted} via the catch arm', async () => {
+    // Fixture invokes onTurnEnd (cost=0.05) and yields turn.end, then awaits
+    // the paused gate. The test aborts + releases the gate, after which the
+    // mock throws unconditionally — agent.ts's outer catch observes
+    // signal.aborted=true and takes Block B (the aborted-inside-catch path).
+    state.fixture = loadFixture('abort-then-throw');
+    const gate = createGate();
+    state.pausedGate = gate;
+    const hookEvents: Array<{ event: HookEvent; payload: HookPayload }> = [];
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'will be aborted then thrown',
+      tools: [echoTool()] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+      onHook: (event, payload) => {
+        hookEvents.push({ event, payload });
+      },
+    });
+
+    const events: AgentCoreEvent[] = [];
+    let aborted = false;
+    for await (const event of run) {
+      events.push(event);
+      // Wait until the turn has fully closed (so onTurnEnd's cost tally lands
+      // in totalCostUsd) before aborting + releasing the gate.
+      if (!aborted && event.type === 'turn_end') {
+        aborted = true;
+        run.abort();
+        gate.resolve();
+      }
+    }
+
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.type).toBe('stream_complete');
+    expect(complete.status).toBe('error');
+    expect(complete.reason).toBe('aborted');
+    // Pre-abort tallies survive the catch — onTurnEnd ran before the throw.
+    expect(complete.costUsd).toBeCloseTo(0.05);
+
+    // SessionEnd hook carries matching status + pre-abort tallies.
+    const sessionEnd = hookEvents.find((h) => h.event === 'SessionEnd')?.payload as
+      | Extract<HookPayload, { event: 'SessionEnd' }>
+      | undefined;
+    expect(sessionEnd).toBeDefined();
+    expect(sessionEnd!.status).toBe('error');
+    expect(sessionEnd!.costUsd).toBeCloseTo(0.05);
+    // The catch arm runs before getResponse(), so finalUsage is still null.
+    expect(sessionEnd!.usage).toBeNull();
+  });
+
+  it('completes with null usage and zero cost when the response carries no usage block', async () => {
+    state.fixture = loadFixture('single-turn-no-usage');
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'no-usage path',
+      tools: [echoTool()] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+    });
+    const events = await collect(run);
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.status).toBe('success');
+    expect(complete.usage).toBeNull();
+    expect(complete.costUsd).toBe(0);
   });
 
   it('reports stream_complete{status:max_turns} when the turn count reaches maxTurns', async () => {

@@ -15,7 +15,8 @@ export type FixtureStep =
   | { type: 'yield'; event: Record<string, unknown> }
   | { type: 'tool_execute'; toolName: string; input: unknown; callId: string }
   | { type: 'wait_until'; signal: 'paused' | 'aborted' }
-  | { type: 'invoke_turn_end'; turnNumber?: number };
+  | { type: 'invoke_turn_end'; turnNumber?: number }
+  | { type: 'throw'; message: string };
 
 export interface Fixture {
   name: string;
@@ -29,10 +30,18 @@ export interface MockState {
   callModelArgs: unknown[];
   /** Resolves on test-controlled signal — set before iterating the fixture. */
   pausedGate: { promise: Promise<void>; resolve: () => void } | null;
+  /** When set, the OpenRouter constructor throws an Error with this message. */
+  constructorThrows: string | null;
 }
 
 export function createMockState(): MockState {
-  return { fixture: null, ctorArgs: [], callModelArgs: [], pausedGate: null };
+  return {
+    fixture: null,
+    ctorArgs: [],
+    callModelArgs: [],
+    pausedGate: null,
+    constructorThrows: null,
+  };
 }
 
 export function loadFixture(name: string): Fixture {
@@ -69,6 +78,9 @@ export function createOpenRouterMockModule(state: MockState): Record<string, unk
   class OpenRouter {
     constructor(args: unknown) {
       state.ctorArgs.push(args);
+      if (state.constructorThrows) {
+        throw new Error(state.constructorThrows);
+      }
     }
     callModel(args: {
       tools?: Array<{
@@ -100,18 +112,23 @@ export function createOpenRouterMockModule(state: MockState): Record<string, unk
 
       async function* stream(): AsyncGenerator<unknown> {
         for (const step of fixture!.steps) {
-          if (cancelled) return;
+          // `throw`, `wait_until`, and plain `yield` run regardless of the
+          // cancel flag — the agent has its own post-abort filters and an
+          // outer catch, and we want those exercised. Heavy / side-effect
+          // steps (invoke_turn_end, tool_execute) still short-circuit so the
+          // mock does not double-bill costs or re-run tools after cancel.
+          if (step.type === 'throw') {
+            throw new Error(step.message);
+          }
+          if (step.type === 'wait_until') {
+            if (step.signal === 'paused' && pausedGate) await pausedGate.promise;
+            continue;
+          }
           if (step.type === 'yield') {
             yield step.event;
             continue;
           }
-          if (step.type === 'wait_until') {
-            // The agent gets a chance to abort while we await — once awaited,
-            // re-check the cancel flag before continuing.
-            if (step.signal === 'paused' && pausedGate) await pausedGate.promise;
-            if (cancelled) return;
-            continue;
-          }
+          if (cancelled) return;
           if (step.type === 'invoke_turn_end') {
             if (args.onTurnEnd) await args.onTurnEnd({}, response);
             continue;
