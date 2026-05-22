@@ -13,7 +13,9 @@
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@openrouter/agent": "^0.3.2",
@@ -23,6 +25,7 @@
   "devDependencies": {
     "@types/node": "^22.19.19",
     "@vitest/coverage-v8": "^4.1.7",
+    "prettier": "^3.4.2",
     "tsx": "^4.22.3",
     "typescript": "^5.9.3",
     "vitest": "^4.1.7"
