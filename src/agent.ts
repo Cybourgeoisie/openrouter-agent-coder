@@ -1,4 +1,12 @@
-import { OpenRouter, stepCountIs, maxCost, isTurnStartEvent } from '@openrouter/agent';
+import {
+  OpenRouter,
+  stepCountIs,
+  maxCost,
+  isTurnStartEvent,
+  isTurnEndEvent,
+  isToolCallOutputEvent,
+  type Tool,
+} from '@openrouter/agent';
 import { allTools } from './tools/index.js';
 import { createServerToolsHooks } from './tools/server-tools.js';
 import { createFileStateAccessor } from './state/file-state.js';
@@ -8,142 +16,336 @@ import {
   logRequest,
   logGeneration,
 } from './logging/logger.js';
+import type { AgentCoreEvent, AgentCoreEventStatus, TokenUsage } from './events.js';
 
-const DEFAULT_MODEL = process.env.OR_MODEL ?? '~anthropic/claude-sonnet-latest';
-const MAX_STEPS = parseInt(process.env.OR_MAX_STEPS ?? '25', 10);
-const MAX_COST = parseFloat(process.env.OR_MAX_COST ?? '1.00');
+const DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
+const DEFAULT_MAX_TURNS = 25;
+const DEFAULT_MAX_BUDGET_USD = 1.0;
+const DEFAULT_APP_TITLE = 'openrouter-agent-coder';
+const DEFAULT_INSTRUCTIONS =
+  'You are a code editing agent. You can read, write, and edit files, list directories, and run shell commands. Work step by step: read files to understand the codebase, then make changes. Always verify your changes.';
 
-if (process.env.DEBUG) {
-  const key = process.env.OPENROUTER_API_KEY;
-  const maskedKey = key ? `${key.slice(0, 10)}...${key.slice(-4)}` : '(not set)';
-  console.log('Config:', {
-    model: DEFAULT_MODEL,
-    maxSteps: MAX_STEPS,
-    maxCost: MAX_COST,
-    apiKey: maskedKey,
-    baseUrl: process.env.OPENROUTER_BASE_URL ?? '(default)',
-  });
-}
+export type AgentLoggerLevel = 'debug' | 'info' | 'warn' | 'error';
+export type AgentLogger = (
+  level: AgentLoggerLevel,
+  message: string,
+  fields?: Record<string, unknown>,
+) => void;
 
-export interface AgentSession {
+export type CanUseToolDecision =
+  | { behavior: 'allow'; updatedInput?: unknown }
+  | { behavior: 'deny'; reason?: string };
+
+export type CanUseTool = (
+  toolName: string,
+  input: unknown,
+) => Promise<CanUseToolDecision> | CanUseToolDecision;
+
+export type OnHook = (eventName: string, payload: Record<string, unknown>) => void | Promise<void>;
+
+export interface OpenRouterAgentRunOptions {
+  /** OpenRouter API key. Required — no env fallback. */
+  apiKey: string;
+  /** Stable session id used for OR's server-side session tracking and on-disk state. */
   sessionId: string;
-  client: OpenRouter;
-  /** Running cost total across all prompts in this session (USD). */
-  totalCost: number;
-  /** Total number of inner-loop turns executed across all prompts. */
-  totalTurns: number;
+  /** The user prompt for this run. */
+  prompt: string;
+  /** System instructions (defaults to a code-editing-agent prompt). */
+  instructions?: string;
+  /** Model alias or id. Defaults to `~anthropic/claude-sonnet-latest`. */
+  model?: string;
+  /** Working directory tools should resolve paths against. TODO(phase 1.5): plumb through to tools. */
+  cwd?: string;
+  /** Max inner-loop turns. Defaults to 25. */
+  maxTurns?: number;
+  /** Max cumulative cost in USD. Defaults to 1.0. */
+  maxBudgetUsd?: number;
+  /** Tool set passed to the model. Defaults to the built-in 5-client-tool set; server tools (datetime/web_search/web_fetch) are injected via hooks. */
+  tools?: readonly Tool[];
+  /** Permission check invoked before each client tool call. TODO(phase 1.4): wire into tool execute wrappers. */
+  canUseTool?: CanUseTool;
+  /** Lifecycle hook callback. TODO(phase 1.7): wire into pre/post tool use events. */
+  onHook?: OnHook;
+  /** Abort signal. TODO(phase 1.3): wire into stream cancellation. */
+  signal?: AbortSignal;
+  /** Override for the logs directory. TODO(phase 1.5): plumb into logger/state accessor. */
+  logsRoot?: string;
+  /** Override the OpenRouter API base URL. */
+  baseUrl?: string;
+  /** App title sent in OR client metadata. */
+  appTitle?: string;
+  /** Optional diagnostic logger. No logger → silent. */
+  logger?: AgentLogger;
 }
 
-/** Metrics returned by a single runPrompt call. */
-export interface PromptResult {
-  text: string;
-  /** The model that actually served this prompt (resolved from alias). */
-  model: string;
-  /** Number of inner-loop turns (tool-call round-trips) in this prompt. */
-  turnCount: number;
-  /** Cost incurred by this prompt (USD). */
-  promptCost: number;
-  /** Cumulative session cost including this prompt (USD). */
-  totalCost: number;
+interface ResolvedOptions extends Required<Omit<OpenRouterAgentRunOptions, OptionalOnlyKeys>> {
+  cwd?: string;
+  canUseTool?: CanUseTool;
+  onHook?: OnHook;
+  signal?: AbortSignal;
+  logsRoot?: string;
+  baseUrl?: string;
+  logger?: AgentLogger;
 }
 
-export function createAgent(sessionId: string): AgentSession {
-  const client = new OpenRouter({
-    apiKey: process.env.OPENROUTER_API_KEY,
-    ...(process.env.OPENROUTER_BASE_URL && { serverURL: process.env.OPENROUTER_BASE_URL }),
-    appTitle: 'OR/Agent Coder',
-    hooks: createServerToolsHooks(),
-  } as ConstructorParameters<typeof OpenRouter>[0]);
-  return { sessionId, client, totalCost: 0, totalTurns: 0 };
+type OptionalOnlyKeys =
+  | 'cwd'
+  | 'canUseTool'
+  | 'onHook'
+  | 'signal'
+  | 'logsRoot'
+  | 'baseUrl'
+  | 'logger';
+
+function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
+  return {
+    apiKey: opts.apiKey,
+    sessionId: opts.sessionId,
+    prompt: opts.prompt,
+    instructions: opts.instructions ?? DEFAULT_INSTRUCTIONS,
+    model: opts.model ?? DEFAULT_MODEL,
+    maxTurns: opts.maxTurns ?? DEFAULT_MAX_TURNS,
+    maxBudgetUsd: opts.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD,
+    tools: opts.tools ?? (allTools as readonly Tool[]),
+    appTitle: opts.appTitle ?? DEFAULT_APP_TITLE,
+    cwd: opts.cwd,
+    canUseTool: opts.canUseTool,
+    onHook: opts.onHook,
+    signal: opts.signal,
+    logsRoot: opts.logsRoot,
+    baseUrl: opts.baseUrl,
+    logger: opts.logger,
+  };
 }
 
-export async function runPrompt(
-  session: AgentSession,
-  prompt: string,
-  onTextDelta: (delta: string) => void,
-): Promise<PromptResult> {
-  const { sessionId, client } = session;
-  const requestId = createRequestId();
-  const state = createFileStateAccessor(sessionId);
+/**
+ * Single-shot async iterable that drives an OpenRouter agent turn-by-turn and
+ * yields normalized {@link AgentCoreEvent}s. One instance per query. Construct,
+ * `for await` the events, done.
+ */
+export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
+  private readonly opts: ResolvedOptions;
+  private consumed = false;
 
-  await logRequest({
-    sessionId,
-    requestId,
-    prompt,
-    timestamp: new Date().toISOString(),
-  });
+  constructor(options: OpenRouterAgentRunOptions) {
+    this.opts = resolveOptions(options);
+  }
 
-  // Per-turn cost accumulator updated by onTurnEnd callbacks.
-  let promptCost = 0;
+  /** Abort the in-flight run. TODO(phase 1.3): wire into AbortSignal/stream cancellation. */
+  abort(): void {
+    // Stub — actual wiring deferred to Phase 1.3.
+  }
 
-  const result = client.callModel({
-    model: DEFAULT_MODEL,
-    sessionId,
-    input: [{ role: 'user' as const, content: prompt }],
-    instructions:
-      'You are a code editing agent. You can read, write, and edit files, list directories, and run shell commands. Work step by step: read files to understand the codebase, then make changes. Always verify your changes.',
-    tools: allTools,
-    state,
-    stopWhen: [stepCountIs(MAX_STEPS), maxCost(MAX_COST)],
-    onTurnEnd: async (_ctx, response) => {
-      const generationId = createGenerationId();
+  [Symbol.asyncIterator](): AsyncIterator<AgentCoreEvent> {
+    if (this.consumed) {
+      throw new Error('OpenRouterAgentRun is single-shot and has already been consumed');
+    }
+    this.consumed = true;
+    return this.iterate();
+  }
+
+  private async *iterate(): AsyncGenerator<AgentCoreEvent> {
+    const {
+      apiKey,
+      sessionId,
+      prompt,
+      instructions,
+      model,
+      maxTurns,
+      maxBudgetUsd,
+      tools,
+      appTitle,
+      baseUrl,
+      logger,
+    } = this.opts;
+
+    const startMs = Date.now();
+    let maxTurnNumber = 0;
+    let totalCostUsd = 0;
+    let finalUsage: TokenUsage | null = null;
+
+    logger?.('debug', 'OpenRouterAgentRun starting', {
+      sessionId,
+      model,
+      maxTurns,
+      maxBudgetUsd,
+    });
+
+    let client: OpenRouter;
+    try {
+      client = new OpenRouter({
+        apiKey,
+        ...(baseUrl && { serverURL: baseUrl }),
+        appTitle,
+        hooks: createServerToolsHooks(),
+      } as ConstructorParameters<typeof OpenRouter>[0]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      yield { type: 'error', message, cause: err };
+      yield {
+        type: 'stream_complete',
+        status: 'error',
+        durationMs: Date.now() - startMs,
+        reason: message,
+      };
+      return;
+    }
+
+    yield { type: 'session_started', sessionId };
+
+    const requestId = createRequestId();
+    const state = createFileStateAccessor(sessionId);
+
+    try {
+      await logRequest({
+        sessionId,
+        requestId,
+        prompt,
+        timestamp: new Date().toISOString(),
+      });
+
+      const result = client.callModel({
+        model,
+        sessionId,
+        input: [{ role: 'user' as const, content: prompt }],
+        instructions,
+        tools,
+        state,
+        stopWhen: [stepCountIs(maxTurns), maxCost(maxBudgetUsd)],
+        onTurnEnd: async (_ctx, response) => {
+          const generationId = createGenerationId();
+          await logGeneration({
+            sessionId,
+            requestId,
+            generationId,
+            response,
+            timestamp: new Date().toISOString(),
+          });
+          totalCostUsd += response.usage?.cost ?? 0;
+        },
+      });
+
+      for await (const event of result.getFullResponsesStream()) {
+        if (isTurnStartEvent(event)) {
+          const turnNumber = event.turnNumber;
+          if (turnNumber > maxTurnNumber) maxTurnNumber = turnNumber;
+          yield { type: 'turn_start', turnNumber };
+          continue;
+        }
+        if (isTurnEndEvent(event)) {
+          yield {
+            type: 'turn_end',
+            turnNumber: event.turnNumber,
+            usage: finalUsage,
+            costUsd: totalCostUsd,
+          };
+          continue;
+        }
+        if (isToolCallOutputEvent(event)) {
+          const out = event.output;
+          const isError = out.status === 'incomplete';
+          yield {
+            type: 'tool_result',
+            callId: out.callId,
+            output: out.output,
+            isError,
+          };
+          continue;
+        }
+        if ('type' in event && event.type === 'response.output_text.delta') {
+          const delta = (event as { type: string; delta: string }).delta;
+          if (delta) {
+            yield { type: 'text_delta', content: delta };
+          }
+          continue;
+        }
+        if ('type' in event && event.type === 'response.output_item.done') {
+          const item = (event as { type: string; item: { type: string } }).item;
+          if (item.type === 'function_call') {
+            const fnItem = item as {
+              type: 'function_call';
+              callId: string;
+              name: string;
+              arguments: string;
+            };
+            let input: unknown;
+            try {
+              input = JSON.parse(fnItem.arguments);
+            } catch {
+              input = fnItem.arguments;
+            }
+            yield {
+              type: 'tool_call',
+              callId: fnItem.callId,
+              name: fnItem.name,
+              input,
+            };
+          }
+          continue;
+        }
+      }
+
+      const response = await result.getResponse();
+      finalUsage = response.usage ?? null;
+      const finalCost = response.usage?.cost ?? 0;
+      // Guard against double-counting: only adopt the final cost if no
+      // per-turn onTurnEnd callback fired (e.g. single-shot no-tool-call case).
+      if (totalCostUsd === 0 && finalCost > 0) {
+        totalCostUsd = finalCost;
+      }
+
+      const finalGenId = createGenerationId();
       await logGeneration({
         sessionId,
         requestId,
-        generationId,
+        generationId: finalGenId,
         response,
         timestamp: new Date().toISOString(),
       });
-      // Accumulate cost reported by this turn's API response.
-      const turnCost = response.usage?.cost ?? 0;
-      promptCost += turnCost;
-    },
-  });
 
-  // Highest turn number seen across TurnStartEvents (used to report the turn
-  // count after streaming ends). 0 means a single shot with no tool round-trips.
-  let maxTurnNumber = 0;
+      const status = deriveCompletionStatus({
+        totalCostUsd,
+        maxBudgetUsd,
+        maxTurnNumber,
+        maxTurns,
+      });
 
-  for await (const event of result.getFullResponsesStream()) {
-    if (isTurnStartEvent(event)) {
-      const currentTurnNumber = event.turnNumber;
-      if (currentTurnNumber > maxTurnNumber) maxTurnNumber = currentTurnNumber;
-    } else if ('type' in event && event.type === 'response.output_text.delta') {
-      const delta = (event as { type: string; delta: string }).delta;
-      if (delta) {
-        onTextDelta(delta);
-      }
+      yield {
+        type: 'stream_complete',
+        status,
+        usage: finalUsage,
+        costUsd: totalCostUsd,
+        durationMs: Date.now() - startMs,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger?.('error', 'OpenRouterAgentRun stream errored', { message });
+      yield { type: 'error', message, cause: err };
+      yield {
+        type: 'stream_complete',
+        status: 'error',
+        usage: finalUsage,
+        costUsd: totalCostUsd,
+        durationMs: Date.now() - startMs,
+        reason: message,
+      };
     }
   }
+}
 
-  const text = await result.getText();
-  const response = await result.getResponse();
+interface DeriveCompletionInput {
+  totalCostUsd: number;
+  maxBudgetUsd: number;
+  maxTurnNumber: number;
+  maxTurns: number;
+}
 
-  // The final getResponse() call may carry usage for the last turn when
-  // onTurnEnd hasn't fired yet (e.g. single-turn responses with no tools).
-  // Add any cost not yet captured by onTurnEnd callbacks.
-  const finalCost = response.usage?.cost ?? 0;
-  // Guard against double-counting: if promptCost is still 0 (no onTurnEnd
-  // fired), use the final response cost directly.
-  if (promptCost === 0 && finalCost > 0) {
-    promptCost = finalCost;
-  }
-
-  const finalGenId = createGenerationId();
-  await logGeneration({
-    sessionId,
-    requestId,
-    generationId: finalGenId,
-    response,
-    timestamp: new Date().toISOString(),
-  });
-
-  // Update session-level accumulators.
-  session.totalCost += promptCost;
-  // turnCount = number of inner-loop turns (0 means a single shot with no
-  // tool round-trips; 1+ means tool calls were made).
-  const turnCount = maxTurnNumber;
-  session.totalTurns += turnCount;
-
-  return { text, model: response.model, turnCount, promptCost, totalCost: session.totalCost };
+function deriveCompletionStatus(input: DeriveCompletionInput): AgentCoreEventStatus {
+  if (input.totalCostUsd >= input.maxBudgetUsd) return 'max_budget';
+  // Turn numbers are 0-indexed (turn 0 = initial request). stepCountIs(n)
+  // stops when the *step count* (1-indexed) reaches n, i.e. when turnNumber
+  // hits n - 1. Treating "max turnNumber observed + 1 >= maxTurns" as the
+  // step-count threshold matches that.
+  if (input.maxTurnNumber + 1 >= input.maxTurns) return 'max_turns';
+  return 'success';
 }
