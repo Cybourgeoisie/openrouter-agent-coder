@@ -65,4 +65,20 @@ describe('createServerToolsHooks', () => {
 
     expect(result).toEqual(input);
   });
+
+  it('returns input unchanged when body is not valid JSON', () => {
+    const hooks = createServerToolsHooks();
+    const input = {
+      url: new URL('https://example.com'),
+      options: { body: 'not json{' },
+    };
+
+    const result = hooks.beforeCreateRequest(
+      {} as Parameters<typeof hooks.beforeCreateRequest>[0],
+      input,
+    );
+
+    expect(result).toBe(input);
+    expect((result as { options: { body: string } }).options.body).toBe('not json{');
+  });
 });
