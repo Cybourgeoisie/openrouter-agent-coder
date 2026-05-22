@@ -13,7 +13,8 @@ afterEach(async () => {
   await rm(TMP, { recursive: true, force: true });
 });
 
-const execute = grepFilesTool.function.execute as (params: {
+const tool = grepFilesTool();
+const execute = tool.function.execute as (params: {
   pattern: string;
   path: string;
   file_glob: string;
@@ -28,8 +29,8 @@ const execute = grepFilesTool.function.execute as (params: {
 
 describe('grep_files tool', () => {
   it('has correct name and description', () => {
-    expect(grepFilesTool.function.name).toBe('grep_files');
-    expect(grepFilesTool.function.description).toContain('Search for a regex pattern');
+    expect(tool.function.name).toBe('grep_files');
+    expect(tool.function.description).toContain('Search for a regex pattern');
   });
 
   it('finds a simple pattern in a single file', async () => {

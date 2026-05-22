@@ -264,7 +264,7 @@ describe('OpenRouterAgentRun event iteration', () => {
 });
 
 describe('OpenRouterAgentRun defaults', () => {
-  it('defaults tools to allTools when none provided', async () => {
+  it('defaults tools to the built-in set when none provided', async () => {
     callModelMock.mockImplementation(
       fakeCallModel({
         events: [
@@ -283,7 +283,8 @@ describe('OpenRouterAgentRun defaults', () => {
 
     expect(callModelMock).toHaveBeenCalledTimes(1);
     const passed = callModelMock.mock.calls[0][0];
-    expect(passed.tools).toBe(allTools);
+    const names = passed.tools.map((t: { function: { name: string } }) => t.function.name);
+    expect(names).toEqual(allTools().map((t) => t.function.name));
   });
 
   it('honours custom tools array', async () => {
@@ -534,12 +535,14 @@ describe('OpenRouterAgentRun side-effect invariants', () => {
 });
 
 describe('OpenRouterAgentRun lifecycle', () => {
-  it('exposes an abort() stub that can be called without throwing', () => {
+  it('exposes an abort() method that can be called without throwing', () => {
     const run = new OpenRouterAgentRun({
       apiKey: 'k',
       sessionId: TEST_SESSION,
       prompt: 'p',
     });
+    expect(() => run.abort()).not.toThrow();
+    // Idempotent — second call is also fine.
     expect(() => run.abort()).not.toThrow();
   });
 
@@ -560,5 +563,310 @@ describe('OpenRouterAgentRun lifecycle', () => {
     });
     await collect(run);
     expect(() => run[Symbol.asyncIterator]()).toThrow(/single-shot/);
+  });
+});
+
+describe('OpenRouterAgentRun abort behavior', () => {
+  // Stream factory that yields one event, awaits a controllable promise, then
+  // yields more events. The "pause" simulates a mid-stream point at which the
+  // consumer can call abort().
+  function pausableStreamCallModel(args: {
+    before: unknown[];
+    after: unknown[];
+    paused: Promise<void>;
+    afterCompleteCancel?: () => void;
+  }) {
+    let cancelled = false;
+    return () => ({
+      cancel: async () => {
+        cancelled = true;
+        args.afterCompleteCancel?.();
+      },
+      async *getFullResponsesStream() {
+        for (const ev of args.before) yield ev;
+        await args.paused;
+        if (cancelled) return;
+        for (const ev of args.after) yield ev;
+      },
+      async getResponse() {
+        return {
+          id: 'r',
+          model: 'm',
+          usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          output: [],
+        };
+      },
+    });
+  }
+
+  it('skips all events and yields stream_complete{aborted} when signal is pre-aborted at construction', async () => {
+    callModelMock.mockImplementation(
+      fakeCallModel({
+        events: [
+          { type: 'turn.start', turnNumber: 0 },
+          { type: 'response.output_text.delta', delta: 'never seen' },
+          { type: 'turn.end', turnNumber: 0 },
+        ],
+      }),
+    );
+
+    const ctrl = new AbortController();
+    ctrl.abort();
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      signal: ctrl.signal,
+    });
+    const events = await collect(run);
+
+    // No session_started, no model invocation, just stream_complete.
+    expect(events).toHaveLength(1);
+    const complete = events[0] as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.type).toBe('stream_complete');
+    expect(complete.status).toBe('error');
+    expect(complete.reason).toBe('aborted');
+    // OR client should not have been invoked at all.
+    expect(callModelMock).not.toHaveBeenCalled();
+  });
+
+  it('stops yielding text_delta events after external signal aborts mid-stream', async () => {
+    let release: () => void = () => {};
+    const paused = new Promise<void>((r) => {
+      release = r;
+    });
+    callModelMock.mockImplementation(
+      pausableStreamCallModel({
+        before: [
+          { type: 'turn.start', turnNumber: 0 },
+          { type: 'response.output_text.delta', delta: 'first' },
+        ],
+        after: [
+          { type: 'response.output_text.delta', delta: 'should-not-be-seen' },
+          { type: 'response.output_text.delta', delta: 'also-not-seen' },
+          { type: 'turn.end', turnNumber: 0 },
+        ],
+        paused,
+      }),
+    );
+
+    const ctrl = new AbortController();
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      signal: ctrl.signal,
+    });
+
+    const events: AgentCoreEvent[] = [];
+    const iterPromise = (async () => {
+      for await (const e of run) events.push(e);
+    })();
+
+    // Wait for the iterator to settle on the first delta, then fire abort.
+    await new Promise<void>((r) => setTimeout(r, 20));
+    ctrl.abort();
+    release();
+    await iterPromise;
+
+    const deltas = events.filter((e) => e.type === 'text_delta');
+    expect(deltas).toHaveLength(1);
+    expect((deltas[0] as Extract<AgentCoreEvent, { type: 'text_delta' }>).content).toBe('first');
+
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.type).toBe('stream_complete');
+    expect(complete.status).toBe('error');
+    expect(complete.reason).toBe('aborted');
+  });
+
+  it('internal abort() method produces the same outcome as an external signal', async () => {
+    let release: () => void = () => {};
+    const paused = new Promise<void>((r) => {
+      release = r;
+    });
+    callModelMock.mockImplementation(
+      pausableStreamCallModel({
+        before: [
+          { type: 'turn.start', turnNumber: 0 },
+          { type: 'response.output_text.delta', delta: 'one' },
+        ],
+        after: [
+          { type: 'response.output_text.delta', delta: 'two' },
+          { type: 'turn.end', turnNumber: 0 },
+        ],
+        paused,
+      }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+    });
+
+    const events: AgentCoreEvent[] = [];
+    const iterPromise = (async () => {
+      for await (const e of run) events.push(e);
+    })();
+
+    await new Promise<void>((r) => setTimeout(r, 20));
+    run.abort();
+    release();
+    await iterPromise;
+
+    const deltas = events.filter((e) => e.type === 'text_delta');
+    expect(deltas).toHaveLength(1);
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.type).toBe('stream_complete');
+    expect(complete.status).toBe('error');
+    expect(complete.reason).toBe('aborted');
+  });
+
+  it('surfaces tool execution cancellation as tool_result.isError when abort fires during a tool call', async () => {
+    // Simulate the OR SDK actually invoking a tool whose execute honours the
+    // signal. The fake stream awaits the tool's promise and emits a
+    // tool_call_output with status:'incomplete' if the tool throws.
+    let toolStarted: () => void = () => {};
+    const toolStartedP = new Promise<void>((r) => {
+      toolStarted = r;
+    });
+
+    callModelMock.mockImplementation(
+      (request: {
+        tools: Array<{
+          function: { name: string; execute: (...a: unknown[]) => Promise<unknown> };
+        }>;
+      }) => {
+        const tool = request.tools.find((t) => t.function.name === 'slow_tool');
+        return {
+          cancel: async () => {},
+          async *getFullResponsesStream() {
+            yield { type: 'turn.start', turnNumber: 0 };
+            yield {
+              type: 'response.output_item.done',
+              outputIndex: 0,
+              sequenceNumber: 1,
+              item: {
+                type: 'function_call',
+                callId: 'call_slow',
+                name: 'slow_tool',
+                arguments: '{}',
+              },
+            };
+            toolStarted();
+            let output: unknown;
+            let status: 'completed' | 'incomplete' = 'completed';
+            try {
+              output = await tool!.function.execute({}, {});
+            } catch (e) {
+              output = (e as Error).message;
+              status = 'incomplete';
+            }
+            yield {
+              type: 'tool.call_output',
+              timestamp: 1,
+              output: {
+                callId: 'call_slow',
+                type: 'function_call_output',
+                output,
+                status,
+              },
+            };
+            yield { type: 'turn.end', turnNumber: 0 };
+          },
+          async getResponse() {
+            return {
+              id: 'r',
+              model: 'm',
+              usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              output: [],
+            };
+          },
+        };
+      },
+    );
+
+    // A custom tool that respects the agent's composite signal. Since custom
+    // tools aren't wrapped automatically, the test exercises the wiring path
+    // via run.abort() → run.compositeSignal → tool execute via closure.
+    // To bridge: we read the signal from the run after construction.
+    const ctrl = new AbortController();
+    const signalRef: AbortSignal = ctrl.signal;
+
+    const slowTool = {
+      type: 'function' as const,
+      function: {
+        name: 'slow_tool',
+        description: 'slow',
+        execute: async () => {
+          return await new Promise<unknown>((resolve, reject) => {
+            if (signalRef.aborted) {
+              reject(new Error('slow_tool cancelled'));
+              return;
+            }
+            const onAbort = () => {
+              clearTimeout(timer);
+              reject(new Error('slow_tool cancelled'));
+            };
+            const timer = setTimeout(() => {
+              signalRef.removeEventListener('abort', onAbort);
+              resolve('ok');
+            }, 5_000);
+            signalRef.addEventListener('abort', onAbort, { once: true });
+          });
+        },
+      },
+    };
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'do slow thing',
+      tools: [slowTool] as unknown as never,
+      signal: ctrl.signal,
+    });
+
+    const events: AgentCoreEvent[] = [];
+    const iterPromise = (async () => {
+      for await (const e of run) events.push(e);
+    })();
+
+    await toolStartedP;
+    ctrl.abort();
+    await iterPromise;
+
+    const toolResult = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(toolResult).toBeDefined();
+    expect(toolResult.isError).toBe(true);
+    expect(String(toolResult.output)).toMatch(/cancel/i);
+
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.status).toBe('error');
+    expect(complete.reason).toBe('aborted');
+  });
+
+  it('does not affect the default no-signal run (back-compat)', async () => {
+    callModelMock.mockImplementation(
+      fakeCallModel({
+        events: [
+          { type: 'turn.start', turnNumber: 0 },
+          { type: 'response.output_text.delta', delta: 'hi' },
+          { type: 'turn.end', turnNumber: 0 },
+        ],
+      }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+    });
+    const events = await collect(run);
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.status).toBe('success');
+    expect(complete.reason).toBeUndefined();
   });
 });

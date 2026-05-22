@@ -24,6 +24,7 @@ const DEFAULT_MAX_BUDGET_USD = 1.0;
 const DEFAULT_APP_TITLE = 'openrouter-agent-coder';
 const DEFAULT_INSTRUCTIONS =
   'You are a code editing agent. You can read, write, and edit files, list directories, and run shell commands. Work step by step: read files to understand the codebase, then make changes. Always verify your changes.';
+const ABORT_REASON = 'aborted';
 
 export type AgentLoggerLevel = 'debug' | 'info' | 'warn' | 'error';
 export type AgentLogger = (
@@ -60,13 +61,24 @@ export interface OpenRouterAgentRunOptions {
   maxTurns?: number;
   /** Max cumulative cost in USD. Defaults to 1.0. */
   maxBudgetUsd?: number;
-  /** Tool set passed to the model. Defaults to the built-in 5-client-tool set; server tools (datetime/web_search/web_fetch) are injected via hooks. */
+  /**
+   * Tool set passed to the model. Defaults to the built-in 5-client-tool set
+   * (built with the run's composite AbortSignal); server tools
+   * (datetime/web_search/web_fetch) are injected via hooks. Custom tools
+   * supplied here are NOT signal-wrapped — callers are responsible for their
+   * own cancellation if needed.
+   */
   tools?: readonly Tool[];
   /** Permission check invoked before each client tool call. TODO(phase 1.4): wire into tool execute wrappers. */
   canUseTool?: CanUseTool;
   /** Lifecycle hook callback. TODO(phase 1.7): wire into pre/post tool use events. */
   onHook?: OnHook;
-  /** Abort signal. TODO(phase 1.3): wire into stream cancellation. */
+  /**
+   * External AbortSignal. When aborted, the run cancels the underlying OR
+   * stream and propagates SIGTERM (then SIGKILL after a 250ms grace) to any
+   * child process spawned by `run_command`. Combined internally with the
+   * `abort()` method via `AbortSignal.any`.
+   */
   signal?: AbortSignal;
   /** Override for the logs directory. TODO(phase 1.5): plumb into logger/state accessor. */
   logsRoot?: string;
@@ -106,7 +118,7 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     model: opts.model ?? DEFAULT_MODEL,
     maxTurns: opts.maxTurns ?? DEFAULT_MAX_TURNS,
     maxBudgetUsd: opts.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD,
-    tools: opts.tools ?? (allTools as readonly Tool[]),
+    tools: opts.tools ?? [],
     appTitle: opts.appTitle ?? DEFAULT_APP_TITLE,
     cwd: opts.cwd,
     canUseTool: opts.canUseTool,
@@ -125,15 +137,31 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
  */
 export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
   private readonly opts: ResolvedOptions;
+  private readonly internalAbortController = new AbortController();
+  private readonly compositeSignal: AbortSignal;
+  /** True when caller supplied a custom `tools` array (signal not auto-wrapped). */
+  private readonly hasCustomTools: boolean;
   private consumed = false;
 
   constructor(options: OpenRouterAgentRunOptions) {
     this.opts = resolveOptions(options);
+    this.hasCustomTools = options.tools !== undefined;
+    this.compositeSignal = options.signal
+      ? AbortSignal.any([this.internalAbortController.signal, options.signal])
+      : this.internalAbortController.signal;
   }
 
-  /** Abort the in-flight run. TODO(phase 1.3): wire into AbortSignal/stream cancellation. */
+  /**
+   * Abort the in-flight run. Fires the run's internal AbortController, which
+   * triggers cancellation of the OR stream and any in-flight tool execution.
+   * Idempotent — safe to call multiple times. Calling before the iterator is
+   * consumed causes the first yielded event to be a `stream_complete` with
+   * `reason: 'aborted'` (no `session_started`).
+   */
   abort(): void {
-    // Stub — actual wiring deferred to Phase 1.3.
+    if (!this.internalAbortController.signal.aborted) {
+      this.internalAbortController.abort();
+    }
   }
 
   [Symbol.asyncIterator](): AsyncIterator<AgentCoreEvent> {
@@ -153,7 +181,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       model,
       maxTurns,
       maxBudgetUsd,
-      tools,
+      tools: userTools,
       appTitle,
       baseUrl,
       logger,
@@ -163,6 +191,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     let maxTurnNumber = 0;
     let totalCostUsd = 0;
     let finalUsage: TokenUsage | null = null;
+    const signal = this.compositeSignal;
 
     logger?.('debug', 'OpenRouterAgentRun starting', {
       sessionId,
@@ -170,6 +199,18 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       maxTurns,
       maxBudgetUsd,
     });
+
+    // Pre-aborted at construction time → no session_started; jump straight to
+    // a terminal stream_complete event.
+    if (signal.aborted) {
+      yield {
+        type: 'stream_complete',
+        status: 'error',
+        durationMs: Date.now() - startMs,
+        reason: ABORT_REASON,
+      };
+      return;
+    }
 
     let client: OpenRouter;
     try {
@@ -195,6 +236,15 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
 
     const requestId = createRequestId();
     const state = createFileStateAccessor(sessionId);
+    const toolsForRun: readonly Tool[] = this.hasCustomTools ? userTools : allTools(signal);
+
+    // Use a holder so the abort listener can fire result.cancel() once the
+    // call has been issued. result is undefined briefly before callModel().
+    let resultHandle: { cancel(): Promise<void> } | undefined;
+    const onAbort = (): void => {
+      if (resultHandle) void resultHandle.cancel().catch(() => undefined);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
 
     try {
       await logRequest({
@@ -209,7 +259,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         sessionId,
         input: [{ role: 'user' as const, content: prompt }],
         instructions,
-        tools,
+        tools: toolsForRun,
         state,
         stopWhen: [stepCountIs(maxTurns), maxCost(maxBudgetUsd)],
         onTurnEnd: async (_ctx, response) => {
@@ -224,15 +274,24 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           totalCostUsd += response.usage?.cost ?? 0;
         },
       });
+      resultHandle = result;
+      // Late-aborted between callModel and stream attach.
+      if (signal.aborted) void result.cancel().catch(() => undefined);
 
       for await (const event of result.getFullResponsesStream()) {
+        // Tool results emitted as part of an aborted run are still useful — they
+        // carry the cancellation observability for the consumer — so they are
+        // forwarded even after abort. Everything else (text deltas, turn
+        // start/end, tool_call announcements) is dropped post-abort.
         if (isTurnStartEvent(event)) {
+          if (signal.aborted) continue;
           const turnNumber = event.turnNumber;
           if (turnNumber > maxTurnNumber) maxTurnNumber = turnNumber;
           yield { type: 'turn_start', turnNumber };
           continue;
         }
         if (isTurnEndEvent(event)) {
+          if (signal.aborted) continue;
           yield {
             type: 'turn_end',
             turnNumber: event.turnNumber,
@@ -250,9 +309,12 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
             output: out.output,
             isError,
           };
+          // After an abort, surface the tool result then stop iterating.
+          if (signal.aborted) break;
           continue;
         }
         if ('type' in event && event.type === 'response.output_text.delta') {
+          if (signal.aborted) continue;
           const delta = (event as { type: string; delta: string }).delta;
           if (delta) {
             yield { type: 'text_delta', content: delta };
@@ -260,6 +322,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           continue;
         }
         if ('type' in event && event.type === 'response.output_item.done') {
+          if (signal.aborted) continue;
           const item = (event as { type: string; item: { type: string } }).item;
           if (item.type === 'function_call') {
             const fnItem = item as {
@@ -283,6 +346,18 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           }
           continue;
         }
+      }
+
+      if (signal.aborted) {
+        yield {
+          type: 'stream_complete',
+          status: 'error',
+          usage: finalUsage,
+          costUsd: totalCostUsd,
+          durationMs: Date.now() - startMs,
+          reason: ABORT_REASON,
+        };
+        return;
       }
 
       const response = await result.getResponse();
@@ -318,6 +393,17 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         durationMs: Date.now() - startMs,
       };
     } catch (err) {
+      if (signal.aborted) {
+        yield {
+          type: 'stream_complete',
+          status: 'error',
+          usage: finalUsage,
+          costUsd: totalCostUsd,
+          durationMs: Date.now() - startMs,
+          reason: ABORT_REASON,
+        };
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
       logger?.('error', 'OpenRouterAgentRun stream errored', { message });
       yield { type: 'error', message, cause: err };
@@ -329,6 +415,8 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         durationMs: Date.now() - startMs,
         reason: message,
       };
+    } finally {
+      signal.removeEventListener('abort', onAbort);
     }
   }
 }

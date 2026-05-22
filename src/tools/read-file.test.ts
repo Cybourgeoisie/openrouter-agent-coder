@@ -13,7 +13,8 @@ afterEach(async () => {
   await rm(TMP, { recursive: true, force: true });
 });
 
-const execute = readFileTool.function.execute as (params: {
+const tool = readFileTool();
+const execute = tool.function.execute as (params: {
   path: string;
   start_line?: number;
   end_line?: number;
@@ -27,8 +28,8 @@ const execute = readFileTool.function.execute as (params: {
 
 describe('read_file tool', () => {
   it('has correct name and description', () => {
-    expect(readFileTool.function.name).toBe('read_file');
-    expect(readFileTool.function.description).toContain('Read the contents');
+    expect(tool.function.name).toBe('read_file');
+    expect(tool.function.description).toContain('Read the contents');
   });
 
   it('reads a file and returns its content', async () => {
