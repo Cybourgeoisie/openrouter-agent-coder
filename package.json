@@ -15,7 +15,9 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
   },
   "dependencies": {
     "@openrouter/agent": "^0.3.2",
@@ -23,11 +25,15 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.19.19",
     "@vitest/coverage-v8": "^4.1.7",
+    "eslint": "^10.4.0",
+    "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.4.2",
     "tsx": "^4.22.3",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.59.4",
     "vitest": "^4.1.7"
   }
 }
