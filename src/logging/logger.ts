@@ -1,7 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { appendSessionToRegistry, setSessionFirstPrompt } from './session-registry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LOG_BASE = join(__dirname, '..', '..', 'logs');
@@ -46,16 +45,12 @@ export async function logSessionStart(sessionId: string): Promise<void> {
   await ensureDir(dir);
   const startedAt = new Date().toISOString();
   await writeFile(join(dir, 'session.json'), JSON.stringify({ sessionId, startedAt }, null, 2));
-  // Register the session in the ordered registry so --continue can find it.
-  await appendSessionToRegistry({ sessionId, startedAt });
 }
 
 export async function logRequest(entry: RequestLog): Promise<void> {
   const dir = join(LOG_BASE, entry.sessionId, entry.requestId);
   await ensureDir(dir);
   await writeFile(join(dir, 'request.json'), JSON.stringify(entry, null, 2));
-  // Best-effort: capture the first prompt for the session summary.
-  await setSessionFirstPrompt(entry.sessionId, entry.prompt);
 }
 
 export async function logGeneration(entry: GenerationLog): Promise<void> {
