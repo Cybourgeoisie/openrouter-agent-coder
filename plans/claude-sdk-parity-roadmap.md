@@ -44,7 +44,7 @@ All builds-on items reference primitives already shipped. Most are independent a
 | ~~3.9~~  | ~~Enhanced Bash: description field, configurable timeout~~ (PR pending)                                                                                 | ~~`run_command`~~              | ~~2h~~ | ~~—~~        |
 | ~~3.10~~ | ~~Enhanced Grep: `-A`/`-B`/`-C`, filetype filters, output modes~~ (PR pending [#49](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/49)) | ~~`grep_files`~~               | ~~4h~~ | ~~—~~        |
 | ~~3.11~~ | ~~Glob tool (new, separate from `list_directory`)~~ (PR pending [#50](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/50))               | ~~_new_~~                      | ~~3h~~ | ~~—~~        |
-| 3.12     | `persistSession: false` (in-memory only sessions)                                                                                                       | `FileStateAccessor`            | 3h     | —            |
+| ~~3.12~~ | ~~`persistSession: false` (in-memory only sessions)~~ (PR pending [#51](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/51))             | ~~`FileStateAccessor`~~        | ~~3h~~ | ~~—~~        |
 
 **Phase 3 total:** ~50h.
 

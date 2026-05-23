@@ -13,6 +13,7 @@ import { allTools } from './tools/index.js';
 import { createServerToolsHooks } from './tools/server-tools.js';
 import { type ToolContext } from './tools/context.js';
 import { createFileStateAccessor } from './state/file-state.js';
+import { createMemoryStateAccessor } from './state/memory-state.js';
 import {
   createRequestId,
   createGenerationId,
@@ -216,6 +217,21 @@ export interface OpenRouterAgentRunOptions {
    * Defaults to `[]` (back-compat: no discovery, no FS reads).
    */
   settingSources?: readonly SettingSource[];
+  /**
+   * When `false`, the run uses an in-memory {@link StateAccessor} and skips
+   * every write under {@link logsRoot} — no `session.json`, no per-request
+   * `request.json`, no per-generation `response.json`, no `state.json`. The
+   * session is still tracked server-side via `sessionId`, hooks still fire,
+   * and the event stream is byte-identical to a persisted run.
+   *
+   * Trade-offs: no resume across processes (the next process won't see
+   * anything for this sessionId under `logsRoot`), and external readers of
+   * the on-disk log (e.g. {@link readSessionLog} from Phase 1.6) will get
+   * ENOENT for that sessionId.
+   *
+   * Defaults to `true` (back-compat: persist everything).
+   */
+  persistSession?: boolean;
 }
 
 interface ResolvedOptions {
@@ -236,6 +252,7 @@ interface ResolvedOptions {
   baseUrl?: string;
   logger?: AgentLogger;
   settingSources: readonly SettingSource[];
+  persistSession: boolean;
 }
 
 function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
@@ -299,6 +316,7 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     baseUrl: opts.baseUrl,
     logger: opts.logger,
     settingSources: opts.settingSources ?? [],
+    persistSession: opts.persistSession ?? true,
   };
 }
 
@@ -380,6 +398,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       logger,
       onHook,
       settingSources,
+      persistSession,
     } = this.opts;
     // Discovery happens here (not in resolveOptions) so the constructor stays
     // synchronous and the public API shape is unchanged. When settingSources
@@ -493,13 +512,17 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         return;
       }
 
-      await logSessionStart(logsRoot, sessionId, cwd);
+      if (persistSession) {
+        await logSessionStart(logsRoot, sessionId, cwd);
+      }
 
       yield { type: 'session_started', sessionId };
       await safeFireHook('SessionStart', { event: 'SessionStart', sessionId, cwd, model });
 
       const requestId = createRequestId();
-      const state = createFileStateAccessor(logsRoot, sessionId);
+      const state = persistSession
+        ? createFileStateAccessor(logsRoot, sessionId)
+        : createMemoryStateAccessor();
       // Note: server-side tools (datetime/web_search/web_fetch) are injected
       // via OR SDK hooks and execute on OpenRouter's servers — they bypass this
       // wrapper, so canUseTool only ever sees client tools.
@@ -524,12 +547,14 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       signal.addEventListener('abort', onAbort, { once: true });
       abortListenerInstalled = true;
 
-      await logRequest(logsRoot, {
-        sessionId,
-        requestId,
-        prompt,
-        timestamp: new Date().toISOString(),
-      });
+      if (persistSession) {
+        await logRequest(logsRoot, {
+          sessionId,
+          requestId,
+          prompt,
+          timestamp: new Date().toISOString(),
+        });
+      }
 
       const result = client.callModel({
         model,
@@ -540,14 +565,16 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         state,
         stopWhen: [stepCountIs(maxTurns), maxCost(maxBudgetUsd)],
         onTurnEnd: async (_ctx, response) => {
-          const generationId = createGenerationId();
-          await logGeneration(logsRoot, {
-            sessionId,
-            requestId,
-            generationId,
-            response,
-            timestamp: new Date().toISOString(),
-          });
+          if (persistSession) {
+            const generationId = createGenerationId();
+            await logGeneration(logsRoot, {
+              sessionId,
+              requestId,
+              generationId,
+              response,
+              timestamp: new Date().toISOString(),
+            });
+          }
           totalCostUsd += response.usage?.cost ?? 0;
         },
       });
@@ -654,14 +681,16 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         totalCostUsd = finalCost;
       }
 
-      const finalGenId = createGenerationId();
-      await logGeneration(logsRoot, {
-        sessionId,
-        requestId,
-        generationId: finalGenId,
-        response,
-        timestamp: new Date().toISOString(),
-      });
+      if (persistSession) {
+        const finalGenId = createGenerationId();
+        await logGeneration(logsRoot, {
+          sessionId,
+          requestId,
+          generationId: finalGenId,
+          response,
+          timestamp: new Date().toISOString(),
+        });
+      }
 
       const status = deriveCompletionStatus({
         totalCostUsd,

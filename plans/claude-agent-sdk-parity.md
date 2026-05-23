@@ -1,18 +1,18 @@
 # Claude Agent SDK vs OpenRouter Agent Coder — Parity Analysis
 
 > Comparison of the [Claude Code Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) (TypeScript) against the openrouter-agent-coder feature set.
-> Originally generated 2026-05-21. **Last reviewed against this codebase: 2026-05-23** (after Phase 3.1 + 3.2 + 3.3 + 3.4 + 3.5 + 3.6 + 3.7 + 3.8 + 3.9 + 3.10 landed — see [`claude-sdk-parity-roadmap.md`](./claude-sdk-parity-roadmap.md)).
+> Originally generated 2026-05-21. **Last reviewed against this codebase: 2026-05-23** (after Phase 3.1 + 3.2 + 3.3 + 3.4 + 3.5 + 3.6 + 3.7 + 3.8 + 3.9 + 3.10 + 3.11 + 3.12 landed — see [`claude-sdk-parity-roadmap.md`](./claude-sdk-parity-roadmap.md)).
 
 ## Summary
 
 | Status             | Count  |
 | ------------------ | ------ |
-| Full parity        | 20     |
+| Full parity        | 21     |
 | Partial parity     | 5      |
-| Missing            | 21     |
+| Missing            | 20     |
 | **Total features** | **46** |
 
-Net change vs the original 2026-05-21 snapshot: **+12 Full** (`canUseTool`, new `Interrupt/abort` row, `Allowed/disallowed tools` after Phase 3.2, `Plan mode` after Phase 3.3, `CLAUDE.md / project context` after Phase 3.4, `Session lifecycle hooks` and `Notification hook` after Phase 3.6, `PreToolUse`/`PostToolUse` block-and-modify after Phase 3.7, `Streaming output` (rich message stream) after Phase 3.8, `Bash / run command` after Phase 3.9, `Grep (content search)` after Phase 3.10, `Glob (file search)` after Phase 3.11), **+1 Partial** (constructor-injected tools). Most "Missing" rows softened to "Partial" because their building blocks landed in Phase 1; the remaining gap is the ergonomic / discovery layer on top.
+Net change vs the original 2026-05-21 snapshot: **+13 Full** (`canUseTool`, new `Interrupt/abort` row, `Allowed/disallowed tools` after Phase 3.2, `Plan mode` after Phase 3.3, `CLAUDE.md / project context` after Phase 3.4, `Session lifecycle hooks` and `Notification hook` after Phase 3.6, `PreToolUse`/`PostToolUse` block-and-modify after Phase 3.7, `Streaming output` (rich message stream) after Phase 3.8, `Bash / run command` after Phase 3.9, `Grep (content search)` after Phase 3.10, `Glob (file search)` after Phase 3.11, `persistSession: false` after Phase 3.12), **+1 Partial** (constructor-injected tools). Most "Missing" rows softened to "Partial" because their building blocks landed in Phase 1; the remaining gap is the ergonomic / discovery layer on top.
 
 ---
 
@@ -86,7 +86,7 @@ Net change vs the original 2026-05-21 snapshot: **+12 Full** (`canUseTool`, new 
 | Session forking              | Fork creates new session with copied history                                | Not implemented                                                                                                                                                                                              | **None**    |
 | Session listing / management | `listSessions()`, `getSessionMessages()`, `renameSession()`, `tagSession()` | Not implemented in-library. The callboard `OpenRouterSessionProvider` concept (Phase 2 in companion plan) scans `<logsRoot>/<id>/session.json` externally — Phase 1.6 captures `cwd` there for that purpose. | **None**    |
 | File checkpointing           | Track & rewind file changes to any checkpoint                               | Not implemented                                                                                                                                                                                              | **None**    |
-| persistSession: false        | In-memory only sessions (no disk writes)                                    | Not implemented (library always writes `<logsRoot>/<id>/`)                                                                                                                                                   | **None**    |
+| persistSession: false        | In-memory only sessions (no disk writes)                                    | `persistSession: false` constructor option swaps `FileStateAccessor` for an in-memory accessor and skips every write under `logsRoot` (`session.json` / `request.json` / `response.json` / `state.json`)     | **Full**    |
 
 ### Extensibility
 

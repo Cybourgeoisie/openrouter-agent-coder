@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `persistSession` constructor option on `OpenRouterAgentRun` (default
+  `true`, backward-compatible). When `false`, the run swaps the
+  `FileStateAccessor` for an in-memory accessor and skips every write under
+  `logsRoot` — no `session.json`, no per-request `request.json`, no
+  per-generation `response.json`, no `state.json`. The session is still
+  tracked server-side by `sessionId`, hooks still fire, and the
+  `AgentCoreEvent` stream is byte-identical to a persisted run. Trade-off:
+  no resume across processes (the next process sees ENOENT for that
+  sessionId under `logsRoot`), and external readers like `readSessionLog`
+  (Phase 1.6) see nothing for that sessionId. (Phase 3.12)
 - New `glob` client tool — recursive file finder by glob pattern, separate
   from the flat `list_directory` listing. Inputs: `pattern` (required, e.g.
   `**/*.ts`, `src/**/*.test.ts`, `*.md`), `path` (defaults to the agent
