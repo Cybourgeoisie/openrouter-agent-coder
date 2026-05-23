@@ -31,6 +31,7 @@ export {
   askUserQuestionTool,
   taskCreateTool,
   taskUpdateTool,
+  editNotebookTool,
 } from './tools/index.js';
 export type {
   ToolContext,
@@ -50,6 +51,9 @@ export type {
   TaskToolOptions,
   TaskCreateToolResult,
   TaskUpdateToolResult,
+  EditNotebookResult,
+  EditNotebookSuccess,
+  EditNotebookError,
 } from './tools/index.js';
 export { tool, createSdkMcpServer } from './custom-tools.js';
 export type { CustomToolConfig, SdkMcpServer, CreateSdkMcpServerConfig } from './custom-tools.js';
