@@ -1,18 +1,18 @@
 # Claude Agent SDK vs OpenRouter Agent Coder — Parity Analysis
 
 > Comparison of the [Claude Code Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) (TypeScript) against the openrouter-agent-coder feature set.
-> Originally generated 2026-05-21. **Last reviewed against this codebase: 2026-05-23** (after Phase 3.1 + 3.2 + 3.3 landed — see [`claude-sdk-parity-roadmap.md`](./claude-sdk-parity-roadmap.md)).
+> Originally generated 2026-05-21. **Last reviewed against this codebase: 2026-05-23** (after Phase 3.1 + 3.2 + 3.3 + 3.4 landed — see [`claude-sdk-parity-roadmap.md`](./claude-sdk-parity-roadmap.md)).
 
 ## Summary
 
 | Status             | Count  |
 | ------------------ | ------ |
-| Full parity        | 12     |
-| Partial parity     | 12     |
+| Full parity        | 13     |
+| Partial parity     | 11     |
 | Missing            | 22     |
 | **Total features** | **46** |
 
-Net change vs the original 2026-05-21 snapshot: **+4 Full** (`canUseTool`, new `Interrupt/abort` row, `Allowed/disallowed tools` after Phase 3.2, `Plan mode` after Phase 3.3), **+4 Partial** (`PreToolUse`/`PostToolUse` are audit-only — hooks can log but can't block/modify like the Claude SDK; `SessionStart`/`SessionEnd` half of lifecycle hooks; constructor-injected tools; constructor-supplied system prompt). Most "Missing" rows softened to "Partial" because their building blocks landed in Phase 1; the remaining gap is the ergonomic / discovery / block-modify layer on top.
+Net change vs the original 2026-05-21 snapshot: **+5 Full** (`canUseTool`, new `Interrupt/abort` row, `Allowed/disallowed tools` after Phase 3.2, `Plan mode` after Phase 3.3, `CLAUDE.md / project context` after Phase 3.4), **+3 Partial** (`PreToolUse`/`PostToolUse` are audit-only — hooks can log but can't block/modify like the Claude SDK; `SessionStart`/`SessionEnd` half of lifecycle hooks; constructor-injected tools). Most "Missing" rows softened to "Partial" because their building blocks landed in Phase 1; the remaining gap is the ergonomic / discovery / block-modify layer on top.
 
 ---
 
@@ -90,14 +90,14 @@ Net change vs the original 2026-05-21 snapshot: **+4 Full** (`canUseTool`, new `
 
 ### Extensibility
 
-| Feature                     | Claude Agent SDK                                                                    | OpenRouter Agent Coder                                                                                                                                                      | Parity      |
-| --------------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| MCP server support          | stdio, HTTP/SSE, in-process SDK servers; `.mcp.json` config                         | Not implemented                                                                                                                                                             | **None**    |
-| Custom tools                | `tool()` helper + `createSdkMcpServer()` — in-process custom tools with Zod schemas | `tools` constructor option accepts any `readonly Tool[]`; bundled `allTools(ctx)` is the default. No `tool()` helper / Zod-schema convenience / MCP-server bridging.        | **Partial** |
-| Skills system               | Markdown-based skills in `.claude/skills/`                                          | Not implemented                                                                                                                                                             | **None**    |
-| Slash commands              | Custom commands in `.claude/commands/`                                              | Not implemented                                                                                                                                                             | **None**    |
-| Plugins                     | Extend with custom commands, agents, MCP servers                                    | Not implemented                                                                                                                                                             | **None**    |
-| CLAUDE.md / project context | Loaded from `.claude/` and `~/`, configurable via `settingSources`                  | `instructions` constructor option accepts any system prompt (defaults to `DEFAULT_INSTRUCTIONS`). No auto-discovery from `.claude/` / `CLAUDE.md` files — host supplies it. | **Partial** |
+| Feature                     | Claude Agent SDK                                                                    | OpenRouter Agent Coder                                                                                                                                                                                                                                                                                                                  | Parity      |
+| --------------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| MCP server support          | stdio, HTTP/SSE, in-process SDK servers; `.mcp.json` config                         | Not implemented                                                                                                                                                                                                                                                                                                                         | **None**    |
+| Custom tools                | `tool()` helper + `createSdkMcpServer()` — in-process custom tools with Zod schemas | `tools` constructor option accepts any `readonly Tool[]`; bundled `allTools(ctx)` is the default. No `tool()` helper / Zod-schema convenience / MCP-server bridging.                                                                                                                                                                    | **Partial** |
+| Skills system               | Markdown-based skills in `.claude/skills/`                                          | Not implemented                                                                                                                                                                                                                                                                                                                         | **None**    |
+| Slash commands              | Custom commands in `.claude/commands/`                                              | Not implemented                                                                                                                                                                                                                                                                                                                         | **None**    |
+| Plugins                     | Extend with custom commands, agents, MCP servers                                    | Not implemented                                                                                                                                                                                                                                                                                                                         | **None**    |
+| CLAUDE.md / project context | Loaded from `.claude/` and `~/`, configurable via `settingSources`                  | `settingSources` constructor option (Phase 3.4): walks `project` (cwd + .claude/CLAUDE.md up to first .git or 10 levels), `user` (`~/.claude/CLAUDE.md`), and `local` (`<cwd>/.claude/CLAUDE.local.md`); composed into `instructions` in user→project→local order with a ~50k-char cap. Default `[]` preserves verbatim `instructions`. | **Full**    |
 
 ### Diagnostics & Accounts
 
@@ -130,7 +130,7 @@ Items shipped in Phase 1 are crossed through with a back-pointer; the **layer-on
 
 5. **AskUserQuestion tool.** Structured multiple-choice clarifying questions during execution.
 
-6. **CLAUDE.md / project-context auto-discovery.** Load instructions from `.claude/` / `CLAUDE.md` files automatically. _`instructions` constructor arg shipped in Phase 1.5 — auto-discovery layer would compose on top._
+6. ~~**CLAUDE.md / project-context auto-discovery.**~~ _Shipped in Phase 3.4 via the `settingSources` constructor option ([#TBD](https://github.com/Cybourgeoisie/openrouter-agent-coder/pull/TBD))._
 
 ### P1 — Important
 
