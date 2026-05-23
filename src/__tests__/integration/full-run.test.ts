@@ -30,7 +30,8 @@ vi.mock('../../tools/server-tools.js', () => ({
   createServerToolsHooks: () => ({}),
 }));
 
-import { OpenRouterAgentRun } from '../../index.js';
+import { z } from 'zod/v4';
+import { OpenRouterAgentRun, tool, createSdkMcpServer } from '../../index.js';
 import type {
   AgentCoreEvent,
   CanUseTool,
@@ -590,5 +591,42 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     const events = await collect(run);
     const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
     expect(complete.status).toBe('max_turns');
+  });
+
+  it('runs a Zod-schema custom tool built via tool() / createSdkMcpServer end-to-end', async () => {
+    state.fixture = loadFixture('single-tool-call');
+
+    const execSpy = vi.fn(async (input: { value: string }) => `echoed:${input.value}`);
+    const echo = tool({
+      name: 'echo',
+      description: 'returns the value field of its input',
+      inputSchema: z.object({ value: z.string() }),
+      execute: execSpy,
+    });
+    const server = createSdkMcpServer({
+      name: 'demo-server',
+      version: '0.0.1',
+      tools: [echo],
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'run a custom tool',
+      tools: server.tools,
+    });
+    const events = await collect(run);
+
+    // The fixture's input ({ value: 'gated' }) passes Zod validation and is
+    // handed to the user-supplied execute verbatim.
+    expect(execSpy).toHaveBeenCalledWith({ value: 'gated' }, expect.anything());
+    const toolResult = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(toolResult.isError).toBe(false);
+    expect(toolResult.output).toBe('echoed:gated');
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.status).toBe('success');
   });
 });
