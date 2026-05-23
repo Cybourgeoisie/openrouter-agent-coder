@@ -2305,13 +2305,13 @@ describe('OpenRouterAgentRun onHook (Phase 1.7)', () => {
     >;
     expect(toolResult.isError).toBe(false);
 
-    // Logger called with 'error' for each thrown hook (at least 4: Start, Pre,
-    // Post, End).
+    // Logger called with 'error' for each thrown hook (at least 6: Setup,
+    // SessionStart, Pre, Post, SessionEnd, Stop).
     const errorLogs = logCalls.filter(([level, msg]) => level === 'error' && msg === 'Hook threw');
-    expect(errorLogs.length).toBeGreaterThanOrEqual(4);
+    expect(errorLogs.length).toBeGreaterThanOrEqual(6);
     const hookEvents = errorLogs.map(([, , fields]) => (fields as { event: string }).event);
     expect(new Set(hookEvents)).toEqual(
-      new Set(['SessionStart', 'PreToolUse', 'PostToolUse', 'SessionEnd']),
+      new Set(['Setup', 'SessionStart', 'PreToolUse', 'PostToolUse', 'SessionEnd', 'Stop']),
     );
   });
 
@@ -2427,5 +2427,524 @@ describe('OpenRouterAgentRun onHook (Phase 1.7)', () => {
     expect(execIdx).toBeGreaterThan(cutIdx);
     expect(postIdx).toBeGreaterThan(execIdx);
     expect(yieldIdx).toBeGreaterThan(postIdx);
+  });
+});
+
+describe('OpenRouterAgentRun onHook (Phase 3.6 — Setup / Stop / Notification)', () => {
+  function singleToolCallModel(args: { toolName: string; callId: string; input: unknown }) {
+    return (request: {
+      tools: Array<{ function: { name: string; execute?: (i: unknown, c?: unknown) => unknown } }>;
+    }) => {
+      const tool = request.tools.find((t) => t.function.name === args.toolName);
+      return {
+        async *getFullResponsesStream() {
+          yield { type: 'turn.start', turnNumber: 0 };
+          yield {
+            type: 'response.output_item.done',
+            outputIndex: 0,
+            sequenceNumber: 1,
+            item: {
+              type: 'function_call',
+              callId: args.callId,
+              name: args.toolName,
+              arguments: JSON.stringify(args.input),
+            },
+          };
+          let output: unknown;
+          let status: 'completed' | 'incomplete' = 'completed';
+          try {
+            output = await tool!.function.execute!(args.input, {
+              toolCall: { callId: args.callId },
+            });
+          } catch (e) {
+            output = (e as Error).message;
+            status = 'incomplete';
+          }
+          yield {
+            type: 'tool.call_output',
+            timestamp: 1,
+            output: {
+              callId: args.callId,
+              type: 'function_call_output',
+              output,
+              status,
+            },
+          };
+          yield { type: 'turn.end', turnNumber: 0 };
+        },
+        async getResponse() {
+          return {
+            id: 'r',
+            model: 'm',
+            usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            output: [],
+          };
+        },
+      };
+    };
+  }
+
+  it('fires hooks in order Setup → SessionStart → ... → SessionEnd → Stop on a normal run', async () => {
+    callModelMock.mockImplementation(
+      fakeCallModel({
+        events: [
+          { type: 'turn.start', turnNumber: 0 },
+          { type: 'turn.end', turnNumber: 0 },
+        ],
+      }),
+    );
+    const hookOrder: string[] = [];
+    const hookCalls: Array<{ event: string; payload: unknown }> = [];
+    const onHook = vi.fn(async (event: string, payload: unknown) => {
+      hookOrder.push(event);
+      hookCalls.push({ event, payload });
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      cwd: '/tmp/setup-cwd',
+      logsRoot: join(process.cwd(), '.test-tmp', 'phase-3-6-setup-logs'),
+      onHook,
+    });
+    await collect(run);
+
+    expect(hookOrder).toEqual(['Setup', 'SessionStart', 'SessionEnd', 'Stop']);
+    const setup = hookCalls.find((c) => c.event === 'Setup')!.payload;
+    expect(setup).toEqual({ event: 'Setup', sessionId: TEST_SESSION, cwd: '/tmp/setup-cwd' });
+    const stop = hookCalls.find((c) => c.event === 'Stop')!.payload as {
+      status: string;
+      reason?: string;
+    };
+    expect(stop).toEqual({ event: 'Stop', status: 'success' });
+
+    await rm(join(process.cwd(), '.test-tmp', 'phase-3-6-setup-logs'), {
+      recursive: true,
+      force: true,
+    });
+  });
+
+  it('fires Setup once even when the run is aborted before construction (Setup → SessionEnd → Stop)', async () => {
+    const ctrl = new AbortController();
+    ctrl.abort();
+    const hookOrder: string[] = [];
+    const hookCalls: Array<{ event: string; payload: unknown }> = [];
+    const onHook = vi.fn(async (event: string, payload: unknown) => {
+      hookOrder.push(event);
+      hookCalls.push({ event, payload });
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      signal: ctrl.signal,
+      onHook,
+    });
+    await collect(run);
+
+    // SessionStart never fires (no session_started yields on pre-abort).
+    // Setup brackets the run even when the OR client is never constructed.
+    expect(hookOrder).toEqual(['Setup', 'SessionEnd', 'Stop']);
+    const stop = hookCalls.find((c) => c.event === 'Stop')!.payload as {
+      status: string;
+      reason?: string;
+    };
+    expect(stop.status).toBe('error');
+    expect(stop.reason).toBe('aborted');
+  });
+
+  it('fires Setup before the OpenRouter constructor; Stop carries the throw message on constructor-throw', async () => {
+    // Force the mocked OR constructor to throw — same path the integration
+    // test exercises but here in the unit suite for fast-feedback signal.
+    openRouterCtorMock.mockImplementationOnce(() => {
+      throw new Error('invalid API key');
+    });
+
+    const hookOrder: string[] = [];
+    const hookCalls: Array<{ event: string; payload: unknown }> = [];
+    const onHook = vi.fn(async (event: string, payload: unknown) => {
+      hookOrder.push(event);
+      hookCalls.push({ event, payload });
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      onHook,
+    });
+    await collect(run);
+
+    expect(hookOrder).toEqual(['Setup', 'SessionEnd', 'Stop']);
+    const stop = hookCalls.find((c) => c.event === 'Stop')!.payload as {
+      status: string;
+      reason?: string;
+    };
+    expect(stop.status).toBe('error');
+    expect(stop.reason).toBe('invalid API key');
+  });
+
+  it('fires Stop with status:error and reason:aborted when abort fires mid-stream', async () => {
+    let release: () => void = () => {};
+    const paused = new Promise<void>((r) => {
+      release = r;
+    });
+    callModelMock.mockImplementation(() => {
+      let cancelled = false;
+      return {
+        cancel: async () => {
+          cancelled = true;
+        },
+        async *getFullResponsesStream() {
+          yield { type: 'turn.start', turnNumber: 0 };
+          yield { type: 'response.output_text.delta', delta: 'first' };
+          await paused;
+          if (cancelled) return;
+          yield { type: 'response.output_text.delta', delta: 'never seen' };
+          yield { type: 'turn.end', turnNumber: 0 };
+        },
+        async getResponse() {
+          return {
+            id: 'r',
+            model: 'm',
+            usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            output: [],
+          };
+        },
+      };
+    });
+
+    const ctrl = new AbortController();
+    const hookCalls: Array<{ event: string; payload: unknown }> = [];
+    const onHook = vi.fn(async (event: string, payload: unknown) => {
+      hookCalls.push({ event, payload });
+    });
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      signal: ctrl.signal,
+      onHook,
+    });
+
+    const iterPromise = collect(run);
+    await new Promise<void>((r) => setTimeout(r, 20));
+    ctrl.abort();
+    release();
+    await iterPromise;
+
+    const stop = hookCalls.find((c) => c.event === 'Stop')!.payload as {
+      status: string;
+      reason?: string;
+    };
+    expect(stop.status).toBe('error');
+    expect(stop.reason).toBe('aborted');
+  });
+
+  it('exposes ctx.notify on the tool execute context when onHook is set; calling it fires Notification exactly once', async () => {
+    let capturedCtx: { notify?: (l: string, m: string, c?: unknown) => Promise<void> } | null =
+      null;
+
+    const notifyingTool = {
+      type: 'function' as const,
+      function: {
+        name: 'notify_tool',
+        description: 'captures ctx so the test can drive notify directly',
+        execute: async (
+          _input: unknown,
+          ctx?: { notify?: (l: string, m: string, c?: unknown) => Promise<void> },
+        ) => {
+          capturedCtx = ctx ?? {};
+          return 'ok';
+        },
+      },
+    };
+
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'notify_tool', callId: 'c-notify', input: {} }),
+    );
+
+    const hookCalls: Array<{ event: string; payload: unknown }> = [];
+    const onHook = vi.fn(async (event: string, payload: unknown) => {
+      hookCalls.push({ event, payload });
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [notifyingTool] as unknown as never,
+      onHook,
+    });
+    await collect(run);
+
+    expect(capturedCtx).not.toBeNull();
+    expect(typeof capturedCtx!.notify).toBe('function');
+
+    await capturedCtx!.notify!('warn', 'something happened', { extra: 1 });
+
+    const notifications = hookCalls.filter((c) => c.event === 'Notification');
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].payload).toEqual({
+      event: 'Notification',
+      level: 'warn',
+      message: 'something happened',
+      context: { extra: 1 },
+    });
+  });
+
+  it('omits ctx.notify entirely when onHook is undefined (so optional-chained calls no-op cleanly)', async () => {
+    let capturedCtx: { notify?: unknown } | null = null;
+    const captureCtxTool = {
+      type: 'function' as const,
+      function: {
+        name: 'capture_tool',
+        description: 'captures ctx',
+        execute: async (_input: unknown, ctx?: unknown) => {
+          capturedCtx = (ctx as { notify?: unknown }) ?? {};
+          return 'ok';
+        },
+      },
+    };
+
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'capture_tool', callId: 'c-cap', input: {} }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [captureCtxTool] as unknown as never,
+    });
+    await collect(run);
+
+    // Without onHook, the wrapper isn't composed, so ctx is passed through
+    // unchanged — no notify field is added.
+    expect(capturedCtx).not.toBeNull();
+    expect(capturedCtx!.notify).toBeUndefined();
+  });
+
+  it('a throwing Setup hook is swallowed; the run still progresses through SessionStart → SessionEnd → Stop', async () => {
+    callModelMock.mockImplementation(
+      fakeCallModel({
+        events: [
+          { type: 'turn.start', turnNumber: 0 },
+          { type: 'turn.end', turnNumber: 0 },
+        ],
+      }),
+    );
+    const order: string[] = [];
+    // Throw only on Setup; other hooks pass through normally.
+    const onHook = vi.fn(async (event: string) => {
+      order.push(event);
+      if (event === 'Setup') throw new Error('setup blew up');
+    });
+    const logCalls: Array<[string, string, Record<string, unknown> | undefined]> = [];
+    const logger = (
+      level: 'debug' | 'info' | 'warn' | 'error',
+      msg: string,
+      fields?: Record<string, unknown>,
+    ): void => {
+      logCalls.push([level, msg, fields]);
+    };
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      onHook,
+      logger,
+    });
+    const events = await collect(run);
+
+    expect(order).toEqual(['Setup', 'SessionStart', 'SessionEnd', 'Stop']);
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.status).toBe('success');
+    const setupErrLog = logCalls.find(
+      ([level, msg, fields]) =>
+        level === 'error' &&
+        msg === 'Hook threw' &&
+        (fields as { event?: string } | undefined)?.event === 'Setup',
+    );
+    expect(setupErrLog).toBeDefined();
+  });
+
+  it('wrapToolWithHooks and wrapToolWithPermission pass through tools that lack a local execute', async () => {
+    // Tools without an `execute` function (e.g. SDK manual/generator forms)
+    // bypass both wrappers untouched. Driving such a tool through the run
+    // exercises both early-return guards; the SDK mock emits a tool_call_output
+    // directly so the run still finishes cleanly.
+    const noExecTool = {
+      type: 'function' as const,
+      function: {
+        name: 'no_exec_tool',
+        description: 'no execute defined',
+      },
+    };
+
+    callModelMock.mockImplementation(() => ({
+      async *getFullResponsesStream() {
+        yield { type: 'turn.start', turnNumber: 0 };
+        yield {
+          type: 'tool.call_output',
+          timestamp: 1,
+          output: {
+            callId: 'c-noexec',
+            type: 'function_call_output',
+            output: 'sdk-emitted',
+            status: 'completed',
+          },
+        };
+        yield { type: 'turn.end', turnNumber: 0 };
+      },
+      async getResponse() {
+        return {
+          id: 'r',
+          model: 'm',
+          usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          output: [],
+        };
+      },
+    }));
+
+    const onHook = vi.fn();
+    // Use canUseTool too so wrapToolWithPermission is also composed.
+    const canUseTool = vi.fn().mockResolvedValue({ behavior: 'allow' });
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [noExecTool] as unknown as never,
+      canUseTool,
+      onHook,
+    });
+    const events = await collect(run);
+
+    // The original tool object should reach callModel untouched (no wrapping).
+    const passedTools = callModelMock.mock.calls[0][0].tools;
+    expect(passedTools[0]).toBe(noExecTool);
+
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.status).toBe('success');
+  });
+
+  it('PostToolUse output coerces non-Error throws via String() and the Stop hook still fires', async () => {
+    // A tool that throws a non-Error value exercises the String(err) branch
+    // of the hook wrapper's catch arm, which would otherwise stay uncovered.
+    const throwingTool = {
+      type: 'function' as const,
+      function: {
+        name: 'throw_string_tool',
+        description: 'throws a non-Error value',
+        execute: async () => {
+          throw 'plain string failure';
+        },
+      },
+    };
+
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'throw_string_tool', callId: 'c-throw-str', input: {} }),
+    );
+
+    const hookCalls: Array<{ event: string; payload: unknown }> = [];
+    const onHook = vi.fn(async (event: string, payload: unknown) => {
+      hookCalls.push({ event, payload });
+    });
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [throwingTool] as unknown as never,
+      onHook,
+    });
+    await collect(run);
+
+    const post = hookCalls.find((c) => c.event === 'PostToolUse')!.payload as {
+      output: string;
+      isError: boolean;
+    };
+    expect(post.isError).toBe(true);
+    expect(post.output).toBe('plain string failure');
+    // Stop still bookends the run on the success status (the throw was
+    // contained inside the tool, not the model stream).
+    expect(hookCalls.at(-1)!.event).toBe('Stop');
+  });
+
+  it('Stop carries the thrown stream error message when the OR stream rejects (non-abort)', async () => {
+    callModelMock.mockImplementation(() => ({
+      async *getFullResponsesStream() {
+        yield { type: 'turn.start', turnNumber: 0 };
+        throw new Error('upstream blew up');
+      },
+      async getResponse() {
+        throw new Error('unused');
+      },
+    }));
+
+    const hookCalls: Array<{ event: string; payload: unknown }> = [];
+    const onHook = vi.fn(async (event: string, payload: unknown) => {
+      hookCalls.push({ event, payload });
+    });
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      onHook,
+    });
+    await collect(run);
+
+    const stop = hookCalls.find((c) => c.event === 'Stop')!.payload as {
+      status: string;
+      reason?: string;
+    };
+    expect(stop.status).toBe('error');
+    expect(stop.reason).toBe('upstream blew up');
+  });
+
+  it('a throwing Stop hook is swallowed; the run completes without leaking the error to the consumer', async () => {
+    callModelMock.mockImplementation(
+      fakeCallModel({
+        events: [
+          { type: 'turn.start', turnNumber: 0 },
+          { type: 'turn.end', turnNumber: 0 },
+        ],
+      }),
+    );
+    const order: string[] = [];
+    const onHook = vi.fn(async (event: string) => {
+      order.push(event);
+      if (event === 'Stop') throw new Error('stop blew up');
+    });
+    const logCalls: Array<[string, string, Record<string, unknown> | undefined]> = [];
+    const logger = (
+      level: 'debug' | 'info' | 'warn' | 'error',
+      msg: string,
+      fields?: Record<string, unknown>,
+    ): void => {
+      logCalls.push([level, msg, fields]);
+    };
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      onHook,
+      logger,
+    });
+    const events = await collect(run);
+
+    expect(order.at(-1)).toBe('Stop');
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.status).toBe('success');
+    const stopErrLog = logCalls.find(
+      ([level, msg, fields]) =>
+        level === 'error' &&
+        msg === 'Hook threw' &&
+        (fields as { event?: string } | undefined)?.event === 'Stop',
+    );
+    expect(stopErrLog).toBeDefined();
   });
 });

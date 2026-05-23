@@ -8,6 +8,13 @@ export interface ToolContext {
   cwd: string;
   /** Composite abort signal from the owning run. */
   signal?: AbortSignal;
+  /**
+   * Emit a `Notification` hook from inside a tool's execute. No-op when the
+   * owning {@link OpenRouterAgentRun} was constructed without an `onHook`
+   * callback, so callers can call this unconditionally. The promise resolves
+   * after the hook returns (or immediately, when no `onHook` is wired).
+   */
+  notify?: (level: 'info' | 'warn' | 'error', message: string, context?: unknown) => Promise<void>;
 }
 
 /**

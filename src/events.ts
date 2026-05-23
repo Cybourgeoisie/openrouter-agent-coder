@@ -25,8 +25,24 @@ export type AgentCoreEvent =
  * Lifecycle hook event names fired by an {@link OpenRouterAgentRun}. Hooks are
  * audit-only — their return value cannot mutate the run, and exceptions thrown
  * inside a hook are logged and swallowed so they cannot break the agent.
+ *
+ * Fire order on the happy path:
+ * `Setup` → `SessionStart` → (`PreToolUse`/`PostToolUse` pairs)* → `SessionEnd` → `Stop`.
+ *
+ * `Setup` and `Stop` always bracket the run — even when construction throws or
+ * the run aborts before any model traffic. `Notification` is the only event
+ * that is NOT fired by the runtime automatically: callers (library code or
+ * custom tools via {@link ToolContext.notify}) emit it to push status updates
+ * to subscribers.
  */
-export type HookEvent = 'PreToolUse' | 'PostToolUse' | 'SessionStart' | 'SessionEnd';
+export type HookEvent =
+  | 'PreToolUse'
+  | 'PostToolUse'
+  | 'SessionStart'
+  | 'SessionEnd'
+  | 'Stop'
+  | 'Setup'
+  | 'Notification';
 
 /**
  * Discriminated union of hook payloads. The `event` field is the discriminator
@@ -53,4 +69,29 @@ export type HookPayload =
       output: unknown;
       isError: boolean;
       callId: string;
+    }
+  /**
+   * Fires once per {@link OpenRouterAgentRun} instance, BEFORE `SessionStart`.
+   * Use for first-run resource provisioning (cache warmup, scratch dirs, etc.).
+   * Lifetime semantics are per-run-instance, not per-process.
+   */
+  | { event: 'Setup'; sessionId: string; cwd: string }
+  /**
+   * Fires once per run, AFTER `SessionEnd`. Always the last hook event in the
+   * run — even on abort or constructor-throw. `status` mirrors the final
+   * {@link AgentCoreEventStatus}; `reason` carries an error message when one
+   * is known (abort or thrown error).
+   */
+  | { event: 'Stop'; status: AgentCoreEventStatus; reason?: string }
+  /**
+   * Caller-emitted status update. The runtime never fires `Notification`
+   * automatically; library code or custom tools push these via
+   * {@link ToolContext.notify} (or by calling `onHook` directly) to surface
+   * progress/errors to subscribers.
+   */
+  | {
+      event: 'Notification';
+      level: 'info' | 'warn' | 'error';
+      message: string;
+      context?: unknown;
     };
