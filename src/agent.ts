@@ -133,12 +133,24 @@ export interface OpenRouterAgentRunOptions {
    */
   disallowedTools?: readonly string[];
   /**
-   * Lifecycle hook callback. Fires `SessionStart` once after the
-   * `session_started` event, `PreToolUse` before each client tool's
-   * `canUseTool` decision (audit always fires, even when denied),
-   * `PostToolUse` after each tool result is computed (with `isError` matching
-   * the subsequent `tool_result.isError`), and `SessionEnd` once after
-   * `stream_complete`. Hooks are awaited; thrown errors are logged via
+   * Lifecycle hook callback. Fire order on the happy path:
+   *
+   * `Setup` (once, before any other hook — useful for first-run resource
+   * provisioning) → `SessionStart` (after the `session_started` event yields,
+   * with `sessionId`/`cwd`/`model`) → for each tool call: `PreToolUse`
+   * (audit, fires even when `canUseTool` denies) → `PostToolUse` (with
+   * `isError` matching the subsequent `tool_result.isError`) → `SessionEnd`
+   * (after `stream_complete`, with final status/usage/cost) → `Stop` (last
+   * hook in the run, carries the final status + an optional `reason` on
+   * abort or thrown-error paths).
+   *
+   * `Notification` is the only hook event that is NOT auto-fired. Library
+   * code or custom tools push it via {@link ToolContext.notify} (or by
+   * calling `onHook` directly) to surface progress/errors to subscribers.
+   *
+   * `Setup` and `Stop` always bracket the run — including when the OR
+   * client constructor throws or the run is aborted before any model
+   * traffic. Hooks are awaited; thrown errors are logged via
    * {@link AgentLogger} and swallowed so they cannot break a run.
    */
   onHook?: OnHook;
@@ -343,6 +355,10 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     // when the run somehow exits without yielding stream_complete (should be
     // unreachable — every path ends in a stream_complete).
     let sessionEndPayload: Extract<HookPayload, { event: 'SessionEnd' }> | null = null;
+    // Mirrors sessionEndPayload but for the trailing Stop hook. Stop fires
+    // last regardless of completion status; reason is populated on abort or
+    // thrown-error paths so subscribers can distinguish clean from dirty exit.
+    let stopPayload: Extract<HookPayload, { event: 'Stop' }> = { event: 'Stop', status: 'error' };
 
     const safeFireHook = async (event: HookEvent, payload: HookPayload): Promise<void> => {
       if (!onHook) return;
@@ -352,6 +368,12 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         logger?.('error', 'Hook threw', { event, error: err });
       }
     };
+
+    // Setup fires once per OpenRouterAgentRun instance, before any other hook
+    // (including SessionStart). It precedes the pre-abort short-circuit and
+    // the OR client constructor so abort-at-construction and
+    // OR-constructor-throw paths still emit a Setup → ... → Stop bracket.
+    await safeFireHook('Setup', { event: 'Setup', sessionId, cwd });
 
     logger?.('debug', 'OpenRouterAgentRun starting', {
       sessionId,
@@ -388,6 +410,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           usage: null,
           costUsd: 0,
         };
+        stopPayload = { event: 'Stop', status: 'error', reason: ABORT_REASON };
         return;
       }
 
@@ -415,6 +438,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           usage: null,
           costUsd: 0,
         };
+        stopPayload = { event: 'Stop', status: 'error', reason: message };
         return;
       }
 
@@ -428,6 +452,10 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       // Note: server-side tools (datetime/web_search/web_fetch) are injected
       // via OR SDK hooks and execute on OpenRouter's servers — they bypass this
       // wrapper, so canUseTool only ever sees client tools.
+      // ctx.notify is injected at tool-execute time by wrapToolWithHooks (so
+      // both built-in and custom tools receive it via the SDK ToolExecuteContext
+      // they get at call time), not here at factory time. Built-in tool
+      // factories close over this ctx for cwd/signal only.
       const ctx: ToolContext = { cwd, signal };
       // Order of wraps (innermost → outermost): ctx-bound execute, then
       // canUseTool gate, then hook wrapper. The hook wrapper is outermost so
@@ -562,6 +590,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           usage: finalUsage,
           costUsd: totalCostUsd,
         };
+        stopPayload = { event: 'Stop', status: 'error', reason: ABORT_REASON };
         return;
       }
 
@@ -604,6 +633,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         usage: finalUsage,
         costUsd: totalCostUsd,
       };
+      stopPayload = { event: 'Stop', status };
     } catch (err) {
       if (signal.aborted) {
         yield {
@@ -621,6 +651,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           usage: finalUsage,
           costUsd: totalCostUsd,
         };
+        stopPayload = { event: 'Stop', status: 'error', reason: ABORT_REASON };
         return;
       }
       const message = err instanceof Error ? err.message : String(err);
@@ -641,6 +672,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         usage: finalUsage,
         costUsd: totalCostUsd,
       };
+      stopPayload = { event: 'Stop', status: 'error', reason: message };
     } finally {
       if (abortListenerInstalled) {
         signal.removeEventListener('abort', onAbort);
@@ -648,6 +680,10 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       if (sessionEndPayload) {
         await safeFireHook('SessionEnd', sessionEndPayload);
       }
+      // Stop is the last hook event in the run. Fires regardless of how we
+      // exited iterate(); when the run somehow exited without setting
+      // stopPayload, the default 'error' captured at init time is used.
+      await safeFireHook('Stop', stopPayload);
     }
   }
 }
@@ -722,9 +758,22 @@ function wrapToolWithHooks(
   const wrappedExecute = async (input: unknown, ctx?: unknown): Promise<unknown> => {
     const sdkCallId = (ctx as { toolCall?: { callId?: unknown } } | undefined)?.toolCall?.callId;
     const callId = typeof sdkCallId === 'string' && sdkCallId.length > 0 ? sdkCallId : randomUUID();
+    // Merge ctx.notify onto the SDK-supplied ToolExecuteContext so tools
+    // (built-in or custom) can emit Notification hooks. Object.assign tolerates
+    // a missing source ctx (returns just the notify-bearing object), so there's
+    // no need to branch on ctx shape — the wrapper is only ever applied when
+    // onHook is wired, so notify is always present in the merged result.
+    const ctxWithNotify = Object.assign({}, ctx as object | undefined, {
+      notify: (
+        level: 'info' | 'warn' | 'error',
+        message: string,
+        context?: unknown,
+      ): Promise<void> =>
+        safeFireHook('Notification', { event: 'Notification', level, message, context }),
+    });
     await safeFireHook('PreToolUse', { event: 'PreToolUse', toolName: name, input, callId });
     try {
-      const output = await originalExecute(input, ctx);
+      const output = await originalExecute(input, ctxWithNotify);
       await safeFireHook('PostToolUse', {
         event: 'PostToolUse',
         toolName: name,

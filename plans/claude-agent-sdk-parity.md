@@ -7,12 +7,12 @@
 
 | Status             | Count  |
 | ------------------ | ------ |
-| Full parity        | 13     |
-| Partial parity     | 11     |
-| Missing            | 22     |
+| Full parity        | 15     |
+| Partial parity     | 10     |
+| Missing            | 21     |
 | **Total features** | **46** |
 
-Net change vs the original 2026-05-21 snapshot: **+5 Full** (`canUseTool`, new `Interrupt/abort` row, `Allowed/disallowed tools` after Phase 3.2, `Plan mode` after Phase 3.3, `CLAUDE.md / project context` after Phase 3.4), **+3 Partial** (`PreToolUse`/`PostToolUse` are audit-only — hooks can log but can't block/modify like the Claude SDK; `SessionStart`/`SessionEnd` half of lifecycle hooks; constructor-injected tools). Most "Missing" rows softened to "Partial" because their building blocks landed in Phase 1; the remaining gap is the ergonomic / discovery / block-modify layer on top.
+Net change vs the original 2026-05-21 snapshot: **+7 Full** (`canUseTool`, new `Interrupt/abort` row, `Allowed/disallowed tools` after Phase 3.2, `Plan mode` after Phase 3.3, `CLAUDE.md / project context` after Phase 3.4, `Session lifecycle hooks` and `Notification hook` after Phase 3.6), **+2 Partial** (`PreToolUse`/`PostToolUse` are audit-only — hooks can log but can't block/modify like the Claude SDK; constructor-injected tools). Most "Missing" rows softened to "Partial" because their building blocks landed in Phase 1; the remaining gap is the ergonomic / discovery / block-modify layer on top.
 
 ---
 
@@ -64,9 +64,9 @@ Net change vs the original 2026-05-21 snapshot: **+5 Full** (`canUseTool`, new `
 | Feature                  | Claude Agent SDK                                           | OpenRouter Agent Coder                                                                                                                                                                                                            | Parity      |
 | ------------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
 | PreToolUse / PostToolUse | Block, modify, log, audit tool calls with matcher patterns | `onHook` fires `PreToolUse` before the `canUseTool` decision (audit even on deny) and `PostToolUse` after each tool result (`isError` matches subsequent `tool_result.isError`). Audit-only — hooks cannot block or modify input. | **Partial** |
-| Session lifecycle hooks  | SessionStart, SessionEnd, Stop, Setup, Notification        | `onHook` fires `SessionStart` once after `session_started` and `SessionEnd` once after `stream_complete`. Stop / Setup / Notification not implemented.                                                                            | **Partial** |
+| Session lifecycle hooks  | SessionStart, SessionEnd, Stop, Setup, Notification        | `onHook` fires `Setup` → `SessionStart` → … → `SessionEnd` → `Stop` on every run; `Setup` / `Stop` still bracket abort and constructor-throw paths. `Notification` is caller-emitted via `ctx.notify` or direct `onHook`.         | **Full**    |
 | Subagent hooks           | SubagentStart, SubagentStop                                | No subagent system                                                                                                                                                                                                                | **None**    |
-| Notification hook        | Forward agent status to Slack/PagerDuty/etc.               | Not implemented                                                                                                                                                                                                                   | **None**    |
+| Notification hook        | Forward agent status to Slack/PagerDuty/etc.               | `Notification` event in the `HookEvent` union; emit via `ctx.notify(level, message, context?)` from inside a tool, or call `onHook` directly. No-op when `onHook` is omitted.                                                     | **Full**    |
 | PreCompact hook          | Archive transcript before compaction                       | No compaction system                                                                                                                                                                                                              | **None**    |
 
 ### Subagents & Orchestration

@@ -122,12 +122,21 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     expect(toolResult.output).toBe('echoed:hello');
     expect(toolResult.isError).toBe(false);
 
-    // Lifecycle hooks fired in the expected order around the tool call.
+    // Lifecycle hooks fired in the expected order around the tool call:
+    // Setup → SessionStart → ... PreToolUse/PostToolUse pairs ... → SessionEnd → Stop.
     const hookNames = hookEvents.map((h) => h.event);
-    expect(hookNames[0]).toBe('SessionStart');
+    expect(hookNames[0]).toBe('Setup');
+    expect(hookNames[1]).toBe('SessionStart');
     expect(hookNames).toContain('PreToolUse');
     expect(hookNames).toContain('PostToolUse');
-    expect(hookNames.at(-1)).toBe('SessionEnd');
+    expect(hookNames.at(-2)).toBe('SessionEnd');
+    expect(hookNames.at(-1)).toBe('Stop');
+    const stop = hookEvents.find((h) => h.event === 'Stop')!.payload as Extract<
+      HookPayload,
+      { event: 'Stop' }
+    >;
+    expect(stop.status).toBe('success');
+    expect(stop.reason).toBeUndefined();
   });
 
   it('runs the tool with substituted input when canUseTool returns updatedInput', async () => {
@@ -263,14 +272,24 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     expect(complete.reason).toBe('invalid API key');
 
     // SessionStart hook never fires because session_started was never yielded.
-    // SessionEnd still fires (it bookends stream_complete) with zeroed tallies.
+    // Setup + SessionEnd + Stop still bracket the run (Stop fires regardless
+    // of completion status, Setup fires before the OR-client construction).
     const hookNames = hookEvents.map((h) => h.event);
     expect(hookNames).not.toContain('SessionStart');
-    expect(hookNames).toEqual(['SessionEnd']);
-    const sessionEnd = hookEvents[0].payload as Extract<HookPayload, { event: 'SessionEnd' }>;
+    expect(hookNames).toEqual(['Setup', 'SessionEnd', 'Stop']);
+    const sessionEnd = hookEvents.find((h) => h.event === 'SessionEnd')!.payload as Extract<
+      HookPayload,
+      { event: 'SessionEnd' }
+    >;
     expect(sessionEnd.status).toBe('error');
     expect(sessionEnd.usage).toBeNull();
     expect(sessionEnd.costUsd).toBe(0);
+    const stop = hookEvents.find((h) => h.event === 'Stop')!.payload as Extract<
+      HookPayload,
+      { event: 'Stop' }
+    >;
+    expect(stop.status).toBe('error');
+    expect(stop.reason).toBe('invalid API key');
   });
 
   it('catches an inner reject after abort and yields stream_complete{reason:aborted} via the catch arm', async () => {
@@ -591,6 +610,77 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     const events = await collect(run);
     const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
     expect(complete.status).toBe('max_turns');
+  });
+
+  it('records the full hook order Setup → SessionStart → Pre/Post pairs → SessionEnd → Stop with ctx.notify interleaved', async () => {
+    state.fixture = loadFixture('multi-turn-with-tool');
+    const hookEvents: Array<{ event: HookEvent; payload: HookPayload }> = [];
+
+    // Custom tool that fires a Notification through ctx.notify while it runs.
+    // Validates the wrapper-injected ctx.notify is reachable from user code.
+    const notifyingEcho = {
+      type: 'function' as const,
+      function: {
+        name: 'echo',
+        description: 'echoes input and emits a Notification',
+        parameters: { type: 'object', properties: { value: { type: 'string' } } },
+        execute: async (
+          input: { value: string },
+          ctx?: { notify?: (l: string, m: string, c?: unknown) => Promise<void> },
+        ) => {
+          await ctx?.notify?.('info', 'echoing', { value: input.value });
+          return `echoed:${input.value}`;
+        },
+      },
+    };
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'do work',
+      tools: [notifyingEcho] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+      onHook: (event, payload) => {
+        hookEvents.push({ event, payload });
+      },
+    });
+    await collect(run);
+
+    const names = hookEvents.map((h) => h.event);
+    // Strict ordering: Setup first, SessionStart second; SessionEnd then Stop
+    // are the last two events. Pre/Post pairs and any Notifications fall in
+    // between. Notification appears exactly once (one tool call → one notify).
+    expect(names[0]).toBe('Setup');
+    expect(names[1]).toBe('SessionStart');
+    expect(names.at(-2)).toBe('SessionEnd');
+    expect(names.at(-1)).toBe('Stop');
+    expect(names).toContain('PreToolUse');
+    expect(names).toContain('PostToolUse');
+
+    const notifications = hookEvents.filter((h) => h.event === 'Notification');
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].payload).toEqual({
+      event: 'Notification',
+      level: 'info',
+      message: 'echoing',
+      context: { value: 'hello' },
+    });
+
+    // Pre/Post pair is between Setup-bracket and SessionEnd-bracket.
+    const preIdx = names.indexOf('PreToolUse');
+    const postIdx = names.indexOf('PostToolUse');
+    const notifyIdx = names.indexOf('Notification');
+    const sessionEndIdx = names.indexOf('SessionEnd');
+    expect(preIdx).toBeGreaterThan(1);
+    expect(postIdx).toBeGreaterThan(preIdx);
+    expect(notifyIdx).toBeGreaterThan(preIdx);
+    expect(notifyIdx).toBeLessThan(postIdx);
+    expect(sessionEndIdx).toBeGreaterThan(postIdx);
+
+    const stop = hookEvents.at(-1)!.payload as Extract<HookPayload, { event: 'Stop' }>;
+    expect(stop.status).toBe('success');
+    expect(stop.reason).toBeUndefined();
   });
 
   it('runs a Zod-schema custom tool built via tool() / createSdkMcpServer end-to-end', async () => {

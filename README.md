@@ -56,7 +56,7 @@ Single-shot async iterable that drives one agent run. Construct, `for await` the
 | `permissionMode`  | `PermissionMode`    | no       | _(allow all)_                     | Named preset — `'default'` / `'acceptEdits'` / `'bypassPermissions'` / `'plan'`. Translated to an internal `canUseTool`. Explicit `canUseTool` wins when both are set (and a `warn` log is emitted).                                                                                                                                                                   |
 | `allowedTools`    | `readonly string[]` | no       | _(none)_                          | Pre-approve list. Plain name (`'read_file'` / `'Read'`) matches any invocation; scoped rules (`'Bash(npm *)'`, `'Edit(src/handlers.ts)'`) match a tool-specific argument. Layers on top of `permissionMode`; explicit `canUseTool` overrides both lists. Malformed rules throw at construction.                                                                        |
 | `disallowedTools` | `readonly string[]` | no       | _(none)_                          | Deny list with the same grammar as `allowedTools`. Denials win over both `allowedTools` and `permissionMode`. Explicit `canUseTool` overrides this list. Malformed rules throw at construction.                                                                                                                                                                        |
-| `onHook`          | `OnHook`            | no       | _(none)_                          | Lifecycle callback fired on `SessionStart`, `PreToolUse`, `PostToolUse`, `SessionEnd`. Audit-only.                                                                                                                                                                                                                                                                     |
+| `onHook`          | `OnHook`            | no       | _(none)_                          | Lifecycle callback. Auto-fired in order `Setup` → `SessionStart` → `PreToolUse`/`PostToolUse` pairs → `SessionEnd` → `Stop`. `Notification` is caller-emitted (via `ctx.notify` or direct `onHook` calls). Audit-only — thrown errors are logged and swallowed.                                                                                                        |
 | `signal`          | `AbortSignal`       | no       | _(none)_                          | External abort signal. Combined internally with the run's `abort()` method via `AbortSignal.any`.                                                                                                                                                                                                                                                                      |
 | `logsRoot`        | `string`            | no       | `<cwd>/logs`                      | Directory for session logs.                                                                                                                                                                                                                                                                                                                                            |
 | `baseUrl`         | `string`            | no       | OpenRouter production             | Override the OpenRouter API base URL.                                                                                                                                                                                                                                                                                                                                  |
@@ -155,14 +155,66 @@ Resolution order per call: `disallowedTools` (deny wins) → `allowedTools` (all
 
 #### `onHook` example
 
+Seven hook events are exposed. Six are auto-fired by the runtime in this fixed order on every run:
+
+1. `Setup` — fires once per `OpenRouterAgentRun` instance, BEFORE any other hook. Use for first-run resource provisioning (cache warmup, scratch directories, etc.). Still fires when the run is pre-aborted or the OR client constructor throws.
+2. `SessionStart` — fires after the `session_started` event yields, carrying `sessionId` / `cwd` / `model`.
+3. `PreToolUse` / `PostToolUse` — bracket each client tool call. `PreToolUse` always fires (audit, even when `canUseTool` denies); `PostToolUse.isError` mirrors the subsequent `tool_result.isError`.
+4. `SessionEnd` — fires after `stream_complete`, with the final status / usage / cost.
+5. `Stop` — fires LAST, regardless of how the run exited. Carries `status` and an optional `reason` (populated on abort or thrown-error paths).
+
+The seventh event, **`Notification`**, is NOT auto-fired. Callers emit it themselves to surface progress or errors to subscribers — either by calling `onHook` directly or by using `ctx.notify(level, message, context?)` from inside a tool. When `onHook` is omitted, `ctx.notify` is undefined on the SDK tool context, so a `ctx.notify?.(...)` call no-ops cleanly.
+
 ```ts
+import { tool } from 'openrouter-agent-coder';
+import { z } from 'zod';
+
+const indexFiles = tool({
+  name: 'index_files',
+  description: 'index files under a path',
+  inputSchema: z.object({ path: z.string() }),
+  execute: async ({ path }, ctx) => {
+    // ctx.notify is wired through onHook when one is supplied — call it
+    // unconditionally with `?.()` so the tool stays portable.
+    await (ctx as { notify?: (l: string, m: string, c?: unknown) => Promise<void> }).notify?.(
+      'info',
+      'starting index',
+      { path },
+    );
+    // ... real work ...
+    return { indexed: 42 };
+  },
+});
+
 const run = new OpenRouterAgentRun({
   apiKey,
   sessionId,
   prompt,
+  tools: [indexFiles],
   onHook: async (event, payload) => {
-    if (event === 'PreToolUse') console.log(`→ ${payload.toolName}`, payload.input);
-    if (event === 'SessionEnd') console.log(`done: ${payload.status} ($${payload.costUsd})`);
+    switch (event) {
+      case 'Setup':
+        // payload.sessionId, payload.cwd
+        break;
+      case 'SessionStart':
+        // payload.sessionId, payload.cwd, payload.model
+        break;
+      case 'PreToolUse':
+        // payload.toolName, payload.input, payload.callId
+        break;
+      case 'PostToolUse':
+        // payload.toolName, payload.input, payload.output, payload.isError, payload.callId
+        break;
+      case 'Notification':
+        // payload.level, payload.message, payload.context
+        break;
+      case 'SessionEnd':
+        // payload.status, payload.usage, payload.costUsd
+        break;
+      case 'Stop':
+        // payload.status, payload.reason?
+        break;
+    }
   },
 });
 ```
