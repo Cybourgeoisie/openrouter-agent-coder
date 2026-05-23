@@ -30,6 +30,14 @@ describe('compileRule', () => {
       expect(() => compileRule('')).toThrow(/empty/i);
       expect(() => compileRule('   ')).toThrow(/empty/i);
     });
+
+    it('throws when given a non-string input (defensive type guard)', () => {
+      // TypeScript prevents this at compile time, but compileRule is part of
+      // the public API and may be reached from untyped callers — exercise the
+      // typeof guard so it stays load-bearing.
+      expect(() => compileRule(undefined as unknown as string)).toThrow(/expected string/i);
+      expect(() => compileRule(42 as unknown as string)).toThrow(/expected string/i);
+    });
   });
 
   describe('Bash(<command pattern>)', () => {

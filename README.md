@@ -81,6 +81,41 @@ Discriminated union yielded by `for await (... of run)`. Narrow on `event.type`.
 
 `HookEvent` and `HookPayload` are separately exported for `onHook` consumers; they are not part of `AgentCoreEvent`.
 
+### Message-level stream
+
+`run.messages()` returns an `AsyncIterable<AgentMessage>` — a typed, aggregated view over the same run as the event stream above. Text deltas within a turn collapse into a single `AssistantMessage.content.TextContent`; tool calls within the same turn append to that message's `content` array; tool results emit a `UserMessage`; the run begins with a `SystemMessage{subtype:'session_start'}` and terminates with a `ResultMessage` followed by `SystemMessage{subtype:'session_end'}`.
+
+```ts
+import { OpenRouterAgentRun, type AgentMessage } from 'openrouter-agent-coder';
+
+const run = new OpenRouterAgentRun({ apiKey, sessionId, prompt });
+for await (const msg of run.messages()) {
+  switch (msg.type) {
+    case 'system':
+      // msg.subtype === 'session_start' | 'session_end'
+      break;
+    case 'assistant':
+      // msg.content is an Array<TextContent | ToolUseContent>
+      break;
+    case 'user':
+      // msg.content[0] is a ToolResultContent
+      break;
+    case 'result':
+      // msg.status / usage / costUsd / durationMs / reason
+      break;
+  }
+}
+```
+
+| Message            | Aggregation rule                                                                                                                                                           |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SystemMessage`    | One at the start (`session_start`) and one at the end (`session_end`), both carrying `sessionId`.                                                                          |
+| `AssistantMessage` | One per turn that produced text and/or tool calls. `text_delta`s concatenate into a `TextContent`; each `tool_call` becomes a `ToolUseContent`. Empty turns yield nothing. |
+| `UserMessage`      | One per `tool_result`. `output` is always stringified. Flushes any open `AssistantMessage` first so model output precedes its tool answer.                                 |
+| `ResultMessage`    | Mirrors `stream_complete` (status / usage / costUsd / durationMs / reason). Always followed by `SystemMessage{session_end}`.                                               |
+
+**One consumer per run.** `OpenRouterAgentRun` is single-shot — pick either `for await (... of run)` (raw events) **or** `run.messages()` (typed messages). The second call throws. Text and tool blocks within a single turn can interleave inside one `AssistantMessage` (Claude SDK parity: a tool call followed by more text opens a fresh `TextContent` after the `ToolUseContent`).
+
 #### `canUseTool` example
 
 ```ts

@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `run.messages()` method on `OpenRouterAgentRun` returning an
+  `AsyncIterable<AgentMessage>` — a typed message-level view of the run
+  aggregated from the underlying `AgentCoreEvent` stream. Yields a fixed
+  sequence per run: `SystemMessage{subtype:'session_start'}` →
+  per-turn `AssistantMessage` / `UserMessage` blocks → `ResultMessage` →
+  `SystemMessage{subtype:'session_end'}`. Aggregation rules: `text_delta`s
+  within a turn concatenate into a single `TextContent`; `tool_call`s within
+  the same turn append `ToolUseContent` blocks to the same `AssistantMessage`
+  (text and tool blocks interleave in event order — Claude SDK parity);
+  `tool_result` flushes any open `AssistantMessage` and emits a `UserMessage`
+  carrying one stringified `ToolResultContent`; `turn_end` flushes any open
+  `AssistantMessage` (empty turns yield nothing). Abort flushes any open
+  `AssistantMessage` before the terminal `ResultMessage`, so no buffered
+  content is lost. New exports from the library entry point: `AgentMessage`,
+  `SystemMessage`, `AssistantMessage`, `UserMessage`, `ResultMessage`,
+  `TextContent`, `ToolUseContent`, `ToolResultContent`. **One consumer per
+  run** — `for await (... of run)` (raw events) and `run.messages()` (typed
+  messages) are mutually exclusive on the same instance; the second call
+  throws (single-shot guard). Existing event-stream consumers are entirely
+  unaffected. ([#47](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/47))
 - `PreToolUseAction` discriminated union (`{ action: 'continue' }` /
   `{ action: 'block'; reason: string }` / `{ action: 'modify'; input: unknown }`)
   exported from the library. `onHook` handlers may now return one of these

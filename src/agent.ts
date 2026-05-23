@@ -31,6 +31,7 @@ import type {
 import { permissionModeToCanUseTool, type PermissionMode } from './permission-modes.js';
 import { buildToolFilterCanUseTool } from './tool-filters.js';
 import { composeInstructions, type SettingSource } from './context-discovery.js';
+import { aggregateMessages, type AgentMessage } from './messages.js';
 
 const DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
 const DEFAULT_MAX_TURNS = 25;
@@ -341,6 +342,25 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     }
     this.consumed = true;
     return this.iterate();
+  }
+
+  /**
+   * Aggregated message-level view of the run. Drains the underlying
+   * {@link AgentCoreEvent} stream and yields typed
+   * {@link AgentMessage}s — `SystemMessage(session_start)` → per-turn
+   * `AssistantMessage` / `UserMessage` → `ResultMessage` →
+   * `SystemMessage(session_end)`.
+   *
+   * **One consumer per run.** A single {@link OpenRouterAgentRun} instance is
+   * single-shot; iterating it via `for await (... of run)` AND via
+   * `run.messages()` is unsupported (the second call throws). Pick whichever
+   * view you need — the message stream is an opt-in alternative, not a
+   * supplement, to the raw event stream.
+   *
+   * See {@link aggregateMessages} for the precise event → message rules.
+   */
+  messages(): AsyncIterable<AgentMessage> {
+    return aggregateMessages(this, this.opts.sessionId);
   }
 
   private async *iterate(): AsyncGenerator<AgentCoreEvent> {
