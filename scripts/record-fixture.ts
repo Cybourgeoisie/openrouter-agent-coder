@@ -88,8 +88,21 @@ function makeEchoTool(): Tool {
   });
 }
 
+function makeRunCommandTool(): Tool {
+  return tool({
+    name: 'run_command',
+    description:
+      'Runs a shell command and returns its output. Use exactly once when asked, then stop.',
+    inputSchema: z.object({
+      command: z.string().describe('The shell command to run'),
+    }),
+    execute: async ({ command }) => `ran:${command}`,
+  });
+}
+
 const TOOL_REGISTRY: Record<string, () => Tool> = {
   echo: makeEchoTool,
+  run_command: makeRunCommandTool,
 };
 
 function buildTools(names: readonly string[]): Tool[] {

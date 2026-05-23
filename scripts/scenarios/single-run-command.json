@@ -1,0 +1,7 @@
+{
+  "prompt": "Call the `run_command` tool exactly once with command=\"ls\" to list the files in the current directory. Once you see the tool result, reply with a single word: done",
+  "tools": ["run_command"],
+  "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Make tool calls when asked; otherwise reply with the exact requested text.",
+  "maxTurns": 3,
+  "maxCostUsd": 0.1
+}
