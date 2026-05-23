@@ -159,7 +159,7 @@ Seven hook events are exposed. Six are auto-fired by the runtime in this fixed o
 
 1. `Setup` — fires once per `OpenRouterAgentRun` instance, BEFORE any other hook. Use for first-run resource provisioning (cache warmup, scratch directories, etc.). Still fires when the run is pre-aborted or the OR client constructor throws.
 2. `SessionStart` — fires after the `session_started` event yields, carrying `sessionId` / `cwd` / `model`.
-3. `PreToolUse` / `PostToolUse` — bracket each client tool call. `PreToolUse` always fires (audit, even when `canUseTool` denies); `PostToolUse.isError` mirrors the subsequent `tool_result.isError`.
+3. `PreToolUse` / `PostToolUse` — bracket each client tool call. `PreToolUse` always fires (audit, even when `canUseTool` denies); `PostToolUse.isError` mirrors the subsequent `tool_result.isError`. `PreToolUse` MAY return a `PreToolUseAction` to `block` or `modify` the call (see ["Hook + canUseTool precedence"](#hook--canusetool-precedence) below); a `void`/`undefined` return is treated as `continue` (audit-only — the historical contract).
 4. `SessionEnd` — fires after `stream_complete`, with the final status / usage / cost.
 5. `Stop` — fires LAST, regardless of how the run exited. Carries `status` and an optional `reason` (populated on abort or thrown-error paths).
 
@@ -201,9 +201,25 @@ const run = new OpenRouterAgentRun({
         break;
       case 'PreToolUse':
         // payload.toolName, payload.input, payload.callId
-        break;
+        //
+        // Optional return value of type `PreToolUseAction`:
+        //   { action: 'continue' }                  — proceed (same as void)
+        //   { action: 'block', reason: 'why' }     — synth-deny the call
+        //   { action: 'modify', input: { ... } }   — substitute the input
+        if (payload.toolName === 'run_command') {
+          const cmd = (payload.input as { command?: string }).command ?? '';
+          if (cmd.startsWith('rm ')) {
+            return { action: 'block', reason: 'rm not allowed by audit hook' };
+          }
+          if (cmd.startsWith('npm test')) {
+            return { action: 'modify', input: { command: `${cmd} --reporter=dot` } };
+          }
+        }
+        return; // void / undefined === { action: 'continue' }
       case 'PostToolUse':
         // payload.toolName, payload.input, payload.output, payload.isError, payload.callId
+        // For hook-blocked calls, isError=true and output is the same
+        // `{ error, denied: true }` JSON the canUseTool-deny path produces.
         break;
       case 'Notification':
         // payload.level, payload.message, payload.context
@@ -218,6 +234,28 @@ const run = new OpenRouterAgentRun({
   },
 });
 ```
+
+##### Hook + canUseTool precedence
+
+When `PreToolUse` returns a `PreToolUseAction` and `canUseTool` is also set, evaluation order per call is:
+
+1. `PreToolUse` fires.
+   - `block` → tool is NOT executed; a synth-denial `tool_result` (shape `{ error: reason, denied: true }`) is surfaced and `PostToolUse` still fires with `isError: true` carrying the synth output. `canUseTool` is **never** consulted.
+   - `modify` → the substituted `input` becomes the effective input for the rest of the call.
+   - `continue` (or `void`) → no change.
+2. `canUseTool` runs against the (possibly modified) input. It may still `deny` — that deny wins.
+3. The tool executes with whatever input survived steps 1–2.
+
+Precedence rules to remember:
+
+- **Hook-`block` beats `canUseTool`-allow.** The hook fires first; blocking short-circuits the composition before `canUseTool` is even called.
+- **`canUseTool`-`deny` beats hook-`continue`/`modify`.** The hook lets the call through; `canUseTool` is the second gate and can still refuse. The `tool_result` carries `canUseTool`'s reason (not the hook's), so denial sources are distinguishable.
+
+Other invariants:
+
+- `tool_call` event payloads always reflect the **original** input — `modify` is invisible at the event-stream layer except via the eventual `tool_result`. `PreToolUse.input` and `PostToolUse.input` likewise stay original (matching how `canUseTool`'s `updatedInput` is invisible on `PostToolUse`).
+- A throw from a `PreToolUse` handler is logged via `logger` and treated as `continue` — never silently translated into a `block`. A malformed return shape is treated the same way, with a `warn` log naming the offending action.
+- Backward compatible: handlers that return `void` from `PreToolUse` (the pre-3.7 contract) work unchanged.
 
 #### Project context discovery example
 

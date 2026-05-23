@@ -2948,3 +2948,646 @@ describe('OpenRouterAgentRun onHook (Phase 3.6 — Setup / Stop / Notification)'
     expect(stopErrLog).toBeDefined();
   });
 });
+
+describe('OpenRouterAgentRun onHook PreToolUse block/modify (Phase 3.7)', () => {
+  function singleToolCallModel(args: {
+    toolName: string;
+    callId: string;
+    input: unknown;
+    capturedExec?: (i: unknown) => void;
+  }) {
+    return (request: {
+      tools: Array<{ function: { name: string; execute?: (i: unknown, c?: unknown) => unknown } }>;
+    }) => {
+      const tool = request.tools.find((t) => t.function.name === args.toolName);
+      return {
+        async *getFullResponsesStream() {
+          yield { type: 'turn.start', turnNumber: 0 };
+          yield {
+            type: 'response.output_item.done',
+            outputIndex: 0,
+            sequenceNumber: 1,
+            item: {
+              type: 'function_call',
+              callId: args.callId,
+              name: args.toolName,
+              arguments: JSON.stringify(args.input),
+            },
+          };
+          let output: unknown;
+          let status: 'completed' | 'incomplete' = 'completed';
+          try {
+            output = await tool!.function.execute!(args.input, {
+              toolCall: { callId: args.callId },
+            });
+          } catch (e) {
+            output = (e as Error).message;
+            status = 'incomplete';
+          }
+          yield {
+            type: 'tool.call_output',
+            timestamp: 1,
+            output: {
+              callId: args.callId,
+              type: 'function_call_output',
+              output,
+              status,
+            },
+          };
+          yield { type: 'turn.end', turnNumber: 0 };
+        },
+        async getResponse() {
+          return {
+            id: 'r',
+            model: 'm',
+            usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            output: [],
+          };
+        },
+      };
+    };
+  }
+
+  function makeEchoTool(execSpy?: (input: unknown) => void) {
+    return {
+      type: 'function' as const,
+      function: {
+        name: 'echo_tool',
+        description: 'echo',
+        execute: async (input: unknown) => {
+          execSpy?.(input);
+          return { echoed: input };
+        },
+      },
+    };
+  }
+
+  it('PreToolUse returning { action: "block", reason } short-circuits with the canUseTool-deny payload shape and isError:true', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'echo_tool', callId: 'c-block', input: { x: 1 } }),
+    );
+
+    const hookCalls: Array<{ event: string; payload: unknown }> = [];
+    const onHook = vi.fn(async (event: string, payload: unknown) => {
+      hookCalls.push({ event, payload });
+      if (event === 'PreToolUse') {
+        return { action: 'block' as const, reason: 'forbidden by audit policy' };
+      }
+      return undefined;
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+      onHook,
+    });
+    const events = await collect(run);
+
+    // Tool execute is NEVER reached.
+    expect(execSpy).not.toHaveBeenCalled();
+
+    // tool_result payload matches the existing canUseTool-deny shape exactly.
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(String(result.output))).toEqual({
+      error: 'forbidden by audit policy',
+      denied: true,
+    });
+
+    // PostToolUse still fires (audit invariant from 1.7) with the synth-deny output.
+    const post = hookCalls.find((c) => c.event === 'PostToolUse')!.payload as {
+      output: string;
+      isError: boolean;
+      input: unknown;
+    };
+    expect(post.isError).toBe(true);
+    expect(JSON.parse(String(post.output))).toEqual({
+      error: 'forbidden by audit policy',
+      denied: true,
+    });
+    // PostToolUse.input mirrors the ORIGINAL input (block didn't modify it).
+    expect(post.input).toEqual({ x: 1 });
+  });
+
+  it('PreToolUse returning { action: "modify", input } substitutes the input for execute (and canUseTool sees the modified value)', async () => {
+    const execSpy = vi.fn();
+    const canUseTool = vi.fn().mockResolvedValue({ behavior: 'allow' });
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'echo_tool',
+        callId: 'c-modify',
+        input: { msg: 'original' },
+      }),
+    );
+
+    const onHook = vi.fn(async (event: string) => {
+      if (event === 'PreToolUse') {
+        return { action: 'modify' as const, input: { msg: 'rewritten' } };
+      }
+      return undefined;
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+      canUseTool,
+      onHook,
+    });
+    const events = await collect(run);
+
+    // canUseTool sees the MODIFIED input.
+    expect(canUseTool).toHaveBeenCalledWith('echo_tool', { msg: 'rewritten' });
+    // Tool execute receives the MODIFIED input.
+    expect(execSpy).toHaveBeenCalledTimes(1);
+    expect(execSpy).toHaveBeenCalledWith({ msg: 'rewritten' });
+    // tool_result wraps the modified-input echo.
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.output).toEqual({ echoed: { msg: 'rewritten' } });
+  });
+
+  it('tool_call event reflects the ORIGINAL input even when PreToolUse modify is applied', async () => {
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'echo_tool',
+        callId: 'c-mod-event',
+        input: { keep: 'original' },
+      }),
+    );
+
+    const onHook = vi.fn(async (event: string) => {
+      if (event === 'PreToolUse') {
+        return { action: 'modify' as const, input: { swapped: 'now' } };
+      }
+      return undefined;
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool()] as unknown as never,
+      onHook,
+    });
+    const events = await collect(run);
+
+    const toolCall = events.find((e) => e.type === 'tool_call') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_call' }
+    >;
+    expect(toolCall.input).toEqual({ keep: 'original' });
+  });
+
+  it('canUseTool=deny beats hook=continue (deny wins; hook reason absent)', async () => {
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'echo_tool', callId: 'c-cont-deny', input: {} }),
+    );
+    const onHook = vi.fn(async () => undefined); // void = continue
+    const canUseTool = vi.fn().mockResolvedValue({ behavior: 'deny', reason: 'policy says no' });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool()] as unknown as never,
+      canUseTool,
+      onHook,
+    });
+    const events = await collect(run);
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(String(result.output))).toEqual({
+      error: 'policy says no',
+      denied: true,
+    });
+  });
+
+  it('canUseTool=deny beats hook=modify (deny sees modified input and still wins)', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'echo_tool',
+        callId: 'c-mod-deny',
+        input: { msg: 'original' },
+      }),
+    );
+    const onHook = vi.fn(async (event: string) => {
+      if (event === 'PreToolUse') {
+        return { action: 'modify' as const, input: { msg: 'modified-and-denied' } };
+      }
+      return undefined;
+    });
+    // canUseTool denies regardless — and captures the input it saw.
+    const seen: unknown[] = [];
+    const canUseTool = vi.fn(async (_name: string, input: unknown) => {
+      seen.push(input);
+      return { behavior: 'deny' as const, reason: 'denied even after modify' };
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+      canUseTool,
+      onHook,
+    });
+    const events = await collect(run);
+
+    expect(execSpy).not.toHaveBeenCalled();
+    expect(seen).toEqual([{ msg: 'modified-and-denied' }]);
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(JSON.parse(String(result.output))).toEqual({
+      error: 'denied even after modify',
+      denied: true,
+    });
+  });
+
+  it('hook=block beats canUseTool=allow (canUseTool never consulted, hook reason in payload)', async () => {
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'echo_tool', callId: 'c-block-allow', input: {} }),
+    );
+    const onHook = vi.fn(async (event: string) => {
+      if (event === 'PreToolUse') return { action: 'block' as const, reason: 'hook says no' };
+      return undefined;
+    });
+    const canUseTool = vi.fn().mockResolvedValue({ behavior: 'allow' });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool()] as unknown as never,
+      canUseTool,
+      onHook,
+    });
+    const events = await collect(run);
+
+    // canUseTool was NEVER asked because block short-circuited before composition entered it.
+    expect(canUseTool).not.toHaveBeenCalled();
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(JSON.parse(String(result.output))).toEqual({ error: 'hook says no', denied: true });
+  });
+
+  it('hook=block beats canUseTool=deny (block fires first; canUseTool never consulted)', async () => {
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'echo_tool', callId: 'c-block-deny', input: {} }),
+    );
+    const onHook = vi.fn(async (event: string) => {
+      if (event === 'PreToolUse') return { action: 'block' as const, reason: 'hook reason wins' };
+      return undefined;
+    });
+    const canUseTool = vi.fn().mockResolvedValue({ behavior: 'deny', reason: 'canUse reason' });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool()] as unknown as never,
+      canUseTool,
+      onHook,
+    });
+    const events = await collect(run);
+    expect(canUseTool).not.toHaveBeenCalled();
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(JSON.parse(String(result.output))).toEqual({
+      error: 'hook reason wins',
+      denied: true,
+    });
+  });
+
+  it('hook=modify + canUseTool=allow → tool executes with MODIFIED input (layered modify is observable)', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'echo_tool',
+        callId: 'c-mod-allow',
+        input: { layer: 0 },
+      }),
+    );
+    const onHook = vi.fn(async (event: string) => {
+      if (event === 'PreToolUse') return { action: 'modify' as const, input: { layer: 1 } };
+      return undefined;
+    });
+    const canUseTool = vi.fn().mockResolvedValue({ behavior: 'allow' });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+      canUseTool,
+      onHook,
+    });
+    await collect(run);
+
+    expect(canUseTool).toHaveBeenCalledWith('echo_tool', { layer: 1 });
+    expect(execSpy).toHaveBeenCalledWith({ layer: 1 });
+  });
+
+  it('returning void from PreToolUse is unchanged behaviour — tool runs with original input (backward compat)', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'echo_tool',
+        callId: 'c-void',
+        input: { v: true },
+      }),
+    );
+    const onHook = vi.fn(async () => {
+      // explicit void return — the historical hook shape
+      return undefined;
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+      onHook,
+    });
+    const events = await collect(run);
+
+    expect(execSpy).toHaveBeenCalledWith({ v: true });
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(false);
+  });
+
+  it('explicit { action: "continue" } return is equivalent to void (tool runs with original input)', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'echo_tool', callId: 'c-cont', input: { c: 1 } }),
+    );
+    const onHook = vi.fn(async (event: string) => {
+      if (event === 'PreToolUse') return { action: 'continue' as const };
+      return undefined;
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+      onHook,
+    });
+    await collect(run);
+    expect(execSpy).toHaveBeenCalledWith({ c: 1 });
+  });
+
+  it('thrown PreToolUse handler is treated as continue (tool runs); error is logged but NOT translated into a block', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'echo_tool', callId: 'c-throw', input: { ok: 1 } }),
+    );
+
+    const logCalls: Array<[string, string, Record<string, unknown> | undefined]> = [];
+    const logger = (
+      level: 'debug' | 'info' | 'warn' | 'error',
+      msg: string,
+      fields?: Record<string, unknown>,
+    ): void => {
+      logCalls.push([level, msg, fields]);
+    };
+
+    const onHook = vi.fn(async (event: string) => {
+      if (event === 'PreToolUse') throw new Error('hook crash');
+      return undefined;
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+      onHook,
+      logger,
+    });
+    const events = await collect(run);
+
+    // Tool execute STILL ran — the throw is not converted to a deny.
+    expect(execSpy).toHaveBeenCalledWith({ ok: 1 });
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(false);
+    // The PreToolUse error is logged via the existing safeFireHook swallow.
+    const preErrLog = logCalls.find(
+      ([level, msg, fields]) =>
+        level === 'error' &&
+        msg === 'Hook threw' &&
+        (fields as { event?: string } | undefined)?.event === 'PreToolUse',
+    );
+    expect(preErrLog).toBeDefined();
+  });
+
+  it('PostToolUse fires (isError:true, synth-deny output) on hook-block — Pre/Post pair invariant', async () => {
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'echo_tool', callId: 'c-pair', input: {} }),
+    );
+    const hookCalls: Array<{ event: string; payload: unknown }> = [];
+    const onHook = vi.fn(async (event: string, payload: unknown) => {
+      hookCalls.push({ event, payload });
+      if (event === 'PreToolUse') return { action: 'block' as const, reason: 'audit deny' };
+      return undefined;
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool()] as unknown as never,
+      onHook,
+    });
+    await collect(run);
+
+    const pre = hookCalls.find((c) => c.event === 'PreToolUse')!;
+    const post = hookCalls.find((c) => c.event === 'PostToolUse')!;
+    expect(pre).toBeDefined();
+    expect(post).toBeDefined();
+    // Same callId across the pair.
+    expect((pre.payload as { callId: string }).callId).toBe(
+      (post.payload as { callId: string }).callId,
+    );
+    const postPayload = post.payload as { isError: boolean; output: string };
+    expect(postPayload.isError).toBe(true);
+    expect(JSON.parse(postPayload.output)).toEqual({ error: 'audit deny', denied: true });
+  });
+
+  it('malformed PreToolUse return → treated as continue with a warn log; tool still runs', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'echo_tool', callId: 'c-malformed', input: { m: 1 } }),
+    );
+
+    const logCalls: Array<[string, string, Record<string, unknown> | undefined]> = [];
+    const logger = (
+      level: 'debug' | 'info' | 'warn' | 'error',
+      msg: string,
+      fields?: Record<string, unknown>,
+    ): void => {
+      logCalls.push([level, msg, fields]);
+    };
+    const onHook = vi.fn(async (event: string) => {
+      if (event === 'PreToolUse') {
+        // Returning a non-action-shaped object — should be treated as continue.
+        return { not_an_action: true } as unknown as undefined;
+      }
+      return undefined;
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+      onHook,
+      logger,
+    });
+    await collect(run);
+
+    expect(execSpy).toHaveBeenCalledWith({ m: 1 });
+    const warnLog = logCalls.find(
+      ([level, msg]) =>
+        level === 'warn' && msg.startsWith('PreToolUse handler returned unrecognised action'),
+    );
+    expect(warnLog).toBeDefined();
+  });
+
+  it('block with non-string reason → treated as continue with a warn log (tool runs)', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'echo_tool', callId: 'c-block-bad', input: {} }),
+    );
+    const logCalls: Array<[string, string, Record<string, unknown> | undefined]> = [];
+    const logger = (
+      level: 'debug' | 'info' | 'warn' | 'error',
+      msg: string,
+      fields?: Record<string, unknown>,
+    ): void => {
+      logCalls.push([level, msg, fields]);
+    };
+    const onHook = vi.fn(async (event: string) => {
+      if (event === 'PreToolUse') {
+        return { action: 'block', reason: 42 } as unknown as undefined;
+      }
+      return undefined;
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+      onHook,
+      logger,
+    });
+    await collect(run);
+
+    expect(execSpy).toHaveBeenCalled();
+    const warnLog = logCalls.find(
+      ([level, msg]) =>
+        level === 'warn' && msg.startsWith('PreToolUse block action missing string `reason`'),
+    );
+    expect(warnLog).toBeDefined();
+  });
+
+  it('modify with missing `input` field → treated as continue with a warn log (tool runs with original input)', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'echo_tool', callId: 'c-mod-bad', input: { o: 1 } }),
+    );
+    const logCalls: Array<[string, string, Record<string, unknown> | undefined]> = [];
+    const logger = (
+      level: 'debug' | 'info' | 'warn' | 'error',
+      msg: string,
+      fields?: Record<string, unknown>,
+    ): void => {
+      logCalls.push([level, msg, fields]);
+    };
+    const onHook = vi.fn(async (event: string) => {
+      if (event === 'PreToolUse') {
+        return { action: 'modify' } as unknown as undefined;
+      }
+      return undefined;
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+      onHook,
+      logger,
+    });
+    await collect(run);
+
+    expect(execSpy).toHaveBeenCalledWith({ o: 1 });
+    const warnLog = logCalls.find(
+      ([level, msg]) =>
+        level === 'warn' && msg.startsWith('PreToolUse modify action missing `input` field'),
+    );
+    expect(warnLog).toBeDefined();
+  });
+
+  it('PreToolUse returning a primitive (non-object) → continue, warn logged, tool runs', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({ toolName: 'echo_tool', callId: 'c-prim', input: {} }),
+    );
+    const logCalls: Array<[string, string, Record<string, unknown> | undefined]> = [];
+    const logger = (
+      level: 'debug' | 'info' | 'warn' | 'error',
+      msg: string,
+      fields?: Record<string, unknown>,
+    ): void => {
+      logCalls.push([level, msg, fields]);
+    };
+    const onHook = vi.fn(async (event: string) => {
+      if (event === 'PreToolUse') return 'just a string' as unknown as undefined;
+      return undefined;
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+      onHook,
+      logger,
+    });
+    await collect(run);
+
+    expect(execSpy).toHaveBeenCalled();
+    const warnLog = logCalls.find(
+      ([level, msg]) =>
+        level === 'warn' && msg.startsWith('PreToolUse handler returned a non-object'),
+    );
+    expect(warnLog).toBeDefined();
+  });
+});

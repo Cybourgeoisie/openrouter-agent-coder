@@ -22,6 +22,7 @@ export type {
   AgentCoreEventStatus,
   HookEvent,
   HookPayload,
+  PreToolUseAction,
   TokenUsage,
 } from './events.js';
 export { allTools, DEFAULT_TOOL_CONTEXT } from './tools/index.js';

@@ -95,3 +95,29 @@ export type HookPayload =
       message: string;
       context?: unknown;
     };
+
+/**
+ * Optional return value from a `PreToolUse` hook handler. Returning `void` (or
+ * `undefined`) is equivalent to `{ action: 'continue' }` — the tool call
+ * proceeds with the original input. The other two variants short-circuit or
+ * mutate the call before `canUseTool` runs:
+ *
+ * - `block` — the tool is NOT executed. A synthetic denial result is surfaced
+ *   as `tool_result.isError = true` with the same payload shape `canUseTool`'s
+ *   deny path produces (`JSON.stringify({ error: reason, denied: true })`),
+ *   and `PostToolUse` still fires with the synth output so audit consumers see
+ *   a matched Pre/Post pair.
+ * - `modify` — the substituted `input` becomes the effective input for the
+ *   remainder of the call: `canUseTool` (if any) sees the modified input, and
+ *   so does the tool's `execute`. The `tool_call` event already yielded to the
+ *   consumer still reflects the ORIGINAL input — `modify` is invisible at the
+ *   event-stream layer except via the eventual `tool_result`.
+ *
+ * Only the `PreToolUse` event reads this return value. Every other hook event
+ * stays void-returning; the return type for the union widens just enough to
+ * remain backward-compatible without forcing handlers to switch on `event`.
+ */
+export type PreToolUseAction =
+  | { action: 'continue' }
+  | { action: 'block'; reason: string }
+  | { action: 'modify'; input: unknown };
