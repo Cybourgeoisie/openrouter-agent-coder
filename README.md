@@ -115,6 +115,23 @@ const run = new OpenRouterAgentRun({
 
 When both `permissionMode` and `canUseTool` are supplied, the explicit `canUseTool` wins and a `'warn'`-level log is emitted via `logger`.
 
+##### Plan mode
+
+`permissionMode: 'plan'` denies every write/exec tool — `write_file`, `edit_file`, and `run_command` — while letting `read_file`, `list_directory`, and `grep_files` through. Use it when you want the model to explore the codebase and propose changes textually rather than applying them. The deny reason surfaced to the model on the blocked `tool_result` is `'plan mode: read-only — propose edits in your reply'` (a hint that it should describe edits in its next message instead of retrying the call); other modes still use the generic `'requires approval'`.
+
+To poke a hole for a single tool (a custom tool you trust, or an explicit Bash command), layer `allowedTools` on top — its rules win over the plan-mode gate. `canUseTool` (the explicit callback) overrides plan mode entirely:
+
+```ts
+const run = new OpenRouterAgentRun({
+  apiKey,
+  sessionId,
+  prompt,
+  permissionMode: 'plan',
+  // Still allow the model to invoke a read-only custom analyzer tool.
+  allowedTools: ['my_analyzer'],
+});
+```
+
 #### `allowedTools` / `disallowedTools` example
 
 ```ts

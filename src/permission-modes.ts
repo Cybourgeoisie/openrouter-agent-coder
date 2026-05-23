@@ -9,10 +9,11 @@ import type { CanUseTool, CanUseToolResult } from './agent.js';
  * - `default` — read-only tools (`read_file`, `list_directory`, `grep_files`)
  *   pass; everything else is denied with reason `'requires approval'`.
  * - `acceptEdits` — read-only + edit-style writers (`write_file`, `edit_file`)
- *   pass; `run_command` is denied.
+ *   pass; `run_command` is denied with reason `'requires approval'`.
  * - `bypassPermissions` — allow every tool. Equivalent to omitting the option.
- * - `plan` — strictly read-only; even edit-style writers are denied. Source of
- *   truth for the Plan-mode card (3.3).
+ * - `plan` — strictly read-only; even edit-style writers are denied with
+ *   reason `'plan mode: read-only — propose edits in your reply'`, signalling
+ *   to the model that it should draft a plan rather than retry the call.
  *
  * Server-side tools (`datetime`, `web_search`, `web_fetch`) execute on
  * OpenRouter's backend and bypass `canUseTool` entirely, so no permission mode
@@ -31,20 +32,33 @@ const ALLOWED_BY_MODE: Record<PermissionMode, ReadonlySet<string> | null> = {
 };
 
 /**
+ * Per-mode deny reason surfaced to the model via the `tool_result` payload.
+ * `plan` carries copy that nudges the model toward drafting a textual plan
+ * rather than retrying the blocked call; the other modes keep the canonical
+ * generic phrasing. `bypassPermissions` never denies — its entry is unused
+ * but present to keep the record total.
+ */
+const DENY_REASON_BY_MODE: Record<PermissionMode, string> = {
+  default: 'requires approval',
+  acceptEdits: 'requires approval',
+  plan: 'plan mode: read-only — propose edits in your reply',
+  bypassPermissions: '',
+};
+
+/**
  * Translate a {@link PermissionMode} into a {@link CanUseTool} closure. The
- * allow-set is captured once per call; the returned function is allocation-free
- * per tool decision. Denials surface the canonical Phase 1.4 deny shape
- * (`{ behavior: 'deny', reason: 'requires approval' }`), which the agent's
- * permission wrapper turns into a `JSON.stringify({ error, denied: true })`
- * tool-result payload.
+ * allow-set and deny reason are captured once per call; the returned function
+ * is allocation-free per tool decision. Denials surface the canonical Phase
+ * 1.4 deny shape (`{ behavior: 'deny', reason: <mode-specific text> }`),
+ * which the agent's permission wrapper turns into a
+ * `JSON.stringify({ error, denied: true })` tool-result payload.
  */
 export function permissionModeToCanUseTool(mode: PermissionMode): CanUseTool {
   const allowed = ALLOWED_BY_MODE[mode];
   if (allowed === null) {
     return (): CanUseToolResult => ({ behavior: 'allow' });
   }
+  const reason = DENY_REASON_BY_MODE[mode];
   return (toolName: string): CanUseToolResult =>
-    allowed.has(toolName)
-      ? { behavior: 'allow' }
-      : { behavior: 'deny', reason: 'requires approval' };
+    allowed.has(toolName) ? { behavior: 'allow' } : { behavior: 'deny', reason };
 }
