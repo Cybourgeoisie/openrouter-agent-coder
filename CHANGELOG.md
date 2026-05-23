@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Two optional input fields on the `run_command` tool schema:
+  `description` (free-text advisory note from the model, forwarded through
+  `tool_call.input` — never gates execution, never appears in stdout/stderr)
+  and `timeout_ms` (overrides the default 30s timeout). `timeout_ms` is
+  clamped at `MAX_TIMEOUT_MS = 600_000` (10 minutes); when an over-cap value
+  is supplied the tool emits a single `ctx.notify('warn', …, { requestedMs,
+effectiveMs })` and proceeds with the clamped value (never throws). The
+  existing SIGTERM + 250ms grace → SIGKILL escalation now applies to the
+  timeout path as well, matching the long-standing abort-path behaviour;
+  the abort path itself is unchanged. `MAX_TIMEOUT_MS` is exported from
+  `src/tools/run-command.ts`. Existing callers that pass neither field see
+  no behavioural change. ([#48](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/48))
 - `run.messages()` method on `OpenRouterAgentRun` returning an
   `AsyncIterable<AgentMessage>` — a typed message-level view of the run
   aggregated from the underlying `AgentCoreEvent` stream. Yields a fixed

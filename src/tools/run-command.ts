@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
 
 const TIMEOUT_MS = 30_000;
+export const MAX_TIMEOUT_MS = 600_000;
 const KILL_GRACE_MS = 250;
 
 export interface RunCommandResult {
@@ -17,7 +18,7 @@ export function runCommandTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
   return tool({
     name: 'run_command',
     description:
-      'Execute a shell command and return stdout/stderr. Use for running tests, builds, git commands, etc. Commands time out after 30 seconds.',
+      'Execute a shell command and return stdout/stderr. Use for running tests, builds, git commands, etc. Commands time out after 30 seconds by default; pass timeout_ms (clamped at 10 minutes) to override.',
     inputSchema: z.object({
       command: z.string().describe('The shell command to execute'),
       cwd: z
@@ -26,10 +27,34 @@ export function runCommandTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
           "Working directory for the command. Resolved against the run's cwd if relative. Omit to inherit the run's cwd.",
         )
         .optional(),
+      description: z
+        .string()
+        .describe(
+          'Optional, advisory free-text note from the model explaining the intent behind this call. Purely informational — not interpreted by the tool, not echoed to stdout/stderr.',
+        )
+        .optional(),
+      timeout_ms: z
+        .number()
+        .int()
+        .positive()
+        .describe(
+          'Optional override for the timeout in milliseconds. Default 30000. Clamped to a maximum of 600000 (10 minutes); a warn notification is emitted when clamping fires.',
+        )
+        .optional(),
     }),
-    execute: async ({ command, cwd: argCwd }): Promise<RunCommandResult> => {
+    execute: async ({ command, cwd: argCwd, timeout_ms }): Promise<RunCommandResult> => {
       if (ctx.signal?.aborted) {
         return { exitCode: 1, stdout: '', stderr: 'run_command cancelled before start' };
+      }
+
+      let effectiveTimeoutMs = timeout_ms ?? TIMEOUT_MS;
+      if (effectiveTimeoutMs > MAX_TIMEOUT_MS) {
+        const requestedMs = effectiveTimeoutMs;
+        effectiveTimeoutMs = MAX_TIMEOUT_MS;
+        await ctx.notify?.('warn', 'run_command timeout_ms exceeds MAX_TIMEOUT_MS, clamping', {
+          requestedMs,
+          effectiveMs: effectiveTimeoutMs,
+        });
       }
 
       const effectiveCwd = argCwd ? resolve(ctx.cwd, argCwd) : ctx.cwd;
@@ -51,7 +76,14 @@ export function runCommandTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
           } catch {
             /* already gone */
           }
-        }, TIMEOUT_MS);
+          killTimer = setTimeout(() => {
+            try {
+              child.kill('SIGKILL');
+            } catch {
+              /* already gone */
+            }
+          }, KILL_GRACE_MS);
+        }, effectiveTimeoutMs);
 
         const onAbort = () => {
           cancelled = true;
