@@ -9,13 +9,45 @@ export interface GrepMatch {
   file: string;
   line: number;
   text: string;
+  /** Lines immediately preceding `text` (oldest first). Empty unless `before_context > 0`. */
+  before?: string[];
+  /** Lines immediately following `text` (in source order). Empty unless `after_context > 0`. */
+  after?: string[];
 }
 
 const MAX_FILE_SIZE = 1024 * 1024;
 const MAX_MATCHES = 200;
+const MAX_CONTEXT = 20;
 
-async function collectFiles(dir: string, globPattern: string): Promise<string[]> {
+/**
+ * Built-in file-type aliases mapping a short token to a list of basename globs.
+ *
+ * Combines with the user-supplied `file_glob` via UNION (a file matches if
+ * either includes it). Unknown types are silently ignored.
+ *
+ * Obviously growable — add aliases as needed without breaking callers.
+ */
+const FILETYPE_GLOBS: Record<string, readonly string[]> = {
+  ts: ['*.ts', '*.tsx'],
+  js: ['*.js', '*.jsx', '*.mjs', '*.cjs'],
+  py: ['*.py'],
+  rust: ['*.rs'],
+  go: ['*.go'],
+  java: ['*.java'],
+  rb: ['*.rb'],
+  php: ['*.php'],
+  c: ['*.c', '*.h'],
+  cpp: ['*.cpp', '*.cc', '*.cxx', '*.hpp', '*.hh', '*.hxx'],
+  cs: ['*.cs'],
+  sh: ['*.sh', '*.bash', '*.zsh'],
+  md: ['*.md', '*.markdown'],
+  json: ['*.json'],
+  yaml: ['*.yaml', '*.yml'],
+};
+
+async function collectFiles(dir: string, globs: readonly string[]): Promise<string[]> {
   const results: string[] = [];
+  const regexes = globs.map((g) => compileGlobToRegex(g));
 
   async function walk(current: string): Promise<void> {
     let entries: string[];
@@ -44,7 +76,7 @@ async function collectFiles(dir: string, globPattern: string): Promise<string[]>
         }
         if (s.isDirectory()) {
           await walk(fullPath);
-        } else if (s.isFile() && s.size <= MAX_FILE_SIZE && matchesGlob(name, globPattern)) {
+        } else if (s.isFile() && s.size <= MAX_FILE_SIZE && regexes.some((r) => r.test(name))) {
           results.push(fullPath);
         }
       }),
@@ -55,15 +87,18 @@ async function collectFiles(dir: string, globPattern: string): Promise<string[]>
   return results;
 }
 
-function matchesGlob(filename: string, pattern: string): boolean {
-  return compileGlobToRegex(pattern).test(filename);
+function clampContext(value: number | undefined): number {
+  if (value === undefined) return 0;
+  if (value < 0) return 0;
+  if (value > MAX_CONTEXT) return MAX_CONTEXT;
+  return value;
 }
 
 export function grepFilesTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
   return tool({
     name: 'grep_files',
     description:
-      'Search for a regex pattern across files in a directory tree. Returns structured matches with file path, line number, and matched line text. Skips node_modules, dist, coverage, hidden files, and files larger than 1 MiB.',
+      'Search for a regex pattern across files in a directory tree. Returns structured matches with file path, line number, and matched line text. Optional context lines (before_context/after_context/context), filetype filter (type), and output mode (content/files_with_matches/count). Skips node_modules, dist, coverage, hidden files, and files larger than 1 MiB.',
     inputSchema: z.object({
       pattern: z.string().describe('Regular expression to search for'),
       path: z.string().describe('Directory to search in').default('.'),
@@ -75,8 +110,51 @@ export function grepFilesTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
         .boolean()
         .describe('Whether the pattern match is case-sensitive. Defaults to true.')
         .default(true),
+      type: z
+        .string()
+        .describe(
+          'Built-in filetype filter (e.g. "ts", "py", "go"). Combines with file_glob via union — a file matches if either includes it. Unknown values are silently ignored.',
+        )
+        .optional(),
+      before_context: z
+        .number()
+        .int()
+        .describe(
+          'Number of preceding lines to include with each match (like grep -B). Capped at 20.',
+        )
+        .optional(),
+      after_context: z
+        .number()
+        .int()
+        .describe(
+          'Number of following lines to include with each match (like grep -A). Capped at 20.',
+        )
+        .optional(),
+      context: z
+        .number()
+        .int()
+        .describe(
+          'Shorthand for setting both before_context and after_context (like grep -C). Explicit before/after_context take precedence per side.',
+        )
+        .optional(),
+      output_mode: z
+        .enum(['content', 'files_with_matches', 'count'])
+        .describe(
+          'How to project results: "content" (default) returns per-line matches; "files_with_matches" returns just file paths; "count" returns per-file match counts.',
+        )
+        .default('content'),
     }),
-    execute: async ({ pattern, path, file_glob, case_sensitive }) => {
+    execute: async ({
+      pattern,
+      path,
+      file_glob,
+      case_sensitive,
+      type,
+      before_context,
+      after_context,
+      context,
+      output_mode,
+    }) => {
       if (ctx.signal?.aborted) throw new Error('grep_files cancelled');
       const flags = case_sensitive ? '' : 'i';
       let regex: RegExp;
@@ -86,12 +164,22 @@ export function grepFilesTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
         throw new Error(`Invalid regex pattern: ${(err as Error).message}`, { cause: err });
       }
 
-      const resolvedRoot = resolve(ctx.cwd, path);
-      const files = await collectFiles(resolvedRoot, file_glob);
-      const matches: GrepMatch[] = [];
+      const beforeN = clampContext(before_context ?? context);
+      const afterN = clampContext(after_context ?? context);
 
-      for (const file of files) {
-        if (matches.length >= MAX_MATCHES) break;
+      const globs: string[] = [file_glob];
+      if (type !== undefined) {
+        const extras = FILETYPE_GLOBS[type];
+        if (extras !== undefined) globs.push(...extras);
+      }
+
+      const resolvedRoot = resolve(ctx.cwd, path);
+      const files = await collectFiles(resolvedRoot, globs);
+
+      const matches: GrepMatch[] = [];
+      let truncated = false;
+
+      outer: for (const file of files) {
         if (ctx.signal?.aborted) throw new Error('grep_files cancelled');
 
         let text: string;
@@ -102,23 +190,95 @@ export function grepFilesTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
         }
 
         const lines = text.split('\n');
+        const rel = relative(resolvedRoot, file);
+
+        // Circular buffer of the last `beforeN` lines.
+        const beforeBuf: string[] = [];
+        // Pending after-context emissions: each entry is a reference to a match
+        // whose `after` array still needs filling, with a remaining count.
+        const pending: Array<{ match: GrepMatch; remaining: number }> = [];
+
         for (let i = 0; i < lines.length; i++) {
-          if (matches.length >= MAX_MATCHES) break;
-          if (regex.test(lines[i])) {
-            matches.push({
-              file: relative(resolvedRoot, file),
+          const line = lines[i];
+
+          // Drain any after-context windows opened by earlier matches.
+          if (pending.length > 0) {
+            for (const p of pending) {
+              p.match.after!.push(line);
+              p.remaining -= 1;
+            }
+            while (pending.length > 0 && pending[0].remaining <= 0) {
+              pending.shift();
+            }
+          }
+
+          if (regex.test(line)) {
+            if (matches.length >= MAX_MATCHES) {
+              truncated = true;
+              break outer;
+            }
+            const m: GrepMatch = {
+              file: rel,
               line: i + 1,
-              text: lines[i],
-            });
+              text: line,
+            };
+            if (beforeN > 0) m.before = beforeBuf.slice();
+            if (afterN > 0) {
+              m.after = [];
+              pending.push({ match: m, remaining: afterN });
+            }
+            matches.push(m);
+          }
+
+          if (beforeN > 0) {
+            beforeBuf.push(line);
+            if (beforeBuf.length > beforeN) beforeBuf.shift();
           }
         }
       }
 
+      // Mode dispatch.
+      if (output_mode === 'files_with_matches') {
+        const seen = new Set<string>();
+        const files: string[] = [];
+        for (const m of matches) {
+          if (!seen.has(m.file)) {
+            seen.add(m.file);
+            files.push(m.file);
+          }
+        }
+        return {
+          pattern,
+          path,
+          mode: 'files_with_matches' as const,
+          files,
+          matchCount: matches.length,
+          truncated,
+        };
+      }
+
+      if (output_mode === 'count') {
+        const counts = new Map<string, number>();
+        for (const m of matches) {
+          counts.set(m.file, (counts.get(m.file) ?? 0) + 1);
+        }
+        const perFile = Array.from(counts.entries()).map(([file, count]) => ({ file, count }));
+        return {
+          pattern,
+          path,
+          mode: 'count' as const,
+          totalMatches: matches.length,
+          perFile,
+          truncated,
+        };
+      }
+
+      // 'content' (default) — current shape, plus optional `before`/`after`.
       return {
         pattern,
         path,
         matchCount: matches.length,
-        truncated: matches.length >= MAX_MATCHES,
+        truncated,
         matches,
       };
     },

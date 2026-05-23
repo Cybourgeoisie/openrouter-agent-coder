@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Four optional input fields on the `grep_files` tool schema: `before_context`
+  / `after_context` / `context` (context-line capture, like `grep -B`/`-A`/`-C`,
+  each silently clamped to `[0, 20]`) and `type` (built-in filetype alias —
+  `'ts'`, `'js'`, `'py'`, `'rust'`, `'go'`, `'java'`, `'rb'`, `'php'`, `'c'`,
+  `'cpp'`, `'cs'`, `'sh'`, `'md'`, `'json'`, `'yaml'`; unknown values silently
+  ignored). `type` combines with the existing `file_glob` via UNION — a file
+  matches if either includes it. Plus a new `output_mode` enum (`'content'`
+  default, `'files_with_matches'`, `'count'`) that projects the same scan into
+  three result shapes — `content` (existing per-line matches, now with optional
+  `before`/`after` arrays per match), `files_with_matches`
+  (`{ files: string[]; matchCount: number; truncated: boolean }`), and `count`
+  (`{ totalMatches: number; perFile: Array<{ file: string; count: number }>; truncated: boolean }`).
+  The existing `MAX_MATCHES = 200` cap is honored across all three modes with
+  `truncated: true` set on overflow. Mode dispatch happens at the
+  result-assembly step (the scan always produces the full per-line match list
+  internally); existing callers that pass none of the new fields see the
+  identical pre-3.10 shape.
+  ([#49](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/49))
 - Two optional input fields on the `run_command` tool schema:
   `description` (free-text advisory note from the model, forwarded through
   `tool_call.input` — never gates execution, never appears in stdout/stderr)
