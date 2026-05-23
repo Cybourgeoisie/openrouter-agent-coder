@@ -369,6 +369,44 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     expect(preId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   });
 
+  it('synth-denies run_command with reason "requires approval" under permissionMode:"default"', async () => {
+    state.fixture = loadFixture('single-run-command');
+    // Stub run_command tool — its execute should never be invoked because the
+    // mode-derived canUseTool denies before the wrapper reaches the handler.
+    const execSpy = vi.fn(async () => 'should not run');
+    const runCommandStub = {
+      type: 'function' as const,
+      function: {
+        name: 'run_command',
+        description: 'stub run_command',
+        parameters: { type: 'object', properties: { command: { type: 'string' } } },
+        execute: execSpy,
+      },
+    };
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'try to run a command',
+      tools: [runCommandStub] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+      permissionMode: 'default',
+    });
+    const events = await collect(run);
+
+    expect(execSpy).not.toHaveBeenCalled();
+    const toolResult = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(toolResult.isError).toBe(true);
+    const parsed = JSON.parse(String(toolResult.output));
+    expect(parsed).toEqual({ error: 'requires approval', denied: true });
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.status).toBe('success');
+  });
+
   it('reports stream_complete{status:max_turns} when the turn count reaches maxTurns', async () => {
     state.fixture = loadFixture('max-turns');
     const run = new OpenRouterAgentRun({

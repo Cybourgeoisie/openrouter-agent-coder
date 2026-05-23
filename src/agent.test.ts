@@ -1148,6 +1148,211 @@ describe('OpenRouterAgentRun canUseTool', () => {
   });
 });
 
+describe('OpenRouterAgentRun permissionMode', () => {
+  function singleToolCallModel(args: { toolName: string; callId: string; input: unknown }) {
+    return (request: {
+      tools: Array<{ function: { name: string; execute?: (i: unknown, c?: unknown) => unknown } }>;
+    }) => {
+      const tool = request.tools.find((t) => t.function.name === args.toolName);
+      return {
+        async *getFullResponsesStream() {
+          yield { type: 'turn.start', turnNumber: 0 };
+          let output: unknown;
+          let status: 'completed' | 'incomplete' = 'completed';
+          try {
+            output = await tool!.function.execute!(args.input, {});
+          } catch (e) {
+            output = (e as Error).message;
+            status = 'incomplete';
+          }
+          yield {
+            type: 'tool.call_output',
+            timestamp: 1,
+            output: {
+              callId: args.callId,
+              type: 'function_call_output',
+              output,
+              status,
+            },
+          };
+          yield { type: 'turn.end', turnNumber: 0 };
+        },
+        async getResponse() {
+          return {
+            id: 'r',
+            model: 'm',
+            usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            output: [],
+          };
+        },
+      };
+    };
+  }
+
+  function makeNamedTool(name: string) {
+    return {
+      type: 'function' as const,
+      function: {
+        name,
+        description: `stub ${name}`,
+        execute: async () => 'ok',
+      },
+    };
+  }
+
+  it('denies write_file under default mode with reason "requires approval"', async () => {
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'write_file',
+        callId: 'c-default-write',
+        input: { path: 'foo.txt' },
+      }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeNamedTool('write_file')] as unknown as never,
+      permissionMode: 'default',
+    });
+    const events = await collect(run);
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(String(result.output))).toEqual({
+      error: 'requires approval',
+      denied: true,
+    });
+  });
+
+  it('allows read_file under default mode', async () => {
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'read_file',
+        callId: 'c-default-read',
+        input: { path: 'foo.txt' },
+      }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeNamedTool('read_file')] as unknown as never,
+      permissionMode: 'default',
+    });
+    const events = await collect(run);
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(false);
+    expect(result.output).toBe('ok');
+  });
+
+  it('allows all tools under bypassPermissions mode (including run_command)', async () => {
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'run_command',
+        callId: 'c-bypass',
+        input: { command: 'ls' },
+      }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeNamedTool('run_command')] as unknown as never,
+      permissionMode: 'bypassPermissions',
+    });
+    const events = await collect(run);
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(false);
+  });
+
+  it('honors explicit canUseTool over permissionMode and emits a warn log mentioning both', async () => {
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'run_command',
+        callId: 'c-conflict',
+        input: { command: 'ls' },
+      }),
+    );
+    const logger = vi.fn();
+    // permissionMode:'default' would deny run_command. Explicit canUseTool
+    // says allow — the explicit callback must win.
+    const canUseTool = vi.fn().mockResolvedValue({ behavior: 'allow' });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeNamedTool('run_command')] as unknown as never,
+      permissionMode: 'default',
+      canUseTool,
+      logger,
+    });
+    const events = await collect(run);
+
+    expect(canUseTool).toHaveBeenCalledWith('run_command', { command: 'ls' });
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(false);
+
+    const warnCall = logger.mock.calls.find((call) => call[0] === 'warn');
+    expect(warnCall).toBeDefined();
+    expect(warnCall![1]).toMatch(/permissionMode/);
+    expect(warnCall![1]).toMatch(/canUseTool/);
+    expect(warnCall![2]).toMatchObject({ permissionMode: 'default' });
+  });
+
+  it('behaves identically to no-canUseTool when permissionMode is undefined', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'run_command',
+        callId: 'c-undef',
+        input: { command: 'ls' },
+      }),
+    );
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [
+        {
+          type: 'function' as const,
+          function: {
+            name: 'run_command',
+            description: 'shell',
+            execute: async (input: unknown) => {
+              execSpy(input);
+              return 'ran';
+            },
+          },
+        },
+      ] as unknown as never,
+    });
+    const events = await collect(run);
+    expect(execSpy).toHaveBeenCalledWith({ command: 'ls' });
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(false);
+    expect(result.output).toBe('ran');
+  });
+});
+
 describe('OpenRouterAgentRun constructor options', () => {
   it('throws if apiKey is missing', () => {
     expect(

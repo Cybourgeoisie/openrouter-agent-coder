@@ -7,6 +7,8 @@ export type {
   CanUseToolResult,
   OnHook,
 } from './agent.js';
+export { permissionModeToCanUseTool } from './permission-modes.js';
+export type { PermissionMode } from './permission-modes.js';
 export type {
   AgentCoreEvent,
   AgentCoreEventStatus,

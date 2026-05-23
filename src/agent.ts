@@ -27,6 +27,7 @@ import type {
   HookPayload,
   TokenUsage,
 } from './events.js';
+import { permissionModeToCanUseTool, type PermissionMode } from './permission-modes.js';
 
 const DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
 const DEFAULT_MAX_TURNS = 25;
@@ -102,6 +103,15 @@ export interface OpenRouterAgentRunOptions {
    */
   canUseTool?: CanUseTool;
   /**
+   * Named permission preset translated into a {@link CanUseTool} internally.
+   * See {@link PermissionMode} for the per-mode allow/deny matrix. When both
+   * `permissionMode` and an explicit `canUseTool` are supplied, `canUseTool`
+   * wins (explicit > implicit) and a `'warn'`-level log is emitted via
+   * {@link AgentLogger}. Omit to default to "allow all" (parity with the prior
+   * release).
+   */
+  permissionMode?: PermissionMode;
+  /**
    * Lifecycle hook callback. Fires `SessionStart` once after the
    * `session_started` event, `PreToolUse` before each client tool's
    * `canUseTool` decision (audit always fires, even when denied),
@@ -152,6 +162,21 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     throw new Error('apiKey is required');
   }
   const cwd = opts.cwd ?? process.cwd();
+  // Resolve the canUseTool gate: explicit > permissionMode-derived > none.
+  // When both are supplied, warn so the conflict is visible in logs — the
+  // explicit callback may quietly diverge from the mode the caller selected.
+  let canUseTool = opts.canUseTool;
+  if (opts.permissionMode !== undefined) {
+    if (opts.canUseTool !== undefined) {
+      opts.logger?.(
+        'warn',
+        'Both permissionMode and canUseTool were supplied; canUseTool wins and permissionMode is ignored',
+        { permissionMode: opts.permissionMode },
+      );
+    } else {
+      canUseTool = permissionModeToCanUseTool(opts.permissionMode);
+    }
+  }
   return {
     apiKey: opts.apiKey,
     sessionId: opts.sessionId,
@@ -164,7 +189,7 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     tools: opts.tools ?? [],
     appTitle: opts.appTitle ?? DEFAULT_APP_TITLE,
     logsRoot: opts.logsRoot ?? join(cwd, 'logs'),
-    canUseTool: opts.canUseTool,
+    canUseTool,
     onHook: opts.onHook,
     signal: opts.signal,
     baseUrl: opts.baseUrl,
