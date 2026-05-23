@@ -7,6 +7,7 @@ import { runCommandTool } from './run-command.js';
 import { grepFilesTool } from './grep-files.js';
 import { globTool } from './glob.js';
 import { askUserQuestionTool, type AskUserQuestionToolOptions } from './ask-user-question.js';
+import { taskCreateTool, taskUpdateTool, type OnTasksChanged, type TaskListRef } from './tasks.js';
 import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
 
 export { readFileTool } from './read-file.js';
@@ -24,18 +25,44 @@ export type {
   UserQuestionRequest,
   UserQuestionResponse,
 } from './ask-user-question.js';
+export { taskCreateTool, taskUpdateTool } from './tasks.js';
+export type {
+  TaskState,
+  Task,
+  CreateTaskRequest,
+  UpdateTaskRequest,
+  TaskListChangedNotification,
+  OnTasksChanged,
+  TaskListRef,
+  TaskToolOptions,
+  TaskCreateToolResult,
+  TaskUpdateToolResult,
+} from './tasks.js';
 export { SERVER_TOOLS, createServerToolsHooks } from './server-tools.js';
 export { DEFAULT_TOOL_CONTEXT } from './context.js';
 export type { ToolContext } from './context.js';
 
 /**
  * Options accepted by {@link allTools} when constructing the bundled tool set.
- * Currently only carries the `onAskUserQuestion` host callback used by the
- * `ask_user_question` tool.
+ * Carries host callbacks for the interactive tools (`ask_user_question`,
+ * `task_create` / `task_update`) plus the shared in-run task list ref so both
+ * task factories mutate the same array.
  */
 export interface AllToolsOptions {
   /** Host callback for the `ask_user_question` tool; see {@link AskUserQuestionToolOptions}. */
   onAskUserQuestion?: AskUserQuestionToolOptions['onAskUserQuestion'];
+  /**
+   * Convenience callback fired after every `task_create` / `task_update`
+   * mutation with the full latest task list. Filtering the `Notification`
+   * hook on `message === 'tasks_changed'` is equivalent.
+   */
+  onTasksChanged?: OnTasksChanged;
+  /**
+   * Shared task list both task factories mutate. Pass the same ref across
+   * runs of {@link allTools} if you want a persistent list; omit to get a
+   * fresh empty list per call.
+   */
+  taskListRef?: TaskListRef;
 }
 
 /**
@@ -44,12 +71,15 @@ export interface AllToolsOptions {
  * against `ctx.cwd`. `run_command` additionally propagates SIGTERM (with a
  * 250ms SIGKILL grace) to its child process. `ask_user_question` requires
  * `opts.onAskUserQuestion` — without it the tool surfaces a
- * `no host handler registered` error from its result.
+ * `no host handler registered` error from its result. `task_create` /
+ * `task_update` share a single `taskListRef` (auto-created here when the
+ * caller omits one).
  */
 export function allTools(
   ctx: ToolContext = DEFAULT_TOOL_CONTEXT,
   opts: AllToolsOptions = {},
 ): readonly Tool[] {
+  const taskListRef = opts.taskListRef ?? { tasks: [] };
   return [
     readFileTool(ctx),
     writeFileTool(ctx),
@@ -59,5 +89,7 @@ export function allTools(
     grepFilesTool(ctx),
     globTool(ctx),
     askUserQuestionTool(ctx, { onAskUserQuestion: opts.onAskUserQuestion }),
+    taskCreateTool(ctx, { taskListRef, onTasksChanged: opts.onTasksChanged }),
+    taskUpdateTool(ctx, { taskListRef, onTasksChanged: opts.onTasksChanged }),
   ];
 }

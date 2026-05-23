@@ -744,6 +744,64 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     expect(complete.status).toBe('success');
   });
 
+  it('threads task_create / task_update through onTasksChanged and Notification with a shared list', async () => {
+    state.fixture = loadFixture('task-create-and-update');
+    const hookEvents: Array<{ event: HookEvent; payload: HookPayload }> = [];
+    const onTasksChanged = vi.fn();
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'organize the work',
+      // Default tool bundle so the built-in task_create / task_update wire up.
+      onTasksChanged: onTasksChanged as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['onTasksChanged'],
+      onHook: (event, payload) => {
+        hookEvents.push({ event, payload });
+      },
+    });
+    const events = await collect(run);
+
+    // Both tool calls returned a UUID id (no error path hit).
+    const toolResults = events.filter((e) => e.type === 'tool_result') as Array<
+      Extract<AgentCoreEvent, { type: 'tool_result' }>
+    >;
+    expect(toolResults).toHaveLength(2);
+    for (const r of toolResults) {
+      expect(r.isError).toBe(false);
+      expect(r.output).toMatchObject({ id: expect.any(String) });
+    }
+
+    // onTasksChanged fired once per create — last invocation carries both tasks.
+    expect(onTasksChanged).toHaveBeenCalledTimes(2);
+    const finalTasks = onTasksChanged.mock.calls.at(-1)![0] as Array<{
+      content: string;
+      state: string;
+    }>;
+    expect(finalTasks).toMatchObject([
+      { content: 'Write the docs', state: 'pending', activeForm: 'Writing the docs' },
+      { content: 'Run the tests', state: 'pending' },
+    ]);
+
+    // Notification hook fired once per mutation with the same shape.
+    const notifications = hookEvents.filter(
+      (h) =>
+        h.event === 'Notification' &&
+        (h.payload as Extract<HookPayload, { event: 'Notification' }>).message === 'tasks_changed',
+    );
+    expect(notifications).toHaveLength(2);
+    const lastNotify = notifications.at(-1)!.payload as Extract<
+      HookPayload,
+      { event: 'Notification' }
+    >;
+    expect(lastNotify.level).toBe('info');
+    expect(lastNotify.context).toEqual({ tasks: finalTasks });
+
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.status).toBe('success');
+  });
+
   it('runs a Zod-schema custom tool built via tool() / createSdkMcpServer end-to-end', async () => {
     state.fixture = loadFixture('single-tool-call');
 

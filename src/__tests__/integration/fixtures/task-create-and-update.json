@@ -1,0 +1,53 @@
+{
+  "name": "task-create-and-update",
+  "steps": [
+    { "type": "yield", "event": { "type": "turn.start", "turnNumber": 0, "timestamp": 1 } },
+    {
+      "type": "yield",
+      "event": {
+        "type": "response.output_item.done",
+        "outputIndex": 0,
+        "sequenceNumber": 1,
+        "item": {
+          "type": "function_call",
+          "callId": "call_create_a",
+          "name": "task_create",
+          "arguments": "{\"content\":\"Write the docs\",\"activeForm\":\"Writing the docs\"}"
+        }
+      }
+    },
+    {
+      "type": "tool_execute",
+      "toolName": "task_create",
+      "input": { "content": "Write the docs", "activeForm": "Writing the docs" },
+      "callId": "call_create_a"
+    },
+    {
+      "type": "yield",
+      "event": {
+        "type": "response.output_item.done",
+        "outputIndex": 1,
+        "sequenceNumber": 2,
+        "item": {
+          "type": "function_call",
+          "callId": "call_create_b",
+          "name": "task_create",
+          "arguments": "{\"content\":\"Run the tests\"}"
+        }
+      }
+    },
+    {
+      "type": "tool_execute",
+      "toolName": "task_create",
+      "input": { "content": "Run the tests" },
+      "callId": "call_create_b"
+    },
+    { "type": "yield", "event": { "type": "turn.end", "turnNumber": 0, "timestamp": 2 } }
+  ],
+  "response": {
+    "id": "resp-tasks",
+    "model": "mock-model",
+    "usage": { "cost": 0.001, "inputTokens": 4, "outputTokens": 2, "totalTokens": 6 },
+    "output": []
+  }
+}
