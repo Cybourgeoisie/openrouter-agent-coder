@@ -66,6 +66,7 @@ Single-shot async iterable that drives one agent run. Construct, `for await` the
 | `logger`            | `AgentLogger`       | no       | _(silent)_                        | Diagnostic logger — `(level, message, fields?) => void`.                                                                                                                                                                                                                                                                                                               |
 | `settingSources`    | `SettingSource[]`   | no       | `[]`                              | Opt-in context-discovery list — `'project'` (walks up from `cwd` reading `CLAUDE.md` / `.claude/CLAUDE.md`, stops at the first `.git` or 10 levels), `'user'` (`<os.homedir()>/.claude/CLAUDE.md`), `'local'` (`<cwd>/.claude/CLAUDE.local.md`). Discovered content is prepended to `instructions` in user → project → local order. Default `[]` performs no FS reads. |
 | `persistSession`    | `boolean`           | no       | `true`                            | When `false`, the run uses an in-memory `StateAccessor` and skips every write under `logsRoot` (`session.json`, per-request `request.json`, per-generation `response.json`, `state.json`). The event stream is byte-identical to a persisted run, but resume across processes is impossible and external readers like `readSessionLog` see ENOENT for that sessionId.  |
+| `parentSessionId`   | `string`            | no       | _(none)_                          | Set when this run continues a session forked from another. Threaded into `session.json` and surfaced on the `session_started` event payload. Defaults undefined — the field is omitted from both on-disk and event payloads for root sessions.                                                                                                                         |
 
 ### `AgentCoreEvent`
 
@@ -73,7 +74,7 @@ Discriminated union yielded by `for await (... of run)`. Narrow on `event.type`.
 
 | Variant           | Payload                                              | Notes                                                                           |
 | ----------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `session_started` | `{ sessionId }`                                      | Fires once at the start of a run.                                               |
+| `session_started` | `{ sessionId, parentSessionId? }`                    | Fires once at the start of a run. `parentSessionId` is set only on forked runs. |
 | `turn_start`      | `{ turnNumber }`                                     | Inner loop turn beginning (0-indexed).                                          |
 | `text_delta`      | `{ content }`                                        | Streaming text chunk from the model.                                            |
 | `tool_call`       | `{ callId, name, input }`                            | Model has emitted a function call. `input` is parsed JSON when valid.           |
@@ -418,6 +419,64 @@ Behaviour:
 - `task_update` requires `taskId` + `state`; `content` is optional (rewrites the description only when provided). Unknown ids resolve with `{ error: 'unknown task id: <id>' }` (tool-error path — the model sees the error and can recover). The state enum is validated by Zod; invalid values are rejected at schema-validation time.
 - Both tools emit a single `Notification` hook per call with `level: 'info'`, `message: 'tasks_changed'`, and `context: TaskListChangedNotification` (the full latest list, not a diff). The same payload flows through `onTasksChanged` when wired.
 - The task list is in-memory only. Resuming a session by `sessionId` does NOT restore the previous run's task list — host code that needs persistence should mirror the `onTasksChanged` callback to its own store.
+
+#### Session forking
+
+Phase 4.5 ships a `forkSession()` helper and an `OpenRouterAgentRun.fork()` instance method. A fork copies the source session's on-disk `state.json` into a new session directory under the same `logsRoot` and writes a fresh `session.json` whose `parentSessionId` points back at the source. Per-request subdirectories (`req_*` / `gen_*`) are **not** copied — the fork inherits the OR `previousResponseId` chain via `state.json` alone, which is everything `callModel` needs to resume the conversation.
+
+```ts
+import { OpenRouterAgentRun, forkSession } from 'openrouter-agent-coder';
+
+// 1) Run a session that persists state to disk.
+const root = new OpenRouterAgentRun({
+  apiKey,
+  sessionId: 'root-abc',
+  prompt: 'pick a starting move',
+});
+for await (const _ of root) {
+  /* drain events */
+}
+
+// 2a) Fork via the instance helper (reuses the run's logsRoot + sessionId).
+const { sessionId: childId } = await root.fork();
+
+// 2b) Or fork via the standalone helper (caller supplies logsRoot).
+const { sessionId: child2Id } = await forkSession({
+  sessionId: 'root-abc',
+  logsRoot: './logs',
+  newSessionId: 'my-chosen-id', // optional; UUID v4 minted when omitted
+});
+
+// 3) Continue the conversation in a new run, tagged with the parent for lineage.
+const branch = new OpenRouterAgentRun({
+  apiKey,
+  sessionId: childId,
+  prompt: 'try a different opening',
+  parentSessionId: 'root-abc',
+});
+```
+
+Library-side signatures:
+
+```ts
+interface ForkSessionOptions {
+  sessionId: string; // source — must have an on-disk state.json
+  newSessionId?: string; // auto-minted (UUID v4) when omitted
+  logsRoot: string; // required — no <cwd>/logs default
+}
+interface ForkSessionResult {
+  sessionId: string;
+}
+function forkSession(opts: ForkSessionOptions): Promise<ForkSessionResult>;
+```
+
+Behaviour:
+
+- The standalone `forkSession()` requires `logsRoot`; there is no `<cwd>/logs` fallback (the library reserves exactly one `process.cwd()` call site at the `OpenRouterAgentRun` constructor default). `OpenRouterAgentRun.fork()` reuses the run's already-resolved `logsRoot` so callers driving the instance method never need to supply one.
+- `state.json` is copied via atomic write (`*.tmp` → `rename`). The forked file is genuinely independent — mutating one does not affect the other.
+- `session.json` carries forward the source's `cwd` when present (best-effort: a missing source `session.json` is non-fatal — the fork still succeeds and just omits `cwd`).
+- Forking a `persistSession: false` run via `run.fork()` rejects synchronously with `cannot fork in-memory session: <sessionId> has no on-disk state at <logsRoot>/<sessionId>/state.json` — the check is local (no FS round-trip) and fires before any I/O. Calling the standalone `forkSession()` with the same source id yields the same error.
+- Lineage is opt-in on the consuming side: pass `parentSessionId` to the next `OpenRouterAgentRun` to record the link on `session.json` and surface it on `session_started`. The library does not look up or validate the parent; consumers wire the chain themselves.
 
 ### `accountInfo(opts)`
 

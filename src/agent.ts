@@ -35,6 +35,7 @@ import { permissionModeToCanUseTool, type PermissionMode } from './permission-mo
 import { buildToolFilterCanUseTool } from './tool-filters.js';
 import { composeInstructions, type SettingSource } from './context-discovery.js';
 import { aggregateMessages, type AgentMessage } from './messages.js';
+import { forkSession, type ForkSessionResult } from './session-fork.js';
 
 const DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
 const DEFAULT_MAX_TURNS = 25;
@@ -260,6 +261,19 @@ export interface OpenRouterAgentRunOptions {
    * Defaults to `true` (back-compat: persist everything).
    */
   persistSession?: boolean;
+  /**
+   * Set when this run continues a session that was forked from another
+   * (Phase 4.5). Threaded into the `session.json` that {@link logSessionStart}
+   * writes, and surfaced on the `session_started` event payload so consumers
+   * can render the lineage. Defaults to undefined — the field is omitted from
+   * both on-disk and event payloads for root sessions.
+   *
+   * The library does NOT itself look up or validate the parent. Callers can
+   * pair this with {@link forkSession} (or the {@link OpenRouterAgentRun.fork}
+   * helper) to mint a child session id, then construct the next run with
+   * `parentSessionId: <source>`.
+   */
+  parentSessionId?: string;
 }
 
 interface ResolvedOptions {
@@ -283,6 +297,7 @@ interface ResolvedOptions {
   logger?: AgentLogger;
   settingSources: readonly SettingSource[];
   persistSession: boolean;
+  parentSessionId?: string;
 }
 
 function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
@@ -349,6 +364,7 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     logger: opts.logger,
     settingSources: opts.settingSources ?? [],
     persistSession: opts.persistSession ?? true,
+    parentSessionId: opts.parentSessionId,
   };
 }
 
@@ -369,11 +385,19 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
    * turns inside this run instance.
    */
   private readonly taskListRef: TaskListRef = { tasks: [] };
+  /**
+   * Snapshot of `persistSession` captured at construction. Used by
+   * {@link fork} to short-circuit the in-memory rejection path without
+   * touching the filesystem (and without exposing the full resolved-opts
+   * struct on the instance).
+   */
+  private readonly persistSession: boolean;
   private consumed = false;
 
   constructor(options: OpenRouterAgentRunOptions) {
     this.opts = resolveOptions(options);
     this.hasCustomTools = options.tools !== undefined;
+    this.persistSession = this.opts.persistSession;
     this.compositeSignal = options.signal
       ? AbortSignal.any([this.internalAbortController.signal, options.signal])
       : this.internalAbortController.signal;
@@ -419,6 +443,37 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     return aggregateMessages(this, this.opts.sessionId);
   }
 
+  /**
+   * Fork this run's session — copy the on-disk `state.json` to a new session
+   * directory under the same `logsRoot`, and stamp a fresh `session.json` with
+   * `parentSessionId` set to this run's session id. Convenience wrapper around
+   * {@link forkSession} that reuses the run's already-resolved `logsRoot`.
+   *
+   * Rejects with the documented in-memory error when this run was constructed
+   * with `persistSession: false` — there is no `state.json` to copy. The check
+   * is local (no FS touch), so callers don't pay an I/O round-trip just to
+   * learn the run was ephemeral.
+   *
+   * Note: forking after construction but before iteration is technically legal
+   * — it will reject with the in-memory error path because no `state.json`
+   * has been written yet, regardless of `persistSession`. The intended call
+   * site is post-iteration, once the run has persisted at least one turn.
+   */
+  fork(opts: { newSessionId?: string } = {}): Promise<ForkSessionResult> {
+    if (!this.persistSession) {
+      return Promise.reject(
+        new Error(
+          `cannot fork in-memory session: ${this.opts.sessionId} has no on-disk state at ${join(this.opts.logsRoot, this.opts.sessionId, 'state.json')}`,
+        ),
+      );
+    }
+    return forkSession({
+      sessionId: this.opts.sessionId,
+      logsRoot: this.opts.logsRoot,
+      ...(opts.newSessionId !== undefined && { newSessionId: opts.newSessionId }),
+    });
+  }
+
   private async *iterate(): AsyncGenerator<AgentCoreEvent> {
     const {
       apiKey,
@@ -439,6 +494,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       persistSession,
       onAskUserQuestion,
       onTasksChanged,
+      parentSessionId,
     } = this.opts;
     // Discovery happens here (not in resolveOptions) so the constructor stays
     // synchronous and the public API shape is unchanged. When settingSources
@@ -553,10 +609,14 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       }
 
       if (persistSession) {
-        await logSessionStart(logsRoot, sessionId, cwd);
+        await logSessionStart(logsRoot, sessionId, cwd, parentSessionId);
       }
 
-      yield { type: 'session_started', sessionId };
+      yield {
+        type: 'session_started',
+        sessionId,
+        ...(parentSessionId !== undefined && { parentSessionId }),
+      };
       await safeFireHook('SessionStart', { event: 'SessionStart', sessionId, cwd, model });
 
       const requestId = createRequestId();

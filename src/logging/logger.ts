@@ -9,6 +9,12 @@ export interface SessionLog {
    * session.json files (written before Phase 1.6) still parse cleanly.
    */
   cwd?: string;
+  /**
+   * Set when this session was created by forking another (Phase 4.5). Carries
+   * the source session id; omitted on root sessions so legacy session.json
+   * files (and any new root run) round-trip unchanged.
+   */
+  parentSessionId?: string;
 }
 
 export interface RequestLog {
@@ -50,6 +56,7 @@ export async function logSessionStart(
   logsRoot: string,
   sessionId: string,
   cwd: string,
+  parentSessionId?: string,
 ): Promise<void> {
   const dir = join(logsRoot, sessionId);
   await ensureDir(dir);
@@ -57,6 +64,7 @@ export async function logSessionStart(
     sessionId,
     startedAt: new Date().toISOString(),
     cwd,
+    ...(parentSessionId !== undefined && { parentSessionId }),
   };
   await writeFile(join(dir, 'session.json'), JSON.stringify(entry, null, 2));
 }

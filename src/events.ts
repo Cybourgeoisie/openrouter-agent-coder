@@ -5,7 +5,7 @@ export type TokenUsage = Usage;
 export type AgentCoreEventStatus = 'success' | 'max_turns' | 'max_budget' | 'error';
 
 export type AgentCoreEvent =
-  | { type: 'session_started'; sessionId: string }
+  | { type: 'session_started'; sessionId: string; parentSessionId?: string }
   | { type: 'turn_start'; turnNumber: number }
   | { type: 'text_delta'; content: string }
   | { type: 'tool_call'; callId: string; name: string; input: unknown }
