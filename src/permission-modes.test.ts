@@ -9,6 +9,7 @@ const ALL_TOOLS = [
   'list_directory',
   'run_command',
   'grep_files',
+  'glob',
 ] as const;
 
 interface ModeCase {
@@ -23,19 +24,19 @@ const PLAN_DENY_REASON = 'plan mode: read-only — propose edits in your reply';
 const CASES: readonly ModeCase[] = [
   {
     mode: 'default',
-    allowed: ['read_file', 'list_directory', 'grep_files'],
+    allowed: ['read_file', 'list_directory', 'grep_files', 'glob'],
     denied: ['write_file', 'edit_file', 'run_command'],
     denyReason: 'requires approval',
   },
   {
     mode: 'acceptEdits',
-    allowed: ['read_file', 'list_directory', 'grep_files', 'write_file', 'edit_file'],
+    allowed: ['read_file', 'list_directory', 'grep_files', 'glob', 'write_file', 'edit_file'],
     denied: ['run_command'],
     denyReason: 'requires approval',
   },
   {
     mode: 'plan',
-    allowed: ['read_file', 'list_directory', 'grep_files'],
+    allowed: ['read_file', 'list_directory', 'grep_files', 'glob'],
     denied: ['write_file', 'edit_file', 'run_command'],
     denyReason: PLAN_DENY_REASON,
   },
@@ -87,6 +88,12 @@ describe('permissionModeToCanUseTool', () => {
       behavior: 'deny',
       reason: PLAN_DENY_REASON,
     });
+  });
+
+  it('plan mode permits the glob tool (Phase 3.11 — pure read operation)', async () => {
+    const planGate = permissionModeToCanUseTool('plan');
+    const result = await planGate('glob', {});
+    expect(result).toEqual<CanUseToolResult>({ behavior: 'allow' });
   });
 
   it('default mode denies unknown / custom tool names', async () => {

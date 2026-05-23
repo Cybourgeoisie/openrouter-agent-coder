@@ -6,8 +6,8 @@ import type { CanUseTool, CanUseToolResult } from './agent.js';
  * lower-level `canUseTool` constructor option still wins when both are
  * supplied.
  *
- * - `default` — read-only tools (`read_file`, `list_directory`, `grep_files`)
- *   pass; everything else is denied with reason `'requires approval'`.
+ * - `default` — read-only tools (`read_file`, `list_directory`, `grep_files`,
+ *   `glob`) pass; everything else is denied with reason `'requires approval'`.
  * - `acceptEdits` — read-only + edit-style writers (`write_file`, `edit_file`)
  *   pass; `run_command` is denied with reason `'requires approval'`.
  * - `bypassPermissions` — allow every tool. Equivalent to omitting the option.
@@ -21,7 +21,7 @@ import type { CanUseTool, CanUseToolResult } from './agent.js';
  */
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
 
-const READ_ONLY_TOOLS = ['read_file', 'list_directory', 'grep_files'] as const;
+const READ_ONLY_TOOLS = ['read_file', 'list_directory', 'grep_files', 'glob'] as const;
 const EDIT_TOOLS = ['write_file', 'edit_file'] as const;
 
 const ALLOWED_BY_MODE: Record<PermissionMode, ReadonlySet<string> | null> = {

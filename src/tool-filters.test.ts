@@ -86,12 +86,15 @@ describe('compileRule', () => {
       expect(rule.matches({ path: 'src/nested/agent.ts' })).toBe(false);
     });
 
-    it('treats `**` as a multi-segment wildcard (spans `/`)', () => {
+    it('treats `**` as a zero-or-more-segments wildcard (spans `/`)', () => {
       // Built dynamically so the `*/` sequence does not close a JSDoc block.
-      // `**` compiles to `.*` (same as grep_files), so the literal slashes in
-      // `src/**/agent.ts` require at least one path component between
-      // `src/` and `agent.ts` — matching the existing grep_files semantics.
+      // As of Phase 3.11, when `**` is immediately followed by `/`, the pair
+      // `**/` collapses to `(?:.*/)?` — zero-or-more path segments, matching
+      // gitignore / minimatch / bash-globstar semantics. So `src/**/agent.ts`
+      // now matches `src/agent.ts` (zero segments between) in addition to the
+      // pre-3.11 multi-segment cases.
       const rule = compileRule(`Edit(src/${'**'}/agent.ts)`);
+      expect(rule.matches({ path: 'src/agent.ts' })).toBe(true); // zero-segment ** now matches
       expect(rule.matches({ path: 'src/tools/agent.ts' })).toBe(true);
       expect(rule.matches({ path: 'src/a/b/c/agent.ts' })).toBe(true);
       expect(rule.matches({ path: 'lib/tools/agent.ts' })).toBe(false);

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `compileGlobToRegex` in `src/utils/glob.ts` now treats `**/` as
+  zero-or-more path segments (previously one-or-more), aligning with the
+  standard gitignore / minimatch / bash-globstar semantic. Because the
+  helper is shared, this silently broadens matching for two pre-existing
+  callers:
+  - `tool-filters` rule grammar (Phase 3.2) — e.g.
+    `disallowedTools: ['Edit(src/**/foo.ts)']` now also matches
+    `src/foo.ts` (in addition to `src/a/foo.ts`, `src/a/b/foo.ts`, …).
+  - `grep_files` `file_glob` option (Phase 3.10) — same broadening:
+    `file_glob: 'src/**/*.ts'` now also picks up files directly under
+    `src/`. Patterns without `**/` are unaffected; `*`, `?`, and
+    character-class behavior is unchanged.
+
 ### Added
 
 - New `glob` client tool — recursive file finder by glob pattern, separate
