@@ -275,8 +275,7 @@ describe('ask_user_question tool', () => {
       // Async function that rejects with a non-Error value; cast via unknown
       // because the declared callback contract is Promise<UserQuestionResponse>.
       {
-        onAskUserQuestion: (() =>
-          Promise.reject('plain string')) as unknown as NonNullable<
+        onAskUserQuestion: (() => Promise.reject('plain string')) as unknown as NonNullable<
           Parameters<typeof askUserQuestionTool>[1]
         >['onAskUserQuestion'],
       },
