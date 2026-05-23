@@ -34,7 +34,7 @@ All builds-on items reference primitives already shipped. Most are independent a
 | Card    | Title                                                                                                                                       | Builds on                    | Est.   | Depends on |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ------ | ---------- |
 | ~~3.1~~ | ~~Named permission modes (default/acceptEdits/bypassPermissions)~~ ([#65](https://github.com/Cybourgeoisie/openrouter-agent-coder/pull/65)) | ~~`canUseTool` (Phase 1.4)~~ | ~~4h~~ | ~~—~~      |
-| 3.2     | `allowedTools` / `disallowedTools` config syntax (`Bash(npm *)`)                                                                            | `canUseTool` + 3.1           | 3h     | 3.1        |
+| ~~3.2~~ | ~~`allowedTools` / `disallowedTools` config syntax (`Bash(npm *)`)~~ (PR pending)                                                            | ~~`canUseTool` + 3.1~~       | ~~3h~~ | ~~3.1~~    |
 | 3.3     | Plan mode (read-only tool filter)                                                                                                           | `canUseTool` + 3.1           | 1h     | 3.1        |
 | 3.4     | CLAUDE.md / `.claude/` auto-discovery → `instructions`                                                                                      | `instructions` (Phase 1.5)   | 4h     | —          |
 | 3.5     | `tool()` helper + Zod-schema convenience + SDK-MCP-shaped helper                                                                            | `tools` arg (Phase 1.2)      | 5h     | —          |
@@ -48,7 +48,7 @@ All builds-on items reference primitives already shipped. Most are independent a
 
 **Phase 3 total:** ~50h.
 
-**Initial Ready state on the project board** (no prereqs within Phase 3): 3.1, 3.4, 3.5, 3.6, 3.8, 3.9, 3.10, 3.11, 3.12 (9 cards). **Backlog until prereq lands:** 3.2, 3.3 (after 3.1), 3.7 (after 3.1, 3.2).
+**Initial Ready state on the project board** (no prereqs within Phase 3): 3.1, 3.4, 3.5, 3.6, 3.8, 3.9, 3.10, 3.11, 3.12 (9 cards). **Backlog until prereq lands:** ~~3.2~~ (now Done), 3.3 (after 3.1), 3.7 (after 3.1, 3.2).
 
 ---
 

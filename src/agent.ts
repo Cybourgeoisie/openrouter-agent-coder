@@ -28,6 +28,7 @@ import type {
   TokenUsage,
 } from './events.js';
 import { permissionModeToCanUseTool, type PermissionMode } from './permission-modes.js';
+import { buildToolFilterCanUseTool } from './tool-filters.js';
 
 const DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
 const DEFAULT_MAX_TURNS = 25;
@@ -112,6 +113,25 @@ export interface OpenRouterAgentRunOptions {
    */
   permissionMode?: PermissionMode;
   /**
+   * Pre-approve list of tool invocations. Entries are either a plain tool name
+   * (`'read_file'`, also accepts the Claude-SDK-style alias `'Read'`) or a
+   * scoped rule (e.g. `'Bash(npm *)'` or `'Edit(src/handlers.ts)'`; globs
+   * support `*` and `**`). A matching rule short-circuits the
+   * {@link permissionMode} gate to allow that call. Rules are validated at
+   * construction — malformed input throws immediately.
+   *
+   * When `disallowedTools` matches the same call, the denial wins. Explicit
+   * `canUseTool` overrides both lists entirely.
+   */
+  allowedTools?: readonly string[];
+  /**
+   * Deny list of tool invocations using the same grammar as
+   * {@link allowedTools}. Denials win over both {@link allowedTools} matches
+   * and the {@link permissionMode} gate. Explicit `canUseTool` overrides this
+   * list entirely.
+   */
+  disallowedTools?: readonly string[];
+  /**
    * Lifecycle hook callback. Fires `SessionStart` once after the
    * `session_started` event, `PreToolUse` before each client tool's
    * `canUseTool` decision (audit always fires, even when denied),
@@ -162,20 +182,43 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     throw new Error('apiKey is required');
   }
   const cwd = opts.cwd ?? process.cwd();
-  // Resolve the canUseTool gate: explicit > permissionMode-derived > none.
-  // When both are supplied, warn so the conflict is visible in logs — the
-  // explicit callback may quietly diverge from the mode the caller selected.
-  let canUseTool = opts.canUseTool;
-  if (opts.permissionMode !== undefined) {
-    if (opts.canUseTool !== undefined) {
+  // Resolve the canUseTool gate in this precedence order:
+  //   1. explicit canUseTool — wins outright; permissionMode + allowed/disallowed lists are ignored.
+  //   2. allowedTools / disallowedTools — composed via buildToolFilterCanUseTool, with
+  //      permissionMode (if set) supplied as the fallback gate.
+  //   3. permissionMode alone — translated to a CanUseTool via permissionModeToCanUseTool.
+  //   4. nothing — undefined gate, every tool runs (back-compat default).
+  // When the explicit canUseTool collides with either of the higher-level
+  // options, a single warn log mentioning all three names fires so the
+  // conflict is visible to whoever is reading the log.
+  const filterListsSet = opts.allowedTools !== undefined || opts.disallowedTools !== undefined;
+  const sources: string[] = [];
+  if (opts.canUseTool !== undefined) sources.push('canUseTool');
+  if (opts.permissionMode !== undefined) sources.push('permissionMode');
+  if (filterListsSet) sources.push('allowedTools/disallowedTools');
+
+  let canUseTool: CanUseTool | undefined;
+  if (opts.canUseTool !== undefined) {
+    canUseTool = opts.canUseTool;
+    if (sources.length > 1) {
       opts.logger?.(
         'warn',
-        'Both permissionMode and canUseTool were supplied; canUseTool wins and permissionMode is ignored',
-        { permissionMode: opts.permissionMode },
+        'Explicit canUseTool was supplied alongside higher-level permission options (permissionMode, allowedTools/disallowedTools); canUseTool wins and the others are ignored',
+        { permissionMode: opts.permissionMode, sources },
       );
-    } else {
-      canUseTool = permissionModeToCanUseTool(opts.permissionMode);
     }
+  } else if (filterListsSet) {
+    const modeGate =
+      opts.permissionMode !== undefined
+        ? permissionModeToCanUseTool(opts.permissionMode)
+        : undefined;
+    canUseTool = buildToolFilterCanUseTool({
+      allowedTools: opts.allowedTools,
+      disallowedTools: opts.disallowedTools,
+      modeGate,
+    });
+  } else if (opts.permissionMode !== undefined) {
+    canUseTool = permissionModeToCanUseTool(opts.permissionMode);
   }
   return {
     apiKey: opts.apiKey,

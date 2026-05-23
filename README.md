@@ -54,6 +54,8 @@ Single-shot async iterable that drives one agent run. Construct, `for await` the
 | `tools`          | `readonly Tool[]` | no       | `allTools({ cwd, signal })`       | Tools passed to the model. Custom tools are NOT context-bound — caller handles cwd/abort.                                                                                                            |
 | `canUseTool`     | `CanUseTool`      | no       | _(allow all)_                     | Permission gate invoked before each client tool's execute. Server-side tools bypass this hook.                                                                                                       |
 | `permissionMode` | `PermissionMode`  | no       | _(allow all)_                     | Named preset — `'default'` / `'acceptEdits'` / `'bypassPermissions'` / `'plan'`. Translated to an internal `canUseTool`. Explicit `canUseTool` wins when both are set (and a `warn` log is emitted). |
+| `allowedTools`     | `readonly string[]` | no       | _(none)_                          | Pre-approve list. Plain name (`'read_file'` / `'Read'`) matches any invocation; scoped rules (`'Bash(npm *)'`, `'Edit(src/handlers.ts)'`) match a tool-specific argument. Layers on top of `permissionMode`; explicit `canUseTool` overrides both lists. Malformed rules throw at construction. |
+| `disallowedTools`  | `readonly string[]` | no       | _(none)_                          | Deny list with the same grammar as `allowedTools`. Denials win over both `allowedTools` and `permissionMode`. Explicit `canUseTool` overrides this list. Malformed rules throw at construction. |
 | `onHook`         | `OnHook`          | no       | _(none)_                          | Lifecycle callback fired on `SessionStart`, `PreToolUse`, `PostToolUse`, `SessionEnd`. Audit-only.                                                                                                   |
 | `signal`         | `AbortSignal`     | no       | _(none)_                          | External abort signal. Combined internally with the run's `abort()` method via `AbortSignal.any`.                                                                                                    |
 | `logsRoot`       | `string`          | no       | `<cwd>/logs`                      | Directory for session logs.                                                                                                                                                                          |
@@ -112,6 +114,26 @@ const run = new OpenRouterAgentRun({
 ```
 
 When both `permissionMode` and `canUseTool` are supplied, the explicit `canUseTool` wins and a `'warn'`-level log is emitted via `logger`.
+
+#### `allowedTools` / `disallowedTools` example
+
+```ts
+const run = new OpenRouterAgentRun({
+  apiKey,
+  sessionId,
+  prompt,
+  // Pre-approve any `npm` invocation, but deny `npm publish` outright.
+  // `disallowedTools` wins over `allowedTools` for overlapping matches:
+  // an `npm publish` call hits both rules, the deny rule takes precedence,
+  // and the tool result surfaces a `denied: true` payload.
+  allowedTools: ['Bash(npm *)'],
+  disallowedTools: ['Bash(npm publish*)'],
+});
+```
+
+Entries accept either a plain tool name (canonical `'read_file'` or the Claude-SDK-style alias `'Read'`) or a scoped rule `'ToolName(pattern)'`. Argument keys per tool: `Bash`/`run_command` → `command`, `Edit`/`Write`/`Read`/`List` → `path`, `Grep` → `pattern`. Bash patterns use `*` as the only wildcard (everything else is a regex literal); path patterns are globs with `*` (single segment) and `**` (multi-segment).
+
+Resolution order per call: `disallowedTools` (deny wins) → `allowedTools` (allow) → `permissionMode` gate → allow. Explicit `canUseTool` overrides every higher-level option and emits one `warn` log mentioning all three names when more than one source is set.
 
 #### `onHook` example
 
