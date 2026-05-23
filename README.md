@@ -67,6 +67,7 @@ Single-shot async iterable that drives one agent run. Construct, `for await` the
 | `settingSources`    | `SettingSource[]`   | no       | `[]`                              | Opt-in context-discovery list — `'project'` (walks up from `cwd` reading `CLAUDE.md` / `.claude/CLAUDE.md`, stops at the first `.git` or 10 levels), `'user'` (`<os.homedir()>/.claude/CLAUDE.md`), `'local'` (`<cwd>/.claude/CLAUDE.local.md`). Discovered content is prepended to `instructions` in user → project → local order. Default `[]` performs no FS reads. |
 | `persistSession`    | `boolean`           | no       | `true`                            | When `false`, the run uses an in-memory `StateAccessor` and skips every write under `logsRoot` (`session.json`, per-request `request.json`, per-generation `response.json`, `state.json`). The event stream is byte-identical to a persisted run, but resume across processes is impossible and external readers like `readSessionLog` see ENOENT for that sessionId.  |
 | `parentSessionId`   | `string`            | no       | _(none)_                          | Set when this run continues a session forked from another. Threaded into `session.json` and surfaced on the `session_started` event payload. Defaults undefined — the field is omitted from both on-disk and event payloads for root sessions.                                                                                                                         |
+| `checkpoint`        | `boolean`           | no       | `false`                           | When `true`, the built-in `write_file` and `edit_file` tools snapshot their target path under `<logsRoot>/<sessionId>/checkpoints/` _before_ mutating it. Per-call `checkpoint` field on those tools overrides this default. No-op (warn log + write proceeds) when paired with `persistSession: false`. Ignored when a custom `tools` array is supplied.              |
 
 ### `AgentCoreEvent`
 
@@ -477,6 +478,67 @@ Behaviour:
 - `session.json` carries forward the source's `cwd` when present (best-effort: a missing source `session.json` is non-fatal — the fork still succeeds and just omits `cwd`).
 - Forking a `persistSession: false` run via `run.fork()` rejects synchronously with `cannot fork in-memory session: <sessionId> has no on-disk state at <logsRoot>/<sessionId>/state.json` — the check is local (no FS round-trip) and fires before any I/O. Calling the standalone `forkSession()` with the same source id yields the same error.
 - Lineage is opt-in on the consuming side: pass `parentSessionId` to the next `OpenRouterAgentRun` to record the link on `session.json` and surface it on `session_started`. The library does not look up or validate the parent; consumers wire the chain themselves.
+
+#### File checkpointing
+
+Phase 4.6 adds pre-write file checkpointing to the built-in `write_file` and `edit_file` tools. When the run is constructed with `checkpoint: true` — or when an individual tool call passes `{ checkpoint: true }` in its arguments — the library snapshots the target path under `<logsRoot>/<sessionId>/checkpoints/<checkpointId>/` before the mutation lands, so the change can be reverted later with `restoreCheckpoint()`.
+
+```ts
+import { OpenRouterAgentRun, listCheckpoints, restoreCheckpoint } from 'openrouter-agent-coder';
+
+const run = new OpenRouterAgentRun({
+  apiKey,
+  sessionId: 'demo',
+  prompt: 'make some edits',
+  checkpoint: true, // every write_file / edit_file snapshots first
+});
+for await (const _ of run) {
+  /* drain events */
+}
+
+// Inspect snapshots, then rewind to one of them.
+const checkpoints = await listCheckpoints('demo', './logs');
+const { filesRestored } = await restoreCheckpoint(checkpoints[0]!.checkpointId, 'demo', './logs');
+```
+
+On-disk layout under the session directory:
+
+```
+<logsRoot>/<sessionId>/checkpoints/
+  <checkpointId>/                # uuid v4
+    manifest.json                # { checkpointId, timestamp, files: [...] }
+    <encoded-original-path>.snapshot   # raw bytes; absent for tombstones
+    ...
+```
+
+Path encoding replaces every `/` (including the leading `/` of absolute paths) with the sentinel token `__SLASH__`, so each snapshot fits in a single filesystem basename. The encoder / decoder pair (`encodePath`, `decodePath`) round-trips losslessly. Files that did not exist at checkpoint time are recorded as **tombstones** in `manifest.json` (`existed: false`, no `.snapshot` file); restoring a tombstone removes the live path if it currently exists.
+
+Library-side signatures:
+
+```ts
+function createCheckpoint(
+  sessionId: string,
+  logsRoot: string,
+  files: string[],
+  options?: { logger?: CheckpointLogger },
+): Promise<Checkpoint>;
+
+function listCheckpoints(sessionId: string, logsRoot: string): Promise<Checkpoint[]>;
+
+function restoreCheckpoint(
+  checkpointId: string,
+  sessionId: string,
+  logsRoot: string,
+): Promise<{ filesRestored: string[] }>;
+```
+
+Behaviour:
+
+- Auto-checkpointing is **off by default**. The constructor option (`checkpoint: true`) turns it on for the whole run; the per-call `{ checkpoint: true | false }` argument on `write_file` / `edit_file` always wins over the constructor default.
+- `persistSession: false` interaction: when the run is in-memory, requested checkpoints are a NO-OP. The library emits a `'warn'`-level log (`'checkpoint requested but persistSession is false'`) and the underlying write proceeds normally — no snapshot directory is created.
+- `restoreCheckpoint` is atomic across the manifest. Every restored file is first staged into `<checkpointDir>/.restore-tmp/`, then `fs.rename()`d into place once every staged file is ready. Tombstoned paths are unlinked last (after all renames succeed). The `.restore-tmp/` directory is cleaned up on every exit path (success and error).
+- Each session is capped at `MAX_CHECKPOINTS_PER_SESSION = 100` checkpoints. New checkpoints beyond the cap evict the oldest (by `timestamp`, ascending) and emit a `'warn'`-level log via the optional logger. The cap is a module-level constant — not per-session configurable in v1.
+- Fast-path: when creating a checkpoint, if the target file has the **same `mtimeMs` and `size`** as in its most-recent prior snapshot in this session, the new snapshot is created by hard-linking to the prior one (`fs.link`) instead of re-copying the bytes. Falls through to a regular `copyFile` on cross-filesystem (`EXDEV`) or unsupported FS errors.
 
 ### `accountInfo(opts)`
 

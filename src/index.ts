@@ -63,6 +63,20 @@ export { tool, createSdkMcpServer } from './custom-tools.js';
 export type { CustomToolConfig, SdkMcpServer, CreateSdkMcpServerConfig } from './custom-tools.js';
 export { forkSession } from './session-fork.js';
 export type { ForkSessionOptions, ForkSessionResult } from './session-fork.js';
+export {
+  createCheckpoint,
+  listCheckpoints,
+  restoreCheckpoint,
+  encodePath,
+  decodePath,
+  MAX_CHECKPOINTS_PER_SESSION,
+} from './checkpoints.js';
+export type {
+  Checkpoint,
+  CheckpointFile,
+  RestoreCheckpointResult,
+  CheckpointLogger,
+} from './checkpoints.js';
 export { accountInfo, supportedModels } from './openrouter-api.js';
 export type { AccountInfo, ModelInfo } from './openrouter-api.js';
 export type {
