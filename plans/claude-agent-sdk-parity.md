@@ -1,18 +1,18 @@
 # Claude Agent SDK vs OpenRouter Agent Coder — Parity Analysis
 
 > Comparison of the [Claude Code Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) (TypeScript) against the openrouter-agent-coder feature set.
-> Originally generated 2026-05-21. **Last reviewed against this codebase: 2026-05-23** (after Phase 3.1 + 3.2 + 3.3 + 3.4 landed — see [`claude-sdk-parity-roadmap.md`](./claude-sdk-parity-roadmap.md)).
+> Originally generated 2026-05-21. **Last reviewed against this codebase: 2026-05-23** (after Phase 3.1 + 3.2 + 3.3 + 3.4 + 3.5 + 3.6 + 3.7 + 3.8 landed — see [`claude-sdk-parity-roadmap.md`](./claude-sdk-parity-roadmap.md)).
 
 ## Summary
 
 | Status             | Count  |
 | ------------------ | ------ |
-| Full parity        | 16     |
-| Partial parity     | 9      |
+| Full parity        | 17     |
+| Partial parity     | 8      |
 | Missing            | 21     |
 | **Total features** | **46** |
 
-Net change vs the original 2026-05-21 snapshot: **+8 Full** (`canUseTool`, new `Interrupt/abort` row, `Allowed/disallowed tools` after Phase 3.2, `Plan mode` after Phase 3.3, `CLAUDE.md / project context` after Phase 3.4, `Session lifecycle hooks` and `Notification hook` after Phase 3.6, `PreToolUse`/`PostToolUse` block-and-modify after Phase 3.7), **+1 Partial** (constructor-injected tools). Most "Missing" rows softened to "Partial" because their building blocks landed in Phase 1; the remaining gap is the ergonomic / discovery layer on top.
+Net change vs the original 2026-05-21 snapshot: **+9 Full** (`canUseTool`, new `Interrupt/abort` row, `Allowed/disallowed tools` after Phase 3.2, `Plan mode` after Phase 3.3, `CLAUDE.md / project context` after Phase 3.4, `Session lifecycle hooks` and `Notification hook` after Phase 3.6, `PreToolUse`/`PostToolUse` block-and-modify after Phase 3.7, `Streaming output` (rich message stream) after Phase 3.8), **+1 Partial** (constructor-injected tools). Most "Missing" rows softened to "Partial" because their building blocks landed in Phase 1; the remaining gap is the ergonomic / discovery layer on top.
 
 ---
 
@@ -20,17 +20,17 @@ Net change vs the original 2026-05-21 snapshot: **+8 Full** (`canUseTool`, new `
 
 ### Core Agent Loop
 
-| Feature                  | Claude Agent SDK                                                                               | OpenRouter Agent Coder                                                                                      | Parity      |
-| ------------------------ | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------- |
-| Autonomous tool loop     | SDK handles tool calls, results, repeats until done                                            | Delegates to `@openrouter/agent` `callModel()` SDK                                                          | **Full**    |
-| Turn counting            | Tracks turns, exposes in ResultMessage                                                         | Tracks turns via streaming events; surfaced on `turn_end` and `stream_complete`                             | **Full**    |
-| Max turns stop condition | `maxTurns` option                                                                              | `maxTurns` constructor option → `stepCountIs()`                                                             | **Full**    |
-| Max cost stop condition  | `maxBudgetUsd` option                                                                          | `maxBudgetUsd` constructor option → `maxCost()`                                                             | **Full**    |
-| Interrupt / abort        | `query.interrupt()` and streaming-input control messages                                       | `signal` constructor option + `run.abort()` method (combined internally via `AbortSignal.any`)              | **Full**    |
-| Effort / reasoning level | `effort` option (low/medium/high/xhigh/max)                                                    | Not implemented                                                                                             | **None**    |
-| Context compaction       | Automatic summarization when context fills; PreCompact hook; manual `/compact`                 | Not implemented — relies on SDK's `previousResponseId`                                                      | **None**    |
-| Streaming output         | Rich message stream (SystemMessage, AssistantMessage, UserMessage, StreamEvent, ResultMessage) | `AgentCoreEvent` discriminated union (text_delta, tool_call/result, turn_start/end, stream_complete, error) | **Partial** |
-| Streaming input          | AsyncGenerator-based input; mid-session messages, interrupts, image attachments                | Not implemented — one prompt per `OpenRouterAgentRun` instance                                              | **None**    |
+| Feature                  | Claude Agent SDK                                                                               | OpenRouter Agent Coder                                                                                                                                                          | Parity   |
+| ------------------------ | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| Autonomous tool loop     | SDK handles tool calls, results, repeats until done                                            | Delegates to `@openrouter/agent` `callModel()` SDK                                                                                                                              | **Full** |
+| Turn counting            | Tracks turns, exposes in ResultMessage                                                         | Tracks turns via streaming events; surfaced on `turn_end` and `stream_complete`                                                                                                 | **Full** |
+| Max turns stop condition | `maxTurns` option                                                                              | `maxTurns` constructor option → `stepCountIs()`                                                                                                                                 | **Full** |
+| Max cost stop condition  | `maxBudgetUsd` option                                                                          | `maxBudgetUsd` constructor option → `maxCost()`                                                                                                                                 | **Full** |
+| Interrupt / abort        | `query.interrupt()` and streaming-input control messages                                       | `signal` constructor option + `run.abort()` method (combined internally via `AbortSignal.any`)                                                                                  | **Full** |
+| Effort / reasoning level | `effort` option (low/medium/high/xhigh/max)                                                    | Not implemented                                                                                                                                                                 | **None** |
+| Context compaction       | Automatic summarization when context fills; PreCompact hook; manual `/compact`                 | Not implemented — relies on SDK's `previousResponseId`                                                                                                                          | **None** |
+| Streaming output         | Rich message stream (SystemMessage, AssistantMessage, UserMessage, StreamEvent, ResultMessage) | `AgentCoreEvent` event stream (default) + `run.messages()` typed-message view (`AgentMessage` = SystemMessage / AssistantMessage / UserMessage / ResultMessage) after Phase 3.8 | **Full** |
+| Streaming input          | AsyncGenerator-based input; mid-session messages, interrupts, image attachments                | Not implemented — one prompt per `OpenRouterAgentRun` instance                                                                                                                  | **None** |
 
 ### Built-in Tools
 
@@ -140,7 +140,7 @@ Items shipped in Phase 1 are crossed through with a back-pointer; the **layer-on
 
 9. **Streaming input mode.** AsyncGenerator-based input for mid-session messages, interruptions, image attachments. (Interrupt-only is already covered via `signal` / `abort()`.)
 
-10. **Rich message stream.** Typed message objects (SystemMessage, AssistantMessage, UserMessage, ResultMessage) instead of raw stream events. (Partial overlap with the "Streaming output" matrix row.)
+10. ~~**Rich message stream.** Typed message objects (SystemMessage, AssistantMessage, UserMessage, ResultMessage) instead of raw stream events. (Partial overlap with the "Streaming output" matrix row.)~~ _Shipped in Phase 3.8 — `run.messages()` returns an `AsyncIterable<AgentMessage>` that aggregates the underlying event stream into typed `SystemMessage` / `AssistantMessage` / `UserMessage` / `ResultMessage` blocks. Existing `for await (... of run)` event stream is unchanged._
 
 11. **MCP server support.** Connect external tools via Model Context Protocol — stdio, HTTP/SSE, `.mcp.json` config.
 

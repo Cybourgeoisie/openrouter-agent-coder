@@ -31,3 +31,13 @@ export { tool, createSdkMcpServer } from './custom-tools.js';
 export type { CustomToolConfig, SdkMcpServer, CreateSdkMcpServerConfig } from './custom-tools.js';
 export { accountInfo, supportedModels } from './openrouter-api.js';
 export type { AccountInfo, ModelInfo } from './openrouter-api.js';
+export type {
+  AgentMessage,
+  SystemMessage,
+  AssistantMessage,
+  UserMessage,
+  ResultMessage,
+  TextContent,
+  ToolUseContent,
+  ToolResultContent,
+} from './messages.js';
