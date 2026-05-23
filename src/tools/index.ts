@@ -8,6 +8,7 @@ import { grepFilesTool } from './grep-files.js';
 import { globTool } from './glob.js';
 import { askUserQuestionTool, type AskUserQuestionToolOptions } from './ask-user-question.js';
 import { taskCreateTool, taskUpdateTool, type OnTasksChanged, type TaskListRef } from './tasks.js';
+import { editNotebookTool } from './edit-notebook.js';
 import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
 
 export { readFileTool } from './read-file.js';
@@ -26,6 +27,12 @@ export type {
   UserQuestionResponse,
 } from './ask-user-question.js';
 export { taskCreateTool, taskUpdateTool } from './tasks.js';
+export { editNotebookTool } from './edit-notebook.js';
+export type {
+  EditNotebookResult,
+  EditNotebookSuccess,
+  EditNotebookError,
+} from './edit-notebook.js';
 export type {
   TaskState,
   Task,
@@ -91,5 +98,6 @@ export function allTools(
     askUserQuestionTool(ctx, { onAskUserQuestion: opts.onAskUserQuestion }),
     taskCreateTool(ctx, { taskListRef, onTasksChanged: opts.onTasksChanged }),
     taskUpdateTool(ctx, { taskListRef, onTasksChanged: opts.onTasksChanged }),
+    editNotebookTool(ctx),
   ];
 }

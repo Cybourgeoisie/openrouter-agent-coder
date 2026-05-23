@@ -24,6 +24,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New `edit_notebook` client tool — Jupyter notebook (`.ipynb`) cell
+  manipulation. Inputs: `path` (relative to the agent `cwd`), `operation`
+  (Zod enum: `'replace_source'` / `'insert'` / `'delete'` /
+  `'change_type'`), `cell_index` (non-negative integer; for `insert`,
+  `0` prepends and `cells.length` appends), optional `new_source`
+  (required for `replace_source` + `insert`), optional `new_cell_type`
+  (Zod enum: `'code'` / `'markdown'`; required for `insert` +
+  `change_type`). Round-trip preservation: untouched cells keep every
+  field (`metadata`, `outputs`, `execution_count`, `id`, etc.), notebook-
+  level `metadata` / `nbformat` / `nbformat_minor` / `kernelspec` and any
+  other top-level keys are preserved verbatim. `source` is normalized to
+  the canonical Jupyter `string[]` shape on write (splitting on `\n` and
+  preserving the trailing `\n` on each non-final line). `change_type`
+  `code → markdown` strips `outputs` + `execution_count`;
+  `markdown → code` adds `outputs: []` + `execution_count: null`. Returns
+  `{ ok: true, cells: <post-mutation-count> }` on success; surfaces
+  validation / index-range / parse / read / write failures as
+  `{ error: '<diagnostic>' }` (tool-error path — the model sees the
+  error and can recover, no throws). Wired into `allTools()` as the
+  eleventh client tool; the agent's default tool set now ships with 11
+  client tools. (Phase 4.3)
 - New `task_create` / `task_update` client tools — in-run task tracking
   surfaced through the `Notification` hook so a host UI can render
   progress. `task_create` inputs: `content` (string, required) + optional

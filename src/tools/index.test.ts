@@ -11,12 +11,13 @@ import {
   askUserQuestionTool,
   taskCreateTool,
   taskUpdateTool,
+  editNotebookTool,
   type TaskListRef,
 } from './index.js';
 
 describe('tools barrel', () => {
-  it('exports all ten tools', () => {
-    expect(allTools()).toHaveLength(10);
+  it('exports all eleven tools', () => {
+    expect(allTools()).toHaveLength(11);
   });
 
   it('includes every tool by name', () => {
@@ -32,6 +33,7 @@ describe('tools barrel', () => {
       'ask_user_question',
       'task_create',
       'task_update',
+      'edit_notebook',
     ]);
   });
 
@@ -46,6 +48,7 @@ describe('tools barrel', () => {
     expect(askUserQuestionTool().function.name).toBe('ask_user_question');
     expect(taskCreateTool().function.name).toBe('task_create');
     expect(taskUpdateTool().function.name).toBe('task_update');
+    expect(editNotebookTool().function.name).toBe('edit_notebook');
   });
 
   it('all tools have execute functions', () => {
@@ -81,11 +84,13 @@ describe('tools barrel', () => {
               ? { content: 'x' }
               : t.function.name === 'task_update'
                 ? { taskId: 'nope', state: 'completed' }
-                : t.function.name === 'list_directory' ||
-                    t.function.name === 'grep_files' ||
-                    t.function.name === 'glob'
-                  ? { path: '.', pattern: 'x', file_glob: '*', case_sensitive: true }
-                  : { path: 'nonexistent', old_string: 'a', new_string: 'b', content: '' },
+                : t.function.name === 'edit_notebook'
+                  ? { path: 'nonexistent', operation: 'delete', cell_index: 0 }
+                  : t.function.name === 'list_directory' ||
+                      t.function.name === 'grep_files' ||
+                      t.function.name === 'glob'
+                    ? { path: '.', pattern: 'x', file_glob: '*', case_sensitive: true }
+                    : { path: 'nonexistent', old_string: 'a', new_string: 'b', content: '' },
       );
       if (t.function.name === 'run_command') {
         // run_command resolves with an error result rather than throwing.
@@ -97,6 +102,12 @@ describe('tools barrel', () => {
         await expect(candidate).resolves.toMatchObject({ id: expect.any(String) });
       } else if (t.function.name === 'task_update') {
         await expect(candidate).resolves.toEqual({ error: 'unknown task id: nope' });
+      } else if (t.function.name === 'edit_notebook') {
+        // edit_notebook does not consult ctx.signal; ENOENT path surfaces as
+        // a tool-result error rather than a throw.
+        await expect(candidate).resolves.toMatchObject({
+          error: expect.stringMatching(/^failed to read notebook:/),
+        });
       } else {
         await expect(candidate).rejects.toThrow(/cancelled/);
       }
