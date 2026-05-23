@@ -236,6 +236,53 @@ Throws on non-OK responses. Optional `baseUrl` override.
 
 The bundled tool preset — `allTools({ cwd, signal })` returns the six client tools below, context-bound. It is the default value for `OpenRouterAgentRun`'s `tools` option; you only need to reference it directly when composing a custom tool array.
 
+### Custom tools
+
+For host code adding its own tools, the library re-exports a Claude-Agent-SDK-shaped `tool()` helper that takes a Zod schema and a typed `execute` callback:
+
+```ts
+import { z } from 'zod/v4';
+import { OpenRouterAgentRun, allTools, tool, createSdkMcpServer } from 'openrouter-agent-coder';
+
+const fetchIssue = tool({
+  name: 'fetch_issue',
+  description: 'Fetch a GitHub issue by repo + number',
+  inputSchema: z.object({
+    repo: z.string().describe('owner/name slug'),
+    number: z.number().int().positive(),
+  }),
+  execute: async ({ repo, number }) => {
+    const res = await fetch(`https://api.github.com/repos/${repo}/issues/${number}`);
+    return await res.json();
+  },
+});
+
+const run = new OpenRouterAgentRun({
+  apiKey: process.env.OPENROUTER_API_KEY!,
+  sessionId: 'my-session',
+  prompt: 'Summarize Cybourgeoisie/openrouter-agent-coder issue #44',
+  tools: [...allTools({ cwd: process.cwd() }), fetchIssue],
+});
+```
+
+Zod validation runs before `execute`; an invalid input is surfaced as `tool_result.isError = true` with a message naming the tool and the offending field (the run keeps going). Tools built via `tool()` integrate with `canUseTool`, `onHook`, `allowedTools`/`disallowedTools`, and `permissionMode` exactly like the built-ins.
+
+`createSdkMcpServer({ name, version, tools })` bundles a group of tools into a named, versioned value bag (`{ name, version, tools }`). The `tools` field spreads straight into `OpenRouterAgentRunOptions['tools']`:
+
+```ts
+const issueServer = createSdkMcpServer({
+  name: 'github-issues',
+  version: '0.1.0',
+  tools: [fetchIssue],
+});
+
+new OpenRouterAgentRun({
+  /* … */ tools: [...allTools({ cwd: process.cwd() }), ...issueServer.tools],
+});
+```
+
+Today this is purely a value bag — real MCP transports (stdio / HTTP+SSE / `.mcp.json` discovery) come in Phase 5.2 of the [parity roadmap](./plans/claude-sdk-parity-roadmap.md).
+
 ## Tools shipped with the library
 
 Client tools (execute in the host process):
