@@ -24,6 +24,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Phase 4.5: session forking. New `forkSession({ sessionId, newSessionId?,
+logsRoot })` standalone helper plus an `OpenRouterAgentRun.fork({
+newSessionId? })` instance wrapper that reuses the run's resolved
+  `logsRoot`. Forking copies the source session's `state.json` via atomic
+  write (`*.tmp` → `rename`) into a new session directory under the same
+  `logsRoot` and stamps a fresh `session.json` whose new `parentSessionId`
+  field points back at the source. Per-request `req_*` / `gen_*`
+  subdirectories are **not** copied — the fork inherits the OR
+  `previousResponseId` chain via `state.json` alone. `newSessionId` is
+  auto-minted as a UUID v4 when omitted. Forking a `persistSession: false`
+  run (or any source missing `state.json`) rejects with `cannot fork
+in-memory session: <id> has no on-disk state at <path>`; the instance
+  wrapper's check is local — no filesystem round-trip. Standalone
+  `forkSession` requires an explicit `logsRoot` (no `<cwd>/logs` default)
+  to preserve the library's "exactly one `process.cwd()` call site" rule.
+- Phase 4.5: `parentSessionId?: string` constructor option on
+  `OpenRouterAgentRun`. When set, the value is written to the run's
+  `session.json` (new optional `parentSessionId` field on `SessionLog`) and
+  surfaced on the `session_started` event payload. Root sessions omit the
+  field from both — back-compat with legacy `session.json` files is
+  preserved by absence.
 - New `monitor` client tool — spawn a shell command via `/bin/sh -c` and
   stream its stdout/stderr line-by-line into a capture buffer that resolves
   on one of four stop conditions: natural process exit, line-count cap hit,

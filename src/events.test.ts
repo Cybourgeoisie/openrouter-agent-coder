@@ -18,7 +18,11 @@ describe('AgentCoreEvent union', () => {
 
   it('narrows variants by discriminant', () => {
     type SessionStarted = Extract<AgentCoreEvent, { type: 'session_started' }>;
-    expectTypeOf<SessionStarted>().toEqualTypeOf<{ type: 'session_started'; sessionId: string }>();
+    expectTypeOf<SessionStarted>().toEqualTypeOf<{
+      type: 'session_started';
+      sessionId: string;
+      parentSessionId?: string;
+    }>();
 
     type TurnStart = Extract<AgentCoreEvent, { type: 'turn_start' }>;
     expectTypeOf<TurnStart>().toEqualTypeOf<{ type: 'turn_start'; turnNumber: number }>();

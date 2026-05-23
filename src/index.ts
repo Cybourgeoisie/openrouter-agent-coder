@@ -61,6 +61,8 @@ export type {
 } from './tools/index.js';
 export { tool, createSdkMcpServer } from './custom-tools.js';
 export type { CustomToolConfig, SdkMcpServer, CreateSdkMcpServerConfig } from './custom-tools.js';
+export { forkSession } from './session-fork.js';
+export type { ForkSessionOptions, ForkSessionResult } from './session-fork.js';
 export { accountInfo, supportedModels } from './openrouter-api.js';
 export type { AccountInfo, ModelInfo } from './openrouter-api.js';
 export type {

@@ -65,6 +65,20 @@ describe('readSessionLog', () => {
     expect(data.cwd).toBe('/some/where');
   });
 
+  it('round-trips parentSessionId when provided', async () => {
+    await logSessionStart(LOGS_ROOT, 'forked-session', '/tmp/forked-cwd', 'parent-id-xyz');
+    const data = await readSessionLog(LOGS_ROOT, 'forked-session');
+    expect(data.sessionId).toBe('forked-session');
+    expect(data.parentSessionId).toBe('parent-id-xyz');
+  });
+
+  it('omits parentSessionId on disk when not supplied', async () => {
+    await logSessionStart(LOGS_ROOT, 'root-session', '/tmp/root-cwd');
+    const raw = await readFile(join(LOGS_ROOT, 'root-session', 'session.json'), 'utf-8');
+    const data = JSON.parse(raw);
+    expect(Object.prototype.hasOwnProperty.call(data, 'parentSessionId')).toBe(false);
+  });
+
   // Backward compatibility: session.json files written before Phase 1.6
   // contained only { sessionId, startedAt }. They must still parse without
   // throwing — cwd is optional on the SessionLog type.
