@@ -1,0 +1,772 @@
+{
+  "name": "single-tool-call-gemini",
+  "steps": [
+    {
+      "type": "yield",
+      "event": {
+        "type": "turn.start",
+        "turnNumber": 0,
+        "timestamp": 1779535051072
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "raw": {
+          "type": "response.keep_alive"
+        },
+        "type": "UNKNOWN",
+        "isUnknown": true
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "response": {
+          "background": false,
+          "completedAt": null,
+          "createdAt": 1779535050,
+          "error": null,
+          "frequencyPenalty": 0,
+          "id": "gen-1779535050-Svy42MywKmUXbXexlYdp",
+          "incompleteDetails": null,
+          "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Make tool calls when asked; otherwise reply with the exact requested text.",
+          "maxOutputTokens": null,
+          "maxToolCalls": null,
+          "metadata": {},
+          "model": "google/gemini-3.5-flash-20260519",
+          "object": "response",
+          "output": [],
+          "parallelToolCalls": true,
+          "presencePenalty": 0,
+          "previousResponseId": null,
+          "promptCacheKey": null,
+          "reasoning": null,
+          "safetyIdentifier": null,
+          "serviceTier": "auto",
+          "status": "in_progress",
+          "store": false,
+          "temperature": 1,
+          "text": {
+            "format": {
+              "type": "text"
+            }
+          },
+          "toolChoice": "auto",
+          "tools": [
+            {
+              "description": "Returns its `value` input prefixed with \"echoed:\". Use exactly once when asked.",
+              "name": "echo",
+              "parameters": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The string to echo back"
+                  }
+                },
+                "required": ["value"],
+                "additionalProperties": false
+              },
+              "strict": null,
+              "type": "function"
+            }
+          ],
+          "topLogprobs": 0,
+          "topP": 1,
+          "truncation": "disabled",
+          "usage": null
+        },
+        "sequenceNumber": 0,
+        "type": "response.created"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "response": {
+          "background": false,
+          "completedAt": null,
+          "createdAt": 1779535050,
+          "error": null,
+          "frequencyPenalty": 0,
+          "id": "gen-1779535050-Svy42MywKmUXbXexlYdp",
+          "incompleteDetails": null,
+          "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Make tool calls when asked; otherwise reply with the exact requested text.",
+          "maxOutputTokens": null,
+          "maxToolCalls": null,
+          "metadata": {},
+          "model": "google/gemini-3.5-flash-20260519",
+          "object": "response",
+          "output": [],
+          "parallelToolCalls": true,
+          "presencePenalty": 0,
+          "previousResponseId": null,
+          "promptCacheKey": null,
+          "reasoning": null,
+          "safetyIdentifier": null,
+          "serviceTier": "auto",
+          "status": "in_progress",
+          "store": false,
+          "temperature": 1,
+          "text": {
+            "format": {
+              "type": "text"
+            }
+          },
+          "toolChoice": "auto",
+          "tools": [
+            {
+              "description": "Returns its `value` input prefixed with \"echoed:\". Use exactly once when asked.",
+              "name": "echo",
+              "parameters": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The string to echo back"
+                  }
+                },
+                "required": ["value"],
+                "additionalProperties": false
+              },
+              "strict": null,
+              "type": "function"
+            }
+          ],
+          "topLogprobs": 0,
+          "topP": 1,
+          "truncation": "disabled",
+          "usage": null
+        },
+        "sequenceNumber": 1,
+        "type": "response.in_progress"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "item": {
+          "id": "tool_echo_ae0mlq0yV2RnHbzr09kY",
+          "status": "in_progress",
+          "summary": [],
+          "type": "reasoning"
+        },
+        "outputIndex": 0,
+        "sequenceNumber": 2,
+        "type": "response.output_item.added"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "item": {
+          "arguments": "",
+          "callId": "tool_echo_ae0mlq0yV2RnHbzr09kY",
+          "id": "fc_tmp_e19sqydxye7",
+          "name": "echo",
+          "status": "in_progress",
+          "type": "function_call"
+        },
+        "outputIndex": 1,
+        "sequenceNumber": 3,
+        "type": "response.output_item.added"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "delta": "{\"value\":\"gated\"}",
+        "itemId": "fc_tmp_e19sqydxye7",
+        "outputIndex": 1,
+        "sequenceNumber": 4,
+        "type": "response.function_call_arguments.delta"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "arguments": "{\"value\":\"gated\"}",
+        "itemId": "fc_tmp_e19sqydxye7",
+        "name": "echo",
+        "outputIndex": 1,
+        "sequenceNumber": 5,
+        "type": "response.function_call_arguments.done"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "item": {
+          "arguments": "{\"value\":\"gated\"}",
+          "callId": "tool_echo_ae0mlq0yV2RnHbzr09kY",
+          "id": "fc_tmp_e19sqydxye7",
+          "name": "echo",
+          "status": "completed",
+          "type": "function_call"
+        },
+        "outputIndex": 1,
+        "sequenceNumber": 6,
+        "type": "response.output_item.done"
+      }
+    },
+    {
+      "type": "tool_execute",
+      "toolName": "echo",
+      "input": {
+        "value": "gated"
+      },
+      "callId": "tool_echo_ae0mlq0yV2RnHbzr09kY"
+    },
+    {
+      "type": "yield",
+      "event": {
+        "item": {
+          "encryptedContent": "AY89a184qk93GFVTWJ4ThzrczyV4H4Ea5AXW/lf12lVzyTWl5JQ1waYBBp1vJzn3t+3hXk6nKCKpjO/Ulj/VFcebMYwftLHCLPyQ2T7U1AHcIAjFLyBjpz7XMO2b4SyrqgQV83ymVn8Z1KMnqXkLCwi4lhmD5g/3Yuy4potTTlTckKmiHL/K2NF12Lm6yJiyaHU/gbdXnhnQ6rfHFng4R8w7E+fTdMibrr6rU5LzeVZN44FVtTQkUeem+YDbzv14RmCbm1QGyr9dRewQeBaLphHb1EZa4Xqz61ML3CcEV9XoTnjVyhX1rgzkA3Z97bdwhGCFZPqDYgwS7UBg44gogoGEjJpbySA5oR+8MAuYj1AWhHHuX6x36CNcUXikcVcawDmCNNQQ5LMcHpHQ",
+          "id": "tool_echo_ae0mlq0yV2RnHbzr09kY",
+          "status": "completed",
+          "summary": [],
+          "type": "reasoning",
+          "format": "google-gemini-v1"
+        },
+        "outputIndex": 0,
+        "sequenceNumber": 7,
+        "type": "response.output_item.done"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "response": {
+          "background": false,
+          "completedAt": 1779535051,
+          "createdAt": 1779535050,
+          "error": null,
+          "frequencyPenalty": 0,
+          "id": "gen-1779535050-Svy42MywKmUXbXexlYdp",
+          "incompleteDetails": null,
+          "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Make tool calls when asked; otherwise reply with the exact requested text.",
+          "maxOutputTokens": null,
+          "maxToolCalls": null,
+          "metadata": {},
+          "model": "google/gemini-3.5-flash-20260519",
+          "object": "response",
+          "output": [
+            {
+              "encryptedContent": "AY89a184qk93GFVTWJ4ThzrczyV4H4Ea5AXW/lf12lVzyTWl5JQ1waYBBp1vJzn3t+3hXk6nKCKpjO/Ulj/VFcebMYwftLHCLPyQ2T7U1AHcIAjFLyBjpz7XMO2b4SyrqgQV83ymVn8Z1KMnqXkLCwi4lhmD5g/3Yuy4potTTlTckKmiHL/K2NF12Lm6yJiyaHU/gbdXnhnQ6rfHFng4R8w7E+fTdMibrr6rU5LzeVZN44FVtTQkUeem+YDbzv14RmCbm1QGyr9dRewQeBaLphHb1EZa4Xqz61ML3CcEV9XoTnjVyhX1rgzkA3Z97bdwhGCFZPqDYgwS7UBg44gogoGEjJpbySA5oR+8MAuYj1AWhHHuX6x36CNcUXikcVcawDmCNNQQ5LMcHpHQ",
+              "id": "tool_echo_ae0mlq0yV2RnHbzr09kY",
+              "status": "completed",
+              "summary": [],
+              "type": "reasoning",
+              "format": "google-gemini-v1"
+            },
+            {
+              "arguments": "{\"value\":\"gated\"}",
+              "callId": "tool_echo_ae0mlq0yV2RnHbzr09kY",
+              "id": "fc_tmp_e19sqydxye7",
+              "name": "echo",
+              "status": "completed",
+              "type": "function_call"
+            }
+          ],
+          "parallelToolCalls": true,
+          "presencePenalty": 0,
+          "previousResponseId": null,
+          "promptCacheKey": null,
+          "reasoning": null,
+          "safetyIdentifier": null,
+          "serviceTier": "default",
+          "status": "completed",
+          "store": false,
+          "temperature": 1,
+          "text": {
+            "format": {
+              "type": "text"
+            }
+          },
+          "toolChoice": "auto",
+          "tools": [
+            {
+              "description": "Returns its `value` input prefixed with \"echoed:\". Use exactly once when asked.",
+              "name": "echo",
+              "parameters": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The string to echo back"
+                  }
+                },
+                "required": ["value"],
+                "additionalProperties": false
+              },
+              "strict": null,
+              "type": "function"
+            }
+          ],
+          "topLogprobs": 0,
+          "topP": 1,
+          "truncation": "disabled",
+          "usage": {
+            "inputTokens": 99,
+            "inputTokensDetails": {
+              "cachedTokens": 0
+            },
+            "outputTokens": 69,
+            "outputTokensDetails": {
+              "reasoningTokens": 54
+            },
+            "totalTokens": 168,
+            "cost": 0.000761805,
+            "costDetails": {
+              "upstreamInferenceCost": 0.0007695,
+              "upstreamInferenceInputCost": 0.0001485,
+              "upstreamInferenceOutputCost": 0.000621
+            },
+            "isByok": false
+          }
+        },
+        "sequenceNumber": 8,
+        "type": "response.completed"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "type": "turn.end",
+        "turnNumber": 0,
+        "timestamp": 1779535051145
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "type": "turn.start",
+        "turnNumber": 1,
+        "timestamp": 1779535052192
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "raw": {
+          "type": "response.keep_alive"
+        },
+        "type": "UNKNOWN",
+        "isUnknown": true
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "response": {
+          "background": false,
+          "completedAt": null,
+          "createdAt": 1779535051,
+          "error": null,
+          "frequencyPenalty": 0,
+          "id": "gen-1779535051-0J41FzVxE9hvIOD1ZSlA",
+          "incompleteDetails": null,
+          "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Make tool calls when asked; otherwise reply with the exact requested text.",
+          "maxOutputTokens": null,
+          "maxToolCalls": null,
+          "metadata": {},
+          "model": "google/gemini-3.5-flash-20260519",
+          "object": "response",
+          "output": [],
+          "parallelToolCalls": true,
+          "presencePenalty": 0,
+          "previousResponseId": null,
+          "promptCacheKey": null,
+          "reasoning": null,
+          "safetyIdentifier": null,
+          "serviceTier": "auto",
+          "status": "in_progress",
+          "store": false,
+          "temperature": 1,
+          "text": {
+            "format": {
+              "type": "text"
+            }
+          },
+          "toolChoice": "auto",
+          "tools": [
+            {
+              "description": "Returns its `value` input prefixed with \"echoed:\". Use exactly once when asked.",
+              "name": "echo",
+              "parameters": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The string to echo back"
+                  }
+                },
+                "required": ["value"],
+                "additionalProperties": false
+              },
+              "strict": null,
+              "type": "function"
+            }
+          ],
+          "topLogprobs": 0,
+          "topP": 1,
+          "truncation": "disabled",
+          "usage": null
+        },
+        "sequenceNumber": 0,
+        "type": "response.created"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "response": {
+          "background": false,
+          "completedAt": null,
+          "createdAt": 1779535051,
+          "error": null,
+          "frequencyPenalty": 0,
+          "id": "gen-1779535051-0J41FzVxE9hvIOD1ZSlA",
+          "incompleteDetails": null,
+          "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Make tool calls when asked; otherwise reply with the exact requested text.",
+          "maxOutputTokens": null,
+          "maxToolCalls": null,
+          "metadata": {},
+          "model": "google/gemini-3.5-flash-20260519",
+          "object": "response",
+          "output": [],
+          "parallelToolCalls": true,
+          "presencePenalty": 0,
+          "previousResponseId": null,
+          "promptCacheKey": null,
+          "reasoning": null,
+          "safetyIdentifier": null,
+          "serviceTier": "auto",
+          "status": "in_progress",
+          "store": false,
+          "temperature": 1,
+          "text": {
+            "format": {
+              "type": "text"
+            }
+          },
+          "toolChoice": "auto",
+          "tools": [
+            {
+              "description": "Returns its `value` input prefixed with \"echoed:\". Use exactly once when asked.",
+              "name": "echo",
+              "parameters": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The string to echo back"
+                  }
+                },
+                "required": ["value"],
+                "additionalProperties": false
+              },
+              "strict": null,
+              "type": "function"
+            }
+          ],
+          "topLogprobs": 0,
+          "topP": 1,
+          "truncation": "disabled",
+          "usage": null
+        },
+        "sequenceNumber": 1,
+        "type": "response.in_progress"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "item": {
+          "content": [],
+          "id": "msg_tmp_2s8yu60jw56",
+          "role": "assistant",
+          "status": "in_progress",
+          "type": "message"
+        },
+        "outputIndex": 0,
+        "sequenceNumber": 2,
+        "type": "response.output_item.added"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "contentIndex": 0,
+        "itemId": "msg_tmp_2s8yu60jw56",
+        "outputIndex": 0,
+        "part": {
+          "annotations": [],
+          "logprobs": [],
+          "text": "",
+          "type": "output_text"
+        },
+        "sequenceNumber": 3,
+        "type": "response.content_part.added"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "contentIndex": 0,
+        "delta": "ok",
+        "itemId": "msg_tmp_2s8yu60jw56",
+        "logprobs": [],
+        "outputIndex": 0,
+        "sequenceNumber": 4,
+        "type": "response.output_text.delta"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "item": {
+          "id": "rs_tmp_mvc8fe4aze7",
+          "status": "in_progress",
+          "summary": [],
+          "type": "reasoning"
+        },
+        "outputIndex": 1,
+        "sequenceNumber": 5,
+        "type": "response.output_item.added"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "contentIndex": 0,
+        "itemId": "msg_tmp_2s8yu60jw56",
+        "logprobs": [],
+        "outputIndex": 0,
+        "sequenceNumber": 6,
+        "text": "ok",
+        "type": "response.output_text.done"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "contentIndex": 0,
+        "itemId": "msg_tmp_2s8yu60jw56",
+        "outputIndex": 0,
+        "part": {
+          "annotations": [],
+          "logprobs": [],
+          "text": "ok",
+          "type": "output_text"
+        },
+        "sequenceNumber": 7,
+        "type": "response.content_part.done"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "item": {
+          "content": [
+            {
+              "annotations": [],
+              "logprobs": [],
+              "text": "ok",
+              "type": "output_text"
+            }
+          ],
+          "id": "msg_tmp_2s8yu60jw56",
+          "role": "assistant",
+          "status": "completed",
+          "type": "message"
+        },
+        "outputIndex": 0,
+        "sequenceNumber": 8,
+        "type": "response.output_item.done"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "item": {
+          "encryptedContent": "AY89a19yV8Q+DoAJGDBq7Vt2VqioStpWQGf3TUQsG2iI8N4Lm1FgAComAgYXI4VqQPzwkW1M8eQkauYLVIAlCJN7bYsJchhdg4DrRnk1Emt1EU8Ca3b85YZSLXWh2wdE9VoterY4Kff+Uun4hWRgX8knWQq2Z4wNWOJx6tSHNa+qlFDWGKttrhXbnvOY0iBnuQ==",
+          "id": "rs_tmp_mvc8fe4aze7",
+          "status": "completed",
+          "summary": [],
+          "type": "reasoning",
+          "format": "google-gemini-v1"
+        },
+        "outputIndex": 1,
+        "sequenceNumber": 9,
+        "type": "response.output_item.done"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "response": {
+          "background": false,
+          "completedAt": 1779535052,
+          "createdAt": 1779535051,
+          "error": null,
+          "frequencyPenalty": 0,
+          "id": "gen-1779535051-0J41FzVxE9hvIOD1ZSlA",
+          "incompleteDetails": null,
+          "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Make tool calls when asked; otherwise reply with the exact requested text.",
+          "maxOutputTokens": null,
+          "maxToolCalls": null,
+          "metadata": {},
+          "model": "google/gemini-3.5-flash-20260519",
+          "object": "response",
+          "output": [
+            {
+              "content": [
+                {
+                  "annotations": [],
+                  "logprobs": [],
+                  "text": "ok",
+                  "type": "output_text"
+                }
+              ],
+              "id": "msg_tmp_2s8yu60jw56",
+              "role": "assistant",
+              "status": "completed",
+              "type": "message"
+            },
+            {
+              "encryptedContent": "AY89a19yV8Q+DoAJGDBq7Vt2VqioStpWQGf3TUQsG2iI8N4Lm1FgAComAgYXI4VqQPzwkW1M8eQkauYLVIAlCJN7bYsJchhdg4DrRnk1Emt1EU8Ca3b85YZSLXWh2wdE9VoterY4Kff+Uun4hWRgX8knWQq2Z4wNWOJx6tSHNa+qlFDWGKttrhXbnvOY0iBnuQ==",
+              "id": "rs_tmp_mvc8fe4aze7",
+              "status": "completed",
+              "summary": [],
+              "type": "reasoning",
+              "format": "google-gemini-v1"
+            }
+          ],
+          "parallelToolCalls": true,
+          "presencePenalty": 0,
+          "previousResponseId": null,
+          "promptCacheKey": null,
+          "reasoning": null,
+          "safetyIdentifier": null,
+          "serviceTier": "default",
+          "status": "completed",
+          "store": false,
+          "temperature": 1,
+          "text": {
+            "format": {
+              "type": "text"
+            }
+          },
+          "toolChoice": "auto",
+          "tools": [
+            {
+              "description": "Returns its `value` input prefixed with \"echoed:\". Use exactly once when asked.",
+              "name": "echo",
+              "parameters": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The string to echo back"
+                  }
+                },
+                "required": ["value"],
+                "additionalProperties": false
+              },
+              "strict": null,
+              "type": "function"
+            }
+          ],
+          "topLogprobs": 0,
+          "topP": 1,
+          "truncation": "disabled",
+          "usage": {
+            "inputTokens": 172,
+            "inputTokensDetails": {
+              "cachedTokens": 0
+            },
+            "outputTokens": 21,
+            "outputTokensDetails": {
+              "reasoningTokens": 20
+            },
+            "totalTokens": 193,
+            "cost": 0.00044253,
+            "costDetails": {
+              "upstreamInferenceCost": 0.000447,
+              "upstreamInferenceInputCost": 0.000258,
+              "upstreamInferenceOutputCost": 0.000189
+            },
+            "isByok": false
+          }
+        },
+        "sequenceNumber": 10,
+        "type": "response.completed"
+      }
+    },
+    {
+      "type": "invoke_turn_end"
+    },
+    {
+      "type": "yield",
+      "event": {
+        "type": "turn.end",
+        "turnNumber": 1,
+        "timestamp": 1779535052198
+      }
+    }
+  ],
+  "response": {
+    "id": "gen-1779535051-0J41FzVxE9hvIOD1ZSlA",
+    "model": "google/gemini-3.5-flash-20260519",
+    "usage": {
+      "inputTokens": 172,
+      "inputTokensDetails": {
+        "cachedTokens": 0
+      },
+      "outputTokens": 21,
+      "outputTokensDetails": {
+        "reasoningTokens": 20
+      },
+      "totalTokens": 193,
+      "cost": 0.00044253,
+      "costDetails": {
+        "upstreamInferenceCost": 0.000447,
+        "upstreamInferenceInputCost": 0.000258,
+        "upstreamInferenceOutputCost": 0.000189
+      },
+      "isByok": false
+    },
+    "output": [
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "ok",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_tmp_2s8yu60jw56",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      },
+      {
+        "encryptedContent": "AY89a19yV8Q+DoAJGDBq7Vt2VqioStpWQGf3TUQsG2iI8N4Lm1FgAComAgYXI4VqQPzwkW1M8eQkauYLVIAlCJN7bYsJchhdg4DrRnk1Emt1EU8Ca3b85YZSLXWh2wdE9VoterY4Kff+Uun4hWRgX8knWQq2Z4wNWOJx6tSHNa+qlFDWGKttrhXbnvOY0iBnuQ==",
+        "id": "rs_tmp_mvc8fe4aze7",
+        "status": "completed",
+        "summary": [],
+        "type": "reasoning",
+        "format": "google-gemini-v1"
+      }
+    ]
+  }
+}
