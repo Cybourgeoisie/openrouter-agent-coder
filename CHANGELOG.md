@@ -24,6 +24,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New `task_create` / `task_update` client tools — in-run task tracking
+  surfaced through the `Notification` hook so a host UI can render
+  progress. `task_create` inputs: `content` (string, required) + optional
+  `activeForm` (present-continuous form). `task_update` inputs: `taskId`
+  (required) + `state` (Zod enum: `'pending'` / `'in_progress'` /
+  `'completed'` / `'cancelled'`, required) + optional `content` (rewrites
+  the description only when provided). Library assigns each new task a
+  UUID; `task_create` returns `{ id }`, `task_update` returns `{}` on
+  success or `{ error: 'unknown task id: <id>' }` (tool-error path) for
+  unknown ids. Every successful mutation emits one `Notification` hook
+  with `level: 'info'`, `message: 'tasks_changed'`, and `context: { tasks:
+Task[] }` (the FULL latest list, not a diff). The task list is held in an
+  in-run `taskListRef` on `OpenRouterAgentRun` — ephemeral per run, never
+  persisted to `state.json`, lost when the process exits. Both factories
+  share the same ref via `allTools(ctx, { taskListRef, onTasksChanged })`
+  so they read/write one list across turns. (Phase 4.2)
+- `onTasksChanged` constructor option on `OpenRouterAgentRun` — host
+  callback `(tasks: Task[]) => void` fired after every `task_create` /
+  `task_update` mutation with a defensive shallow-copy of the full latest
+  list. Equivalent to filtering the `Notification` hook on
+  `message === 'tasks_changed'`; supply this when you don't want to
+  subscribe to every Notification just to render the task list. Plumbed
+  through `allTools(ctx, { onTasksChanged })`. Ignored when the caller
+  supplies a custom `tools` array. (Phase 4.2)
+- New public exports from the library root: `taskCreateTool`,
+  `taskUpdateTool`, `TaskState`, `Task`, `OnTasksChanged`, `TaskListRef`,
+  `TaskToolOptions`, `CreateTaskRequest`, `UpdateTaskRequest`,
+  `TaskListChangedNotification`, `TaskCreateToolResult`,
+  `TaskUpdateToolResult`. (Phase 4.2)
 - New `ask_user_question` client tool — multiple-choice clarifying
   questions surfaced to a host UI during a run. Inputs: `question`
   (string), `options` (2–26 entries; each `{ label, preview? }`), optional

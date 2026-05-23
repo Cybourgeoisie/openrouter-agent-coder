@@ -13,6 +13,7 @@ import { allTools } from './tools/index.js';
 import { createServerToolsHooks } from './tools/server-tools.js';
 import { type ToolContext } from './tools/context.js';
 import type { OnAskUserQuestion } from './tools/ask-user-question.js';
+import type { OnTasksChanged, TaskListRef } from './tools/tasks.js';
 import { createFileStateAccessor } from './state/file-state.js';
 import { createMemoryStateAccessor } from './state/memory-state.js';
 import {
@@ -114,7 +115,7 @@ export interface OpenRouterAgentRunOptions {
   /** Max cumulative cost in USD. Defaults to 1.0. */
   maxBudgetUsd?: number;
   /**
-   * Tool set passed to the model. Defaults to the built-in 8-client-tool set
+   * Tool set passed to the model. Defaults to the built-in 10-client-tool set
    * bound to a {@link ToolContext} derived from the run's `cwd` and composite
    * AbortSignal; server tools (datetime/web_search/web_fetch) are injected via
    * hooks. Custom tools supplied here are NOT context-bound — callers are
@@ -136,6 +137,17 @@ export interface OpenRouterAgentRunOptions {
    * so subscribers that only listen on `onHook` still observe the question.
    */
   onAskUserQuestion?: OnAskUserQuestion;
+  /**
+   * Convenience callback fired after every `task_create` / `task_update`
+   * mutation with the full latest task list (defensive shallow-copy — safe
+   * to retain). Equivalent to filtering the `Notification` hook on
+   * `message === 'tasks_changed'`; supply this when the host doesn't want to
+   * subscribe to every Notification just to render the task list. Threaded
+   * into the default tool bundle only — ignored when a custom `tools` array
+   * is supplied (callers wire their own `task_create` / `task_update` if
+   * needed).
+   */
+  onTasksChanged?: OnTasksChanged;
   /**
    * Permission gate invoked before each client tool's execute. Resolve to
    * `{ behavior: 'allow' }` to run the handler as-is, `{ behavior: 'allow',
@@ -265,6 +277,7 @@ interface ResolvedOptions {
   canUseTool?: CanUseTool;
   onHook?: OnHook;
   onAskUserQuestion?: OnAskUserQuestion;
+  onTasksChanged?: OnTasksChanged;
   signal?: AbortSignal;
   baseUrl?: string;
   logger?: AgentLogger;
@@ -330,6 +343,7 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     canUseTool,
     onHook: opts.onHook,
     onAskUserQuestion: opts.onAskUserQuestion,
+    onTasksChanged: opts.onTasksChanged,
     signal: opts.signal,
     baseUrl: opts.baseUrl,
     logger: opts.logger,
@@ -349,6 +363,12 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
   private readonly compositeSignal: AbortSignal;
   /** True when caller supplied a custom `tools` array (signal not auto-wrapped). */
   private readonly hasCustomTools: boolean;
+  /**
+   * Shared task list both `task_create` / `task_update` factories mutate.
+   * Ephemeral per run — never persisted to `state.json`. Survives across
+   * turns inside this run instance.
+   */
+  private readonly taskListRef: TaskListRef = { tasks: [] };
   private consumed = false;
 
   constructor(options: OpenRouterAgentRunOptions) {
@@ -418,6 +438,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       settingSources,
       persistSession,
       onAskUserQuestion,
+      onTasksChanged,
     } = this.opts;
     // Discovery happens here (not in resolveOptions) so the constructor stays
     // synchronous and the public API shape is unchanged. When settingSources
@@ -557,7 +578,11 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       // resolved — including the synth-deny payload from a canUseTool denial.
       const baseTools: readonly Tool[] = this.hasCustomTools
         ? userTools
-        : allTools(ctx, { onAskUserQuestion });
+        : allTools(ctx, {
+            onAskUserQuestion,
+            onTasksChanged,
+            taskListRef: this.taskListRef,
+          });
       const permissionedTools = this.opts.canUseTool
         ? baseTools.map((t) => wrapToolWithPermission(t, this.opts.canUseTool!))
         : baseTools;

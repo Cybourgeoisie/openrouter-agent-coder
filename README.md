@@ -58,6 +58,7 @@ Single-shot async iterable that drives one agent run. Construct, `for await` the
 | `disallowedTools`   | `readonly string[]` | no       | _(none)_                          | Deny list with the same grammar as `allowedTools`. Denials win over both `allowedTools` and `permissionMode`. Explicit `canUseTool` overrides this list. Malformed rules throw at construction.                                                                                                                                                                        |
 | `onHook`            | `OnHook`            | no       | _(none)_                          | Lifecycle callback. Auto-fired in order `Setup` → `SessionStart` → `PreToolUse`/`PostToolUse` pairs → `SessionEnd` → `Stop`. `Notification` is caller-emitted (via `ctx.notify` or direct `onHook` calls). Audit-only — thrown errors are logged and swallowed.                                                                                                        |
 | `onAskUserQuestion` | `OnAskUserQuestion` | no       | _(none)_                          | Host callback wired into the built-in `ask_user_question` tool. Receives a `UserQuestionRequest` (UUID `questionId`, auto-assigned `a`/`b`/`c`… option ids) and must resolve with a `UserQuestionResponse`. Omitted → the tool resolves with `{ error: 'no host handler registered for ask_user_question' }`. Ignored when a custom `tools` array is supplied.         |
+| `onTasksChanged`    | `OnTasksChanged`    | no       | _(none)_                          | Convenience callback fired after every `task_create` / `task_update` mutation with the full latest task list (defensive shallow-copy). Equivalent to filtering `Notification` hook events on `message === 'tasks_changed'`. Ignored when a custom `tools` array is supplied.                                                                                           |
 | `signal`            | `AbortSignal`       | no       | _(none)_                          | External abort signal. Combined internally with the run's `abort()` method via `AbortSignal.any`.                                                                                                                                                                                                                                                                      |
 | `logsRoot`          | `string`            | no       | `<cwd>/logs`                      | Directory for session logs.                                                                                                                                                                                                                                                                                                                                            |
 | `baseUrl`           | `string`            | no       | OpenRouter production             | Override the OpenRouter API base URL.                                                                                                                                                                                                                                                                                                                                  |
@@ -382,6 +383,42 @@ Behaviour:
 - A missing `onAskUserQuestion` resolves with `{ error: 'no host handler registered for ask_user_question' }` — the model gets a real tool-result and can recover instead of throwing.
 - Each call also fires the `Notification` lifecycle hook with `level: 'info'`, `message: 'ask_user_question'`, and `context = UserQuestionRequest`. Subscribers that only listen on `onHook` (logs, dashboards, non-UI sinks) still observe every question.
 
+#### Host integration — task tracking
+
+The built-in `task_create` / `task_update` tools maintain a per-run task list that survives across turns but is **never persisted to `state.json`** (ephemeral; lost when the process exits). On every mutation the library pushes the full latest list to two channels: the `Notification` hook (so log/audit subscribers see it) and the optional `onTasksChanged` constructor callback (so a host UI doesn't have to filter every Notification).
+
+```ts
+import { OpenRouterAgentRun, type Task, type OnTasksChanged } from 'openrouter-agent-coder';
+
+const onTasksChanged: OnTasksChanged = (tasks: Task[]) => {
+  // Re-render the task panel. `tasks` is a defensive shallow-copy — safe to retain.
+  renderTaskList(tasks);
+};
+
+const run = new OpenRouterAgentRun({
+  apiKey,
+  sessionId,
+  prompt,
+  onTasksChanged,
+});
+```
+
+Library-side types:
+
+```ts
+type TaskState = 'pending' | 'in_progress' | 'completed' | 'cancelled';
+type Task = { id: string; content: string; state: TaskState; activeForm?: string };
+type TaskListChangedNotification = { tasks: Task[] };
+type OnTasksChanged = (tasks: Task[]) => void;
+```
+
+Behaviour:
+
+- `task_create` returns `{ id }` where `id` is a UUID. New tasks start in state `pending`.
+- `task_update` requires `taskId` + `state`; `content` is optional (rewrites the description only when provided). Unknown ids resolve with `{ error: 'unknown task id: <id>' }` (tool-error path — the model sees the error and can recover). The state enum is validated by Zod; invalid values are rejected at schema-validation time.
+- Both tools emit a single `Notification` hook per call with `level: 'info'`, `message: 'tasks_changed'`, and `context: TaskListChangedNotification` (the full latest list, not a diff). The same payload flows through `onTasksChanged` when wired.
+- The task list is in-memory only. Resuming a session by `sessionId` does NOT restore the previous run's task list — host code that needs persistence should mirror the `onTasksChanged` callback to its own store.
+
 ### `accountInfo(opts)`
 
 Look up an OpenRouter key's label, usage, and credit limit.
@@ -410,7 +447,7 @@ Throws on non-OK responses. Optional `baseUrl` override.
 
 ### `allTools`
 
-The bundled tool preset — `allTools({ cwd, signal })` returns the seven client tools below, context-bound. It is the default value for `OpenRouterAgentRun`'s `tools` option; you only need to reference it directly when composing a custom tool array.
+The bundled tool preset — `allTools({ cwd, signal })` returns the ten client tools below, context-bound. It is the default value for `OpenRouterAgentRun`'s `tools` option; you only need to reference it directly when composing a custom tool array.
 
 ### Custom tools
 
@@ -473,6 +510,8 @@ Client tools (execute in the host process):
 | `run_command`       | Execute shell commands. Optional `description` (advisory) and `timeout_ms` (default 30s, clamped to 10 min) fields; SIGTERM + 250ms grace on timeout / abort.                                                                                                                                                                                                                                                                                                                               |
 | `glob`              | Find files by glob pattern across a directory tree. Supports `**/foo` (recursive, zero-or-more segments), `*` per-segment wildcard, `?` single-char, and `[a-z]` character classes. Optional `case_sensitive` (default `true`). Returns sorted relative paths, capped at 1000.                                                                                                                                                                                                              |
 | `ask_user_question` | Ask the user a multiple-choice clarifying question and wait for their answer. Inputs: `question` (string), `options` (2–26 entries; each `{ label, preview? }`), optional `allow_free_text`, optional `timeout_ms` (default 300 000, clamped to 600 000). Requires `onAskUserQuestion` on `OpenRouterAgentRun` — without it the tool resolves with `{ error: 'no host handler registered for ask_user_question' }`. See ["Host integration"](#host-integration--asking-the-user-questions). |
+| `task_create`       | Append a task to the agent's in-run task list. Inputs: `content` (string, imperative), optional `activeForm` (present-continuous form shown while in_progress). Returns `{ id }` (UUID). Fires the `Notification` hook with the full latest list (level=info, message=`tasks_changed`). See ["Host integration — task tracking"](#host-integration--task-tracking).                                                                                                                         |
+| `task_update`       | Update a task in the in-run task list. Inputs: `taskId` (required), `state` (`pending` / `in_progress` / `completed` / `cancelled`), optional `content` (rewrites the description when provided). Returns `{}` on success or `{ error: 'unknown task id: <id>' }`. Fires the same `Notification` hook with the full latest list.                                                                                                                                                            |
 
 Server-side tools (execute on OpenRouter's backend, injected via SDK hooks):
 

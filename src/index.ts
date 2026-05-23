@@ -25,7 +25,13 @@ export type {
   PreToolUseAction,
   TokenUsage,
 } from './events.js';
-export { allTools, DEFAULT_TOOL_CONTEXT, askUserQuestionTool } from './tools/index.js';
+export {
+  allTools,
+  DEFAULT_TOOL_CONTEXT,
+  askUserQuestionTool,
+  taskCreateTool,
+  taskUpdateTool,
+} from './tools/index.js';
 export type {
   ToolContext,
   AllToolsOptions,
@@ -34,6 +40,16 @@ export type {
   OnAskUserQuestion,
   UserQuestionRequest,
   UserQuestionResponse,
+  TaskState,
+  Task,
+  CreateTaskRequest,
+  UpdateTaskRequest,
+  TaskListChangedNotification,
+  OnTasksChanged,
+  TaskListRef,
+  TaskToolOptions,
+  TaskCreateToolResult,
+  TaskUpdateToolResult,
 } from './tools/index.js';
 export { tool, createSdkMcpServer } from './custom-tools.js';
 export type { CustomToolConfig, SdkMcpServer, CreateSdkMcpServerConfig } from './custom-tools.js';

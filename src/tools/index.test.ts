@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   allTools,
   readFileTool,
@@ -9,11 +9,14 @@ import {
   grepFilesTool,
   globTool,
   askUserQuestionTool,
+  taskCreateTool,
+  taskUpdateTool,
+  type TaskListRef,
 } from './index.js';
 
 describe('tools barrel', () => {
-  it('exports all eight tools', () => {
-    expect(allTools()).toHaveLength(8);
+  it('exports all ten tools', () => {
+    expect(allTools()).toHaveLength(10);
   });
 
   it('includes every tool by name', () => {
@@ -27,6 +30,8 @@ describe('tools barrel', () => {
       'grep_files',
       'glob',
       'ask_user_question',
+      'task_create',
+      'task_update',
     ]);
   });
 
@@ -39,6 +44,8 @@ describe('tools barrel', () => {
     expect(grepFilesTool().function.name).toBe('grep_files');
     expect(globTool().function.name).toBe('glob');
     expect(askUserQuestionTool().function.name).toBe('ask_user_question');
+    expect(taskCreateTool().function.name).toBe('task_create');
+    expect(taskUpdateTool().function.name).toBe('task_update');
   });
 
   it('all tools have execute functions', () => {
@@ -70,17 +77,26 @@ describe('tools barrel', () => {
           ? { command: 'true' }
           : t.function.name === 'ask_user_question'
             ? { question: 'q?', options: [{ label: 'A' }, { label: 'B' }] }
-            : t.function.name === 'list_directory' ||
-                t.function.name === 'grep_files' ||
-                t.function.name === 'glob'
-              ? { path: '.', pattern: 'x', file_glob: '*', case_sensitive: true }
-              : { path: 'nonexistent', old_string: 'a', new_string: 'b', content: '' },
+            : t.function.name === 'task_create'
+              ? { content: 'x' }
+              : t.function.name === 'task_update'
+                ? { taskId: 'nope', state: 'completed' }
+                : t.function.name === 'list_directory' ||
+                    t.function.name === 'grep_files' ||
+                    t.function.name === 'glob'
+                  ? { path: '.', pattern: 'x', file_glob: '*', case_sensitive: true }
+                  : { path: 'nonexistent', old_string: 'a', new_string: 'b', content: '' },
       );
       if (t.function.name === 'run_command') {
         // run_command resolves with an error result rather than throwing.
         await expect(candidate).resolves.toMatchObject({ exitCode: 1 });
       } else if (t.function.name === 'ask_user_question') {
         await expect(candidate).resolves.toEqual({ error: 'aborted' });
+      } else if (t.function.name === 'task_create') {
+        // Task tools do not consult ctx.signal (non-context-sensitive).
+        await expect(candidate).resolves.toMatchObject({ id: expect.any(String) });
+      } else if (t.function.name === 'task_update') {
+        await expect(candidate).resolves.toEqual({ error: 'unknown task id: nope' });
       } else {
         await expect(candidate).rejects.toThrow(/cancelled/);
       }
@@ -108,5 +124,59 @@ describe('tools barrel', () => {
     });
     expect(received).toMatchObject({ question: 'pick' });
     expect(result).toEqual({ selectedOptionId: 'a', label: 'X' });
+  });
+
+  it('shares the taskListRef between task_create and task_update inside one allTools() bundle', async () => {
+    const ref: TaskListRef = { tasks: [] };
+    const onTasksChanged = vi.fn();
+    const tools = allTools({ cwd: '.' }, { taskListRef: ref, onTasksChanged });
+    const create = tools.find((t) => t.function.name === 'task_create')!;
+    const update = tools.find((t) => t.function.name === 'task_update')!;
+    const cExec = (
+      create.function as { execute: (p: Record<string, unknown>) => Promise<{ id: string }> }
+    ).execute;
+    const uExec = (
+      update.function as { execute: (p: Record<string, unknown>) => Promise<{ error?: string }> }
+    ).execute;
+
+    const { id } = await cExec({ content: 'shared' });
+    const r = await uExec({ taskId: id, state: 'completed' });
+    expect(r).toEqual({});
+    expect(ref.tasks).toEqual([{ id, content: 'shared', state: 'completed' }]);
+    // create + update each fire onTasksChanged once.
+    expect(onTasksChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it('forwards onTasksChanged into both task factories', async () => {
+    const onTasksChanged = vi.fn();
+    const tools = allTools({ cwd: '.' }, { onTasksChanged });
+    const create = tools.find((t) => t.function.name === 'task_create')!;
+    const cExec = (
+      create.function as { execute: (p: Record<string, unknown>) => Promise<{ id: string }> }
+    ).execute;
+    await cExec({ content: 'x' });
+    expect(onTasksChanged).toHaveBeenCalledTimes(1);
+    const tasks = onTasksChanged.mock.calls[0][0] as Array<{ content: string; state: string }>;
+    expect(tasks).toMatchObject([{ content: 'x', state: 'pending' }]);
+  });
+
+  it('defaults to a fresh taskListRef when none is supplied to allTools()', async () => {
+    // Two separate allTools() invocations get separate ref instances.
+    const a = allTools();
+    const b = allTools();
+    const aCreate = (
+      a.find((t) => t.function.name === 'task_create')!.function as {
+        execute: (p: Record<string, unknown>) => Promise<{ id: string }>;
+      }
+    ).execute;
+    const bUpdate = (
+      b.find((t) => t.function.name === 'task_update')!.function as {
+        execute: (p: Record<string, unknown>) => Promise<{ error?: string }>;
+      }
+    ).execute;
+    const { id } = await aCreate({ content: 'isolated' });
+    // The other bundle's task_update sees an empty list — id is unknown to it.
+    const r = await bUpdate({ taskId: id, state: 'completed' });
+    expect(r).toEqual({ error: `unknown task id: ${id}` });
   });
 });
