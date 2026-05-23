@@ -125,7 +125,12 @@ A script entry specifies:
         "stopReason": "tool_use",
         "content": [
           { "type": "text", "text": "I'll echo that." },
-          { "type": "tool_use", "id": "toolu_01", "name": "echo", "input": { "text": "hello world" } }
+          {
+            "type": "tool_use",
+            "id": "toolu_01",
+            "name": "echo",
+            "input": { "text": "hello world" }
+          }
         ],
         "usage": { "input_tokens": 42, "output_tokens": 18 }
       },
@@ -255,17 +260,17 @@ Initial target: 8–12 scripts. The full set won't be defined until 6.5, but the
 
 ## Implementation phasing within Phase 6
 
-| Card | Title                                              | Est.   | Depends on        |
-| ---- | -------------------------------------------------- | ------ | ----------------- |
-| 6.1  | Emulator skeleton + Anthropic Messages wire format | 12h    | —                 |
-| 6.2  | Emulator: OpenAI/OR chat-completions wire format   | 10h    | 6.1               |
-| 6.3  | Dual-mode harness scaffolding + base-URL plumbing  | 8h     | 6.1, 6.2          |
-| 6.4  | Comparator: exact + tolerant modes                 | 10h    | 6.3               |
-| 6.5  | Canonical scenario set (8–12 scripts)              | 15h    | 6.4               |
-| 6.6  | Failure-injection scenarios                        | 8h     | 6.5               |
-| 6.7  | CI wiring + budget guardrails                      | 5h     | 6.5               |
-| 6.8  | Drift-detection workflow + nightly run             | 4h     | 6.7               |
-| 6.9  | Scenario-additions backfill for Phase 3 / 4 / 5    | 10h    | 6.8, prior phases |
+| Card | Title                                              | Est. | Depends on        |
+| ---- | -------------------------------------------------- | ---- | ----------------- |
+| 6.1  | Emulator skeleton + Anthropic Messages wire format | 12h  | —                 |
+| 6.2  | Emulator: OpenAI/OR chat-completions wire format   | 10h  | 6.1               |
+| 6.3  | Dual-mode harness scaffolding + base-URL plumbing  | 8h   | 6.1, 6.2          |
+| 6.4  | Comparator: exact + tolerant modes                 | 10h  | 6.3               |
+| 6.5  | Canonical scenario set (8–12 scripts)              | 15h  | 6.4               |
+| 6.6  | Failure-injection scenarios                        | 8h   | 6.5               |
+| 6.7  | CI wiring + budget guardrails                      | 5h   | 6.5               |
+| 6.8  | Drift-detection workflow + nightly run             | 4h   | 6.7               |
+| 6.9  | Scenario-additions backfill for Phase 3 / 4 / 5    | 10h  | 6.8, prior phases |
 
 **Phase 6 total:** ~80h, ~2 weeks full-time.
 
@@ -283,17 +288,17 @@ Initial target: 8–12 scripts. The full set won't be defined until 6.5, but the
 
 ## Risks and mitigations
 
-| Risk                                                                                           | Mitigation                                                                                                                                                                                                  |
-| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Emulator drifts from real provider semantics.** Tests pass but production breaks.            | Live-mode nightly runs are the canary. Drift detected within 24h. Subset of scenarios runs in live mode on every PR as additional defense.                                                                  |
-| **Maintenance burden grows.** Every SDK bump requires emulator updates.                        | Keep the emulator's surface area strictly bounded by canonical scenarios. Resist the urge to model behaviors no scenario depends on. Drift caught by canary, not by speculative coverage.                   |
-| **Live-mode flakiness undermines confidence.**                                                 | Tolerant comparator with declared per-scenario tolerances. One automatic retry on a single scenario. Flake threshold (>10% failure rate over 7 days) auto-opens an issue tagged `scenario-needs-refresh`.   |
-| **Scenarios become stale as Phases 3/4/5 land.** Old scripts encode obsolete behavior.         | 6.9 is a rolling card. PR template for any Phase 3/4/5 work post-6.5 includes a "scenario update" checkbox.                                                                                                  |
-| **Cost overrun in live mode.** A misconfigured retry loop racks up spend.                      | Per-scenario `maxCostUsd` cap; aggregate nightly spend reported. PRs opening new live-mode scenarios require Ben's approval (label gate).                                                                   |
-| **Claude Agent SDK doesn't expose `baseURL` cleanly.** Plumbing the override is invasive.      | Fall back to `ANTHROPIC_BASE_URL` env injection per-test-process. Spike during 6.3; if neither approach works, file an issue with Anthropic and proceed with whichever workaround is least gross.           |
-| **Two wire formats double the emulator's complexity.**                                         | Share the script-execution engine; only the request-parsing and response-serialization layers differ. Target: <500 LOC per wire-format adapter.                                                             |
-| **Comparator's tolerant mode lets real bugs slip through.**                                    | Hook firing order + event-shape assertions stay exact in both modes. Only model-creative outputs (text, token counts) get tolerance bands. Any tolerance widening requires a PR-comment justification.      |
-| **Test parallelism breaks emulator state.**                                                    | Each test process binds its own ephemeral port and owns its own emulator instance. Scenarios never share state. If parallelism becomes a hot path, the emulator becomes a per-test in-process import.       |
+| Risk                                                                                      | Mitigation                                                                                                                                                                                                |
+| ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Emulator drifts from real provider semantics.** Tests pass but production breaks.       | Live-mode nightly runs are the canary. Drift detected within 24h. Subset of scenarios runs in live mode on every PR as additional defense.                                                                |
+| **Maintenance burden grows.** Every SDK bump requires emulator updates.                   | Keep the emulator's surface area strictly bounded by canonical scenarios. Resist the urge to model behaviors no scenario depends on. Drift caught by canary, not by speculative coverage.                 |
+| **Live-mode flakiness undermines confidence.**                                            | Tolerant comparator with declared per-scenario tolerances. One automatic retry on a single scenario. Flake threshold (>10% failure rate over 7 days) auto-opens an issue tagged `scenario-needs-refresh`. |
+| **Scenarios become stale as Phases 3/4/5 land.** Old scripts encode obsolete behavior.    | 6.9 is a rolling card. PR template for any Phase 3/4/5 work post-6.5 includes a "scenario update" checkbox.                                                                                               |
+| **Cost overrun in live mode.** A misconfigured retry loop racks up spend.                 | Per-scenario `maxCostUsd` cap; aggregate nightly spend reported. PRs opening new live-mode scenarios require Ben's approval (label gate).                                                                 |
+| **Claude Agent SDK doesn't expose `baseURL` cleanly.** Plumbing the override is invasive. | Fall back to `ANTHROPIC_BASE_URL` env injection per-test-process. Spike during 6.3; if neither approach works, file an issue with Anthropic and proceed with whichever workaround is least gross.         |
+| **Two wire formats double the emulator's complexity.**                                    | Share the script-execution engine; only the request-parsing and response-serialization layers differ. Target: <500 LOC per wire-format adapter.                                                           |
+| **Comparator's tolerant mode lets real bugs slip through.**                               | Hook firing order + event-shape assertions stay exact in both modes. Only model-creative outputs (text, token counts) get tolerance bands. Any tolerance widening requires a PR-comment justification.    |
+| **Test parallelism breaks emulator state.**                                               | Each test process binds its own ephemeral port and owns its own emulator instance. Scenarios never share state. If parallelism becomes a hot path, the emulator becomes a per-test in-process import.     |
 
 ---
 
@@ -310,12 +315,12 @@ Initial target: 8–12 scripts. The full set won't be defined until 6.5, but the
 
 ## How this relates to existing test layers
 
-| Layer                                          | What it proves                                       | Why it stays                                                              |
-| ---------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------- |
-| Unit tests (`src/*.test.ts`)                   | Individual functions behave correctly.               | Fastest signal; covers edge cases the integration layer can't isolate.    |
-| Module-mock integration (`mock-openrouter.ts`) | The library correctly consumes SDK events.           | Catches library-internal regressions cheaply. Doesn't need real network.  |
-| Recorded fixtures                              | The library handles real-SDK output shapes.          | Real-provider sanity. Cross-provider proof. No comparison axis.           |
-| **Comparative parity harness (new)**           | **Both SDKs do the same thing on the same input.**   | **The only layer that proves parity. Nothing else does.**                 |
+| Layer                                          | What it proves                                     | Why it stays                                                             |
+| ---------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------ |
+| Unit tests (`src/*.test.ts`)                   | Individual functions behave correctly.             | Fastest signal; covers edge cases the integration layer can't isolate.   |
+| Module-mock integration (`mock-openrouter.ts`) | The library correctly consumes SDK events.         | Catches library-internal regressions cheaply. Doesn't need real network. |
+| Recorded fixtures                              | The library handles real-SDK output shapes.        | Real-provider sanity. Cross-provider proof. No comparison axis.          |
+| **Comparative parity harness (new)**           | **Both SDKs do the same thing on the same input.** | **The only layer that proves parity. Nothing else does.**                |
 
 The comparative harness does not replace any of these — it adds a parity axis the others lack.
 
