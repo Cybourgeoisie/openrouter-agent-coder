@@ -41,7 +41,7 @@ All builds-on items reference primitives already shipped. Most are independent a
 | ~~3.6~~ | ~~Remaining lifecycle hooks: `Stop`, `Setup`, `Notification`~~ (PR pending)                                                                 | ~~`onHook` (Phase 1.7)~~       | ~~5h~~ | ~~—~~        |
 | ~~3.7~~ | ~~Block-and-modify hook capability (`PreToolUse` can short-circuit)~~ (PR pending)                                                          | ~~`onHook` + `canUseTool`~~    | ~~6h~~ | ~~3.1, 3.2~~ |
 | ~~3.8~~ | ~~Rich message stream (typed `AssistantMessage` etc.)~~ (PR pending)                                                                        | ~~`AgentCoreEvent`~~           | ~~6h~~ | ~~—~~        |
-| 3.9     | Enhanced Bash: description field, configurable timeout                                                                                      | `run_command`                  | 2h     | —            |
+| ~~3.9~~ | ~~Enhanced Bash: description field, configurable timeout~~ (PR pending)                                                                     | ~~`run_command`~~              | ~~2h~~ | ~~—~~        |
 | 3.10    | Enhanced Grep: `-A`/`-B`/`-C`, filetype filters, output modes                                                                               | `grep_files`                   | 4h     | —            |
 | 3.11    | Glob tool (new, separate from `list_directory`)                                                                                             | _new_                          | 3h     | —            |
 | 3.12    | `persistSession: false` (in-memory only sessions)                                                                                           | `FileStateAccessor`            | 3h     | —            |

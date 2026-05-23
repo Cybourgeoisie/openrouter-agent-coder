@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { runCommandTool } from './run-command.js';
+import { describe, it, expect, vi } from 'vitest';
+import { runCommandTool, MAX_TIMEOUT_MS } from './run-command.js';
 
 const tool = runCommandTool();
 const execute = tool.function.execute as (params: {
@@ -110,6 +110,74 @@ describe('run_command tool', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).not.toContain('terminated by');
     expect(result.stderr).not.toContain('run_command cancelled');
+  });
+
+  it('terminates a long-running command when timeout_ms elapses', async () => {
+    const timeoutExecute = tool.function.execute as (params: {
+      command: string;
+      timeout_ms?: number;
+    }) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+    // The "close" event waits for orphaned grandchild pipe close, so a hung
+    // `sleep 5` keeps the wrapper Promise pending for the full 5s — see the
+    // existing cancel test for the same quirk. The SIGTERM marker on stderr
+    // is the assertion that proves the timeout fired at ~100ms.
+    const result = await timeoutExecute({ command: 'sleep 5', timeout_ms: 100 });
+    expect(result.stderr).toContain('terminated by SIGTERM');
+    expect(result.exitCode).not.toBe(0);
+  });
+
+  it('preserves the 30s default when timeout_ms is omitted (short commands complete normally)', async () => {
+    const result = await execute({ command: 'echo ok' });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('ok');
+  });
+
+  it('clamps timeout_ms over MAX_TIMEOUT_MS and emits a warn notification', async () => {
+    const notify = vi.fn(async () => {});
+    const clampTool = runCommandTool({ cwd: '.', notify });
+    const clampExecute = clampTool.function.execute as (params: {
+      command: string;
+      timeout_ms?: number;
+    }) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+
+    const result = await clampExecute({ command: 'echo clamped', timeout_ms: 700_000 });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('clamped');
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    const firstCall = notify.mock.calls[0] as unknown as [string, string, unknown];
+    expect(firstCall[0]).toBe('warn');
+    expect(firstCall[1]).toMatch(/clamping/i);
+    expect(firstCall[2]).toEqual({ requestedMs: 700_000, effectiveMs: MAX_TIMEOUT_MS });
+  });
+
+  it('does NOT emit a warn notification when timeout_ms is at or below MAX_TIMEOUT_MS', async () => {
+    const notify = vi.fn(async () => {});
+    const okTool = runCommandTool({ cwd: '.', notify });
+    const okExecute = okTool.function.execute as (params: {
+      command: string;
+      timeout_ms?: number;
+    }) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+
+    await okExecute({ command: 'echo ok', timeout_ms: MAX_TIMEOUT_MS });
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('accepts and ignores a description field (advisory only, no influence on output)', async () => {
+    const result = await execute({
+      command: 'echo hi',
+      // description is forwarded via tool_call.input by the runtime; the
+      // execute function must accept it without disrupting the command result.
+      description: 'list files for context',
+    } as unknown as { command: string });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('hi');
+    expect(result.stdout).not.toContain('list files');
+    expect(result.stderr).not.toContain('list files');
+  });
+
+  it('exports MAX_TIMEOUT_MS = 600_000 (10 minutes)', () => {
+    expect(MAX_TIMEOUT_MS).toBe(600_000);
   });
 
   it('returns early when signal is already aborted before spawn', async () => {

@@ -412,14 +412,14 @@ Today this is purely a value bag — real MCP transports (stdio / HTTP+SSE / `.m
 
 Client tools (execute in the host process):
 
-| Tool             | Purpose                                                               |
-| ---------------- | --------------------------------------------------------------------- |
-| `read_file`      | Read file contents.                                                   |
-| `write_file`     | Write/create files (auto-creates parent dirs).                        |
-| `edit_file`      | Find-and-replace a unique string in a file.                           |
-| `list_directory` | List files and directories.                                           |
-| `grep_files`     | Search file contents by regex across a tree.                          |
-| `run_command`    | Execute shell commands (30s timeout; SIGTERM + 250ms grace on abort). |
+| Tool             | Purpose                                                                                                                                                       |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read_file`      | Read file contents.                                                                                                                                           |
+| `write_file`     | Write/create files (auto-creates parent dirs).                                                                                                                |
+| `edit_file`      | Find-and-replace a unique string in a file.                                                                                                                   |
+| `list_directory` | List files and directories.                                                                                                                                   |
+| `grep_files`     | Search file contents by regex across a tree.                                                                                                                  |
+| `run_command`    | Execute shell commands. Optional `description` (advisory) and `timeout_ms` (default 30s, clamped to 10 min) fields; SIGTERM + 250ms grace on timeout / abort. |
 
 Server-side tools (execute on OpenRouter's backend, injected via SDK hooks):
 

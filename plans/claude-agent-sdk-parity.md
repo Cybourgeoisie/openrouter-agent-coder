@@ -1,18 +1,18 @@
 # Claude Agent SDK vs OpenRouter Agent Coder — Parity Analysis
 
 > Comparison of the [Claude Code Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) (TypeScript) against the openrouter-agent-coder feature set.
-> Originally generated 2026-05-21. **Last reviewed against this codebase: 2026-05-23** (after Phase 3.1 + 3.2 + 3.3 + 3.4 + 3.5 + 3.6 + 3.7 + 3.8 landed — see [`claude-sdk-parity-roadmap.md`](./claude-sdk-parity-roadmap.md)).
+> Originally generated 2026-05-21. **Last reviewed against this codebase: 2026-05-23** (after Phase 3.1 + 3.2 + 3.3 + 3.4 + 3.5 + 3.6 + 3.7 + 3.8 + 3.9 landed — see [`claude-sdk-parity-roadmap.md`](./claude-sdk-parity-roadmap.md)).
 
 ## Summary
 
 | Status             | Count  |
 | ------------------ | ------ |
-| Full parity        | 17     |
-| Partial parity     | 8      |
+| Full parity        | 18     |
+| Partial parity     | 7      |
 | Missing            | 21     |
 | **Total features** | **46** |
 
-Net change vs the original 2026-05-21 snapshot: **+9 Full** (`canUseTool`, new `Interrupt/abort` row, `Allowed/disallowed tools` after Phase 3.2, `Plan mode` after Phase 3.3, `CLAUDE.md / project context` after Phase 3.4, `Session lifecycle hooks` and `Notification hook` after Phase 3.6, `PreToolUse`/`PostToolUse` block-and-modify after Phase 3.7, `Streaming output` (rich message stream) after Phase 3.8), **+1 Partial** (constructor-injected tools). Most "Missing" rows softened to "Partial" because their building blocks landed in Phase 1; the remaining gap is the ergonomic / discovery layer on top.
+Net change vs the original 2026-05-21 snapshot: **+10 Full** (`canUseTool`, new `Interrupt/abort` row, `Allowed/disallowed tools` after Phase 3.2, `Plan mode` after Phase 3.3, `CLAUDE.md / project context` after Phase 3.4, `Session lifecycle hooks` and `Notification hook` after Phase 3.6, `PreToolUse`/`PostToolUse` block-and-modify after Phase 3.7, `Streaming output` (rich message stream) after Phase 3.8, `Bash / run command` after Phase 3.9), **+1 Partial** (constructor-injected tools). Most "Missing" rows softened to "Partial" because their building blocks landed in Phase 1; the remaining gap is the ergonomic / discovery layer on top.
 
 ---
 
@@ -34,21 +34,21 @@ Net change vs the original 2026-05-21 snapshot: **+9 Full** (`canUseTool`, new `
 
 ### Built-in Tools
 
-| Feature                     | Claude Agent SDK                                      | OpenRouter Agent Coder                                         | Parity      |
-| --------------------------- | ----------------------------------------------------- | -------------------------------------------------------------- | ----------- |
-| Read file                   | `Read` tool — any file, line offsets                  | `read_file` — with `start_line`/`end_line` support             | **Full**    |
-| Write file                  | `Write` tool — create/overwrite                       | `write_file` — create/overwrite with auto-mkdir                | **Full**    |
-| Edit file                   | `Edit` tool — precise string replacement              | `edit_file` — exact unique string replacement                  | **Full**    |
-| Bash / run command          | `Bash` — full shell with description, timeout         | `run_command` — `sh -c`, 30s timeout, 1MB buffer               | **Partial** |
-| Glob (file search)          | `Glob` — find files by pattern                        | `list_directory` — flat listing only, no glob patterns         | **Partial** |
-| Grep (content search)       | `Grep` — regex search with context lines, file types  | `grep_files` — regex with glob filter, recursion, match limits | **Partial** |
-| WebSearch                   | Built-in WebSearch tool                               | Server-side `openrouter:web_search`                            | **Full**    |
-| WebFetch                    | Built-in WebFetch tool                                | Server-side `openrouter:web_fetch`                             | **Partial** |
-| Monitor (background script) | Watch background process, react to output lines       | Not implemented                                                | **None**    |
-| NotebookEdit                | Edit Jupyter notebook cells                           | Not implemented                                                | **None**    |
-| AskUserQuestion             | Multiple-choice clarifying questions with previews    | Not implemented                                                | **None**    |
-| ToolSearch                  | Dynamically load tools on demand from large tool sets | Not implemented                                                | **None**    |
-| TaskCreate / TaskUpdate     | Track subtasks within agent execution                 | Not implemented                                                | **None**    |
+| Feature                     | Claude Agent SDK                                      | OpenRouter Agent Coder                                                                                                                                         | Parity      |
+| --------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| Read file                   | `Read` tool — any file, line offsets                  | `read_file` — with `start_line`/`end_line` support                                                                                                             | **Full**    |
+| Write file                  | `Write` tool — create/overwrite                       | `write_file` — create/overwrite with auto-mkdir                                                                                                                | **Full**    |
+| Edit file                   | `Edit` tool — precise string replacement              | `edit_file` — exact unique string replacement                                                                                                                  | **Full**    |
+| Bash / run command          | `Bash` — full shell with description, timeout         | `run_command` — `sh -c`, 30s default timeout (configurable via `timeout_ms`, clamped to 10 min), 1MB buffer, optional advisory `description` field (Phase 3.9) | **Full**    |
+| Glob (file search)          | `Glob` — find files by pattern                        | `list_directory` — flat listing only, no glob patterns                                                                                                         | **Partial** |
+| Grep (content search)       | `Grep` — regex search with context lines, file types  | `grep_files` — regex with glob filter, recursion, match limits                                                                                                 | **Partial** |
+| WebSearch                   | Built-in WebSearch tool                               | Server-side `openrouter:web_search`                                                                                                                            | **Full**    |
+| WebFetch                    | Built-in WebFetch tool                                | Server-side `openrouter:web_fetch`                                                                                                                             | **Partial** |
+| Monitor (background script) | Watch background process, react to output lines       | Not implemented                                                                                                                                                | **None**    |
+| NotebookEdit                | Edit Jupyter notebook cells                           | Not implemented                                                                                                                                                | **None**    |
+| AskUserQuestion             | Multiple-choice clarifying questions with previews    | Not implemented                                                                                                                                                | **None**    |
+| ToolSearch                  | Dynamically load tools on demand from large tool sets | Not implemented                                                                                                                                                | **None**    |
+| TaskCreate / TaskUpdate     | Track subtasks within agent execution                 | Not implemented                                                                                                                                                | **None**    |
 
 ### Permissions & Safety
 
@@ -154,7 +154,7 @@ Items shipped in Phase 1 are crossed through with a back-pointer; the **layer-on
 
 16. ~~**Block-and-modify hook capability.**~~ _Shipped in Phase 3.7 — `PreToolUse` may return `{ action: 'block' | 'modify' | 'continue' }`. Backward-compatible (void still works). See parity matrix row above for precedence semantics._
 
-17. **Enhanced Bash tool.** Add description field, configurable timeout, improved output handling.
+17. ~~**Enhanced Bash tool.** Add description field, configurable timeout, improved output handling.~~ _Shipped in Phase 3.9 — optional `description` (advisory free-text from the model, forwarded via `tool_call.input`) and `timeout_ms` (default 30s, clamped to `MAX_TIMEOUT_MS = 600_000` with a `warn` notification on over-cap). SIGTERM/SIGKILL grace is now applied on the timeout path too (matching the existing abort path)._
 
 18. **Enhanced Grep tool.** Add context lines (`-A`/`-B`/`-C`), file-type filters, output modes (content/files/count).
 
