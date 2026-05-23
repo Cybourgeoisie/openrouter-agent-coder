@@ -1,0 +1,738 @@
+{
+  "name": "multi-turn-with-tool-haiku",
+  "steps": [
+    {
+      "type": "yield",
+      "event": {
+        "type": "turn.start",
+        "turnNumber": 0,
+        "timestamp": 1779534539582
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "raw": {
+          "type": "response.keep_alive"
+        },
+        "type": "UNKNOWN",
+        "isUnknown": true
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "raw": {
+          "type": "response.keep_alive"
+        },
+        "type": "UNKNOWN",
+        "isUnknown": true
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "response": {
+          "background": false,
+          "completedAt": null,
+          "createdAt": 1779534538,
+          "error": null,
+          "frequencyPenalty": 0,
+          "id": "gen-1779534538-KTTtLmg9hmvcpzOXz9cs",
+          "incompleteDetails": null,
+          "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Call tools when asked; otherwise reply with the exact requested text.",
+          "maxOutputTokens": null,
+          "maxToolCalls": null,
+          "metadata": {},
+          "model": "anthropic/claude-4.5-haiku-20251001",
+          "object": "response",
+          "output": [],
+          "parallelToolCalls": true,
+          "presencePenalty": 0,
+          "previousResponseId": null,
+          "promptCacheKey": null,
+          "reasoning": null,
+          "safetyIdentifier": null,
+          "serviceTier": "auto",
+          "status": "in_progress",
+          "store": false,
+          "temperature": 1,
+          "text": {
+            "format": {
+              "type": "text"
+            }
+          },
+          "toolChoice": "auto",
+          "tools": [
+            {
+              "description": "Returns its `value` input prefixed with \"echoed:\". Use exactly once when asked.",
+              "name": "echo",
+              "parameters": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The string to echo back"
+                  }
+                },
+                "required": ["value"],
+                "additionalProperties": false
+              },
+              "strict": null,
+              "type": "function"
+            }
+          ],
+          "topLogprobs": 0,
+          "topP": 1,
+          "truncation": "disabled",
+          "usage": null
+        },
+        "sequenceNumber": 0,
+        "type": "response.created"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "response": {
+          "background": false,
+          "completedAt": null,
+          "createdAt": 1779534538,
+          "error": null,
+          "frequencyPenalty": 0,
+          "id": "gen-1779534538-KTTtLmg9hmvcpzOXz9cs",
+          "incompleteDetails": null,
+          "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Call tools when asked; otherwise reply with the exact requested text.",
+          "maxOutputTokens": null,
+          "maxToolCalls": null,
+          "metadata": {},
+          "model": "anthropic/claude-4.5-haiku-20251001",
+          "object": "response",
+          "output": [],
+          "parallelToolCalls": true,
+          "presencePenalty": 0,
+          "previousResponseId": null,
+          "promptCacheKey": null,
+          "reasoning": null,
+          "safetyIdentifier": null,
+          "serviceTier": "auto",
+          "status": "in_progress",
+          "store": false,
+          "temperature": 1,
+          "text": {
+            "format": {
+              "type": "text"
+            }
+          },
+          "toolChoice": "auto",
+          "tools": [
+            {
+              "description": "Returns its `value` input prefixed with \"echoed:\". Use exactly once when asked.",
+              "name": "echo",
+              "parameters": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The string to echo back"
+                  }
+                },
+                "required": ["value"],
+                "additionalProperties": false
+              },
+              "strict": null,
+              "type": "function"
+            }
+          ],
+          "topLogprobs": 0,
+          "topP": 1,
+          "truncation": "disabled",
+          "usage": null
+        },
+        "sequenceNumber": 1,
+        "type": "response.in_progress"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "item": {
+          "arguments": "",
+          "callId": "toolu_bdrk_013ZBTERqML5prNBVCtbhHPD",
+          "id": "fc_tmp_sfgf1ldp9",
+          "name": "echo",
+          "status": "in_progress",
+          "type": "function_call"
+        },
+        "outputIndex": 0,
+        "sequenceNumber": 2,
+        "type": "response.output_item.added"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "delta": "{\"v",
+        "itemId": "fc_tmp_sfgf1ldp9",
+        "outputIndex": 0,
+        "sequenceNumber": 3,
+        "type": "response.function_call_arguments.delta"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "delta": "alue",
+        "itemId": "fc_tmp_sfgf1ldp9",
+        "outputIndex": 0,
+        "sequenceNumber": 4,
+        "type": "response.function_call_arguments.delta"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "delta": "\": \"hello",
+        "itemId": "fc_tmp_sfgf1ldp9",
+        "outputIndex": 0,
+        "sequenceNumber": 5,
+        "type": "response.function_call_arguments.delta"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "delta": "\"}",
+        "itemId": "fc_tmp_sfgf1ldp9",
+        "outputIndex": 0,
+        "sequenceNumber": 6,
+        "type": "response.function_call_arguments.delta"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "arguments": "{\"value\": \"hello\"}",
+        "itemId": "fc_tmp_sfgf1ldp9",
+        "name": "echo",
+        "outputIndex": 0,
+        "sequenceNumber": 7,
+        "type": "response.function_call_arguments.done"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "item": {
+          "arguments": "{\"value\": \"hello\"}",
+          "callId": "toolu_bdrk_013ZBTERqML5prNBVCtbhHPD",
+          "id": "fc_tmp_sfgf1ldp9",
+          "name": "echo",
+          "status": "completed",
+          "type": "function_call"
+        },
+        "outputIndex": 0,
+        "sequenceNumber": 8,
+        "type": "response.output_item.done"
+      }
+    },
+    {
+      "type": "tool_execute",
+      "toolName": "echo",
+      "input": {
+        "value": "hello"
+      },
+      "callId": "toolu_bdrk_013ZBTERqML5prNBVCtbhHPD"
+    },
+    {
+      "type": "yield",
+      "event": {
+        "response": {
+          "background": false,
+          "completedAt": 1779534539,
+          "createdAt": 1779534538,
+          "error": null,
+          "frequencyPenalty": 0,
+          "id": "gen-1779534538-KTTtLmg9hmvcpzOXz9cs",
+          "incompleteDetails": null,
+          "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Call tools when asked; otherwise reply with the exact requested text.",
+          "maxOutputTokens": null,
+          "maxToolCalls": null,
+          "metadata": {},
+          "model": "anthropic/claude-4.5-haiku-20251001",
+          "object": "response",
+          "output": [
+            {
+              "arguments": "{\"value\": \"hello\"}",
+              "callId": "toolu_bdrk_013ZBTERqML5prNBVCtbhHPD",
+              "id": "fc_tmp_sfgf1ldp9",
+              "name": "echo",
+              "status": "completed",
+              "type": "function_call"
+            }
+          ],
+          "parallelToolCalls": true,
+          "presencePenalty": 0,
+          "previousResponseId": null,
+          "promptCacheKey": null,
+          "reasoning": null,
+          "safetyIdentifier": null,
+          "serviceTier": "auto",
+          "status": "completed",
+          "store": false,
+          "temperature": 1,
+          "text": {
+            "format": {
+              "type": "text"
+            }
+          },
+          "toolChoice": "auto",
+          "tools": [
+            {
+              "description": "Returns its `value` input prefixed with \"echoed:\". Use exactly once when asked.",
+              "name": "echo",
+              "parameters": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The string to echo back"
+                  }
+                },
+                "required": ["value"],
+                "additionalProperties": false
+              },
+              "strict": null,
+              "type": "function"
+            }
+          ],
+          "topLogprobs": 0,
+          "topP": 1,
+          "truncation": "disabled",
+          "usage": {
+            "inputTokens": 662,
+            "inputTokensDetails": {
+              "cachedTokens": 0
+            },
+            "outputTokens": 52,
+            "outputTokensDetails": {
+              "reasoningTokens": 0
+            },
+            "totalTokens": 714,
+            "cost": 0.00091278,
+            "costDetails": {
+              "upstreamInferenceCost": 0.000922,
+              "upstreamInferenceInputCost": 0.000662,
+              "upstreamInferenceOutputCost": 0.00026
+            },
+            "isByok": false
+          }
+        },
+        "sequenceNumber": 9,
+        "type": "response.completed"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "type": "turn.end",
+        "turnNumber": 0,
+        "timestamp": 1779534539728
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "type": "turn.start",
+        "turnNumber": 1,
+        "timestamp": 1779534540908
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "raw": {
+          "type": "response.keep_alive"
+        },
+        "type": "UNKNOWN",
+        "isUnknown": true
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "raw": {
+          "type": "response.keep_alive"
+        },
+        "type": "UNKNOWN",
+        "isUnknown": true
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "response": {
+          "background": false,
+          "completedAt": null,
+          "createdAt": 1779534539,
+          "error": null,
+          "frequencyPenalty": 0,
+          "id": "gen-1779534539-BdHDYwVTVs203aVSCGOc",
+          "incompleteDetails": null,
+          "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Call tools when asked; otherwise reply with the exact requested text.",
+          "maxOutputTokens": null,
+          "maxToolCalls": null,
+          "metadata": {},
+          "model": "anthropic/claude-4.5-haiku-20251001",
+          "object": "response",
+          "output": [],
+          "parallelToolCalls": true,
+          "presencePenalty": 0,
+          "previousResponseId": null,
+          "promptCacheKey": null,
+          "reasoning": null,
+          "safetyIdentifier": null,
+          "serviceTier": "auto",
+          "status": "in_progress",
+          "store": false,
+          "temperature": 1,
+          "text": {
+            "format": {
+              "type": "text"
+            }
+          },
+          "toolChoice": "auto",
+          "tools": [
+            {
+              "description": "Returns its `value` input prefixed with \"echoed:\". Use exactly once when asked.",
+              "name": "echo",
+              "parameters": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The string to echo back"
+                  }
+                },
+                "required": ["value"],
+                "additionalProperties": false
+              },
+              "strict": null,
+              "type": "function"
+            }
+          ],
+          "topLogprobs": 0,
+          "topP": 1,
+          "truncation": "disabled",
+          "usage": null
+        },
+        "sequenceNumber": 0,
+        "type": "response.created"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "response": {
+          "background": false,
+          "completedAt": null,
+          "createdAt": 1779534539,
+          "error": null,
+          "frequencyPenalty": 0,
+          "id": "gen-1779534539-BdHDYwVTVs203aVSCGOc",
+          "incompleteDetails": null,
+          "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Call tools when asked; otherwise reply with the exact requested text.",
+          "maxOutputTokens": null,
+          "maxToolCalls": null,
+          "metadata": {},
+          "model": "anthropic/claude-4.5-haiku-20251001",
+          "object": "response",
+          "output": [],
+          "parallelToolCalls": true,
+          "presencePenalty": 0,
+          "previousResponseId": null,
+          "promptCacheKey": null,
+          "reasoning": null,
+          "safetyIdentifier": null,
+          "serviceTier": "auto",
+          "status": "in_progress",
+          "store": false,
+          "temperature": 1,
+          "text": {
+            "format": {
+              "type": "text"
+            }
+          },
+          "toolChoice": "auto",
+          "tools": [
+            {
+              "description": "Returns its `value` input prefixed with \"echoed:\". Use exactly once when asked.",
+              "name": "echo",
+              "parameters": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The string to echo back"
+                  }
+                },
+                "required": ["value"],
+                "additionalProperties": false
+              },
+              "strict": null,
+              "type": "function"
+            }
+          ],
+          "topLogprobs": 0,
+          "topP": 1,
+          "truncation": "disabled",
+          "usage": null
+        },
+        "sequenceNumber": 1,
+        "type": "response.in_progress"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "item": {
+          "content": [],
+          "id": "msg_tmp_9whbqc5qjmn",
+          "role": "assistant",
+          "status": "in_progress",
+          "type": "message"
+        },
+        "outputIndex": 0,
+        "sequenceNumber": 2,
+        "type": "response.output_item.added"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "contentIndex": 0,
+        "itemId": "msg_tmp_9whbqc5qjmn",
+        "outputIndex": 0,
+        "part": {
+          "annotations": [],
+          "logprobs": [],
+          "text": "",
+          "type": "output_text"
+        },
+        "sequenceNumber": 3,
+        "type": "response.content_part.added"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "contentIndex": 0,
+        "delta": "done",
+        "itemId": "msg_tmp_9whbqc5qjmn",
+        "logprobs": [],
+        "outputIndex": 0,
+        "sequenceNumber": 4,
+        "type": "response.output_text.delta"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "contentIndex": 0,
+        "itemId": "msg_tmp_9whbqc5qjmn",
+        "logprobs": [],
+        "outputIndex": 0,
+        "sequenceNumber": 5,
+        "text": "done",
+        "type": "response.output_text.done"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "contentIndex": 0,
+        "itemId": "msg_tmp_9whbqc5qjmn",
+        "outputIndex": 0,
+        "part": {
+          "annotations": [],
+          "logprobs": [],
+          "text": "done",
+          "type": "output_text"
+        },
+        "sequenceNumber": 6,
+        "type": "response.content_part.done"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "item": {
+          "content": [
+            {
+              "annotations": [],
+              "logprobs": [],
+              "text": "done",
+              "type": "output_text"
+            }
+          ],
+          "id": "msg_tmp_9whbqc5qjmn",
+          "role": "assistant",
+          "status": "completed",
+          "type": "message"
+        },
+        "outputIndex": 0,
+        "sequenceNumber": 7,
+        "type": "response.output_item.done"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "response": {
+          "background": false,
+          "completedAt": 1779534540,
+          "createdAt": 1779534539,
+          "error": null,
+          "frequencyPenalty": 0,
+          "id": "gen-1779534539-BdHDYwVTVs203aVSCGOc",
+          "incompleteDetails": null,
+          "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Call tools when asked; otherwise reply with the exact requested text.",
+          "maxOutputTokens": null,
+          "maxToolCalls": null,
+          "metadata": {},
+          "model": "anthropic/claude-4.5-haiku-20251001",
+          "object": "response",
+          "output": [
+            {
+              "content": [
+                {
+                  "annotations": [],
+                  "logprobs": [],
+                  "text": "done",
+                  "type": "output_text"
+                }
+              ],
+              "id": "msg_tmp_9whbqc5qjmn",
+              "role": "assistant",
+              "status": "completed",
+              "type": "message"
+            }
+          ],
+          "parallelToolCalls": true,
+          "presencePenalty": 0,
+          "previousResponseId": null,
+          "promptCacheKey": null,
+          "reasoning": null,
+          "safetyIdentifier": null,
+          "serviceTier": "auto",
+          "status": "completed",
+          "store": false,
+          "temperature": 1,
+          "text": {
+            "format": {
+              "type": "text"
+            }
+          },
+          "toolChoice": "auto",
+          "tools": [
+            {
+              "description": "Returns its `value` input prefixed with \"echoed:\". Use exactly once when asked.",
+              "name": "echo",
+              "parameters": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The string to echo back"
+                  }
+                },
+                "required": ["value"],
+                "additionalProperties": false
+              },
+              "strict": null,
+              "type": "function"
+            }
+          ],
+          "topLogprobs": 0,
+          "topP": 1,
+          "truncation": "disabled",
+          "usage": {
+            "inputTokens": 731,
+            "inputTokensDetails": {
+              "cachedTokens": 0
+            },
+            "outputTokens": 4,
+            "outputTokensDetails": {
+              "reasoningTokens": 0
+            },
+            "totalTokens": 735,
+            "cost": 0.00074349,
+            "costDetails": {
+              "upstreamInferenceCost": 0.000751,
+              "upstreamInferenceInputCost": 0.000731,
+              "upstreamInferenceOutputCost": 0.00002
+            },
+            "isByok": false
+          }
+        },
+        "sequenceNumber": 8,
+        "type": "response.completed"
+      }
+    },
+    {
+      "type": "invoke_turn_end"
+    },
+    {
+      "type": "yield",
+      "event": {
+        "type": "turn.end",
+        "turnNumber": 1,
+        "timestamp": 1779534541049
+      }
+    }
+  ],
+  "response": {
+    "id": "gen-1779534539-BdHDYwVTVs203aVSCGOc",
+    "model": "anthropic/claude-4.5-haiku-20251001",
+    "usage": {
+      "inputTokens": 731,
+      "inputTokensDetails": {
+        "cachedTokens": 0
+      },
+      "outputTokens": 4,
+      "outputTokensDetails": {
+        "reasoningTokens": 0
+      },
+      "totalTokens": 735,
+      "cost": 0.00074349,
+      "costDetails": {
+        "upstreamInferenceCost": 0.000751,
+        "upstreamInferenceInputCost": 0.000731,
+        "upstreamInferenceOutputCost": 0.00002
+      },
+      "isByok": false
+    },
+    "output": [
+      {
+        "content": [
+          {
+            "annotations": [],
+            "logprobs": [],
+            "text": "done",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_tmp_9whbqc5qjmn",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ]
+  }
+}
