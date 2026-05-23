@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `PreToolUseAction` discriminated union (`{ action: 'continue' }` /
+  `{ action: 'block'; reason: string }` / `{ action: 'modify'; input: unknown }`)
+  exported from the library. `onHook` handlers may now return one of these
+  values from the `PreToolUse` event to short-circuit (`block`) or rewrite
+  (`modify`) the tool call before `canUseTool` runs. Returning `void` /
+  `undefined` (the pre-3.7 contract) is equivalent to `{ action: 'continue' }`
+  — this is NOT a breaking change. Block synthesises the same
+  `{ error, denied: true }` JSON shape `canUseTool`-deny already produces, so
+  audit consumers see a uniform denial payload across both sources. `modify`
+  flows the substituted input through `canUseTool` and the underlying tool
+  while leaving the `tool_call` event payload (and `PreToolUse.input` /
+  `PostToolUse.input`) untouched — modifications are invisible at the
+  event-stream layer except via the eventual `tool_result`. Precedence:
+  hook-`block` beats `canUseTool`-allow; `canUseTool`-`deny` beats
+  hook-`continue` / `modify`. A throw from a `PreToolUse` handler is still
+  logged-and-swallowed (treated as `continue`, never as `block`) — same
+  safety contract as Phase 1.7. ([#46](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/46))
 - Three new lifecycle hook events on `onHook`: `Setup` (fires once per
   `OpenRouterAgentRun` instance, BEFORE `SessionStart` — useful for first-run
   resource provisioning), `Stop` (fires LAST in the run, after `SessionEnd`,

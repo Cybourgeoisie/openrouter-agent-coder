@@ -25,6 +25,7 @@ import type {
   AgentCoreEventStatus,
   HookEvent,
   HookPayload,
+  PreToolUseAction,
   TokenUsage,
 } from './events.js';
 import { permissionModeToCanUseTool, type PermissionMode } from './permission-modes.js';
@@ -63,11 +64,34 @@ export type CanUseTool = (
 
 /**
  * Lifecycle hook callback. Invoked with a {@link HookEvent} discriminator and
- * the matching {@link HookPayload} variant. Hooks are awaited but are
- * audit-only: thrown errors are logged via {@link AgentLogger} and swallowed,
- * the return value is discarded, and the agent run continues unmodified.
+ * the matching {@link HookPayload} variant. Hooks are awaited; thrown errors
+ * are logged via {@link AgentLogger} and swallowed (a throw is NEVER treated
+ * as a block — that would silently flip a working hook from "allow + recover"
+ * to "deny" if the handler later starts throwing).
+ *
+ * For the `PreToolUse` event specifically, the handler MAY return a
+ * {@link PreToolUseAction} to short-circuit (`block`) or rewrite (`modify`)
+ * the tool call before {@link CanUseTool} runs. Returning `void`/`undefined`
+ * (the historical contract) is equivalent to `{ action: 'continue' }` — the
+ * tool call proceeds with the original input. Every other event's return
+ * value is ignored.
+ *
+ * Order of evaluation per tool call when both `onHook` and `canUseTool` are
+ * set:
+ * 1. `PreToolUse` fires. `block` → synth-denial tool result, `PostToolUse`
+ *    still fires with `isError: true`; `modify` → effective input becomes
+ *    the substituted value.
+ * 2. `canUseTool` runs against the (possibly modified) input.
+ * 3. The underlying tool executes if both steps allow.
+ *
+ * Precedence: hook-`block` beats `canUseTool`-allow (canUseTool is never
+ * consulted on block). `canUseTool`-`deny` beats hook-`continue`/`modify`
+ * (deny short-circuits whatever the hook permitted).
  */
-export type OnHook = (event: HookEvent, payload: HookPayload) => void | Promise<void>;
+export type OnHook = (
+  event: HookEvent,
+  payload: HookPayload,
+) => void | PreToolUseAction | Promise<void | PreToolUseAction>;
 
 export interface OpenRouterAgentRunOptions {
   /** OpenRouter API key. Required — no env fallback. */
@@ -360,12 +384,19 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     // thrown-error paths so subscribers can distinguish clean from dirty exit.
     let stopPayload: Extract<HookPayload, { event: 'Stop' }> = { event: 'Stop', status: 'error' };
 
-    const safeFireHook = async (event: HookEvent, payload: HookPayload): Promise<void> => {
-      if (!onHook) return;
+    // Returns whatever the handler returned (or `undefined` if the handler
+    // throws or `onHook` is unset). Callers that don't care about the return
+    // value (every event except `PreToolUse`) can ignore it; PreToolUse
+    // narrows the result via {@link parsePreToolUseAction}. A throw is logged
+    // and swallowed as `undefined` — equivalent to a `continue` — never a
+    // synthesised deny (Phase 3.7 invariant).
+    const safeFireHook = async (event: HookEvent, payload: HookPayload): Promise<unknown> => {
+      if (!onHook) return undefined;
       try {
-        await onHook(event, payload);
+        return await onHook(event, payload);
       } catch (err) {
         logger?.('error', 'Hook threw', { event, error: err });
+        return undefined;
       }
     };
 
@@ -467,7 +498,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         ? baseTools.map((t) => wrapToolWithPermission(t, this.opts.canUseTool!))
         : baseTools;
       const toolsForRun = onHook
-        ? permissionedTools.map((t) => wrapToolWithHooks(t, safeFireHook))
+        ? permissionedTools.map((t) => wrapToolWithHooks(t, safeFireHook, logger))
         : permissionedTools;
 
       signal.addEventListener('abort', onAbort, { once: true });
@@ -739,7 +770,31 @@ function wrapToolWithPermission(t: Tool, canUseTool: CanUseTool): Tool {
  * OUTSIDE {@link wrapToolWithPermission} so that PreToolUse fires before the
  * canUseTool decision (audit always fires, even on deny) and PostToolUse fires
  * after the inner execute resolves — propagating any thrown error (including
- * the synth-deny payload from a permission denial) as the PostToolUse output.
+ * the synth-deny payload from a permission denial OR a hook `block`) as the
+ * PostToolUse output.
+ *
+ * Phase 3.7: `PreToolUse` may return a {@link PreToolUseAction}.
+ *
+ * - `block` synthesises the same `{ error, denied: true }` JSON shape used by
+ *   {@link wrapToolWithPermission}, throws it (so the OR SDK marks the tool
+ *   result as `status: 'incomplete'`), and lets the catch arm fire a single
+ *   `PostToolUse` carrying the synth output. `canUseTool` is NEVER consulted
+ *   on block — precedence: hook-block > canUseTool-allow.
+ * - `modify` substitutes the input that flows into `originalExecute` (which
+ *   IS the `canUseTool` wrapper when one is wired), so the modified input is
+ *   what `canUseTool` decides on and what the underlying tool runs against.
+ *   The `tool_call` event the consumer sees is unchanged — `modify` is
+ *   invisible at the event-stream layer except for the eventual
+ *   `tool_result`. `PreToolUse.input` reflects the ORIGINAL input (the hook
+ *   already decided to modify; echoing the change is redundant);
+ *   `PostToolUse.input` also stays original for symmetry with how
+ *   `canUseTool`'s `updatedInput` is invisible there.
+ * - `continue` (or a `void` / `undefined` return — the historical contract)
+ *   leaves the call unchanged.
+ *
+ * Precedence the other way round — `canUseTool` may still deny after the
+ * hook returns `continue`/`modify`; that deny wins, the hook's intent is
+ * overridden, and the consumer sees the canUseTool reason in the tool result.
  *
  * The OR SDK's `ToolExecuteContext` carries the live `FunctionCallItem` on
  * `ctx.toolCall`, so the SDK-issued call id is preferred. When that is absent
@@ -749,7 +804,8 @@ function wrapToolWithPermission(t: Tool, canUseTool: CanUseTool): Tool {
  */
 function wrapToolWithHooks(
   t: Tool,
-  safeFireHook: (event: HookEvent, payload: HookPayload) => Promise<void>,
+  safeFireHook: (event: HookEvent, payload: HookPayload) => Promise<unknown>,
+  logger?: AgentLogger,
 ): Tool {
   const fn = t.function as { name: string; execute?: (i: unknown, c?: unknown) => unknown };
   const name = fn.name;
@@ -768,12 +824,26 @@ function wrapToolWithHooks(
         level: 'info' | 'warn' | 'error',
         message: string,
         context?: unknown,
-      ): Promise<void> =>
+      ): Promise<unknown> =>
         safeFireHook('Notification', { event: 'Notification', level, message, context }),
     });
-    await safeFireHook('PreToolUse', { event: 'PreToolUse', toolName: name, input, callId });
+    const preResult = await safeFireHook('PreToolUse', {
+      event: 'PreToolUse',
+      toolName: name,
+      input,
+      callId,
+    });
+    const preAction = parsePreToolUseAction(preResult, name, logger);
+    const effectiveInput = preAction.action === 'modify' ? preAction.input : input;
     try {
-      const output = await originalExecute(input, ctxWithNotify);
+      if (preAction.action === 'block') {
+        // Throw with the same JSON shape canUseTool's deny path uses so the
+        // synth `tool_result` payload is shape-identical between the two
+        // denial sources. The catch arm fires PostToolUse with the JSON as
+        // output, then re-throws so the SDK marks the tool result incomplete.
+        throw new Error(JSON.stringify({ error: preAction.reason, denied: true }));
+      }
+      const output = await originalExecute(effectiveInput, ctxWithNotify);
       await safeFireHook('PostToolUse', {
         event: 'PostToolUse',
         toolName: name,
@@ -803,6 +873,51 @@ function wrapToolWithHooks(
       execute: wrappedExecute,
     },
   } as Tool;
+}
+
+/**
+ * Validate the raw value returned by a `PreToolUse` handler into a
+ * {@link PreToolUseAction}. `null`/`undefined`/`void` returns (the
+ * backward-compat path) become `continue`. Malformed objects (wrong shape,
+ * unrecognised `action`, missing `reason`/`input`) also become `continue`,
+ * with a `warn`-level log so the misuse is visible. This keeps the run alive
+ * — silently degrading to "tool executes" is safer than translating a
+ * malformed return into an accidental block.
+ */
+function parsePreToolUseAction(
+  raw: unknown,
+  toolName: string,
+  logger?: AgentLogger,
+): PreToolUseAction {
+  if (raw == null) return { action: 'continue' };
+  if (typeof raw !== 'object') {
+    logger?.('warn', 'PreToolUse handler returned a non-object; treating as continue', {
+      toolName,
+      returned: raw,
+    });
+    return { action: 'continue' };
+  }
+  const obj = raw as { action?: unknown; reason?: unknown; input?: unknown };
+  if (obj.action === 'continue') return { action: 'continue' };
+  if (obj.action === 'block') {
+    if (typeof obj.reason === 'string') return { action: 'block', reason: obj.reason };
+    logger?.('warn', 'PreToolUse block action missing string `reason`; treating as continue', {
+      toolName,
+    });
+    return { action: 'continue' };
+  }
+  if (obj.action === 'modify') {
+    if ('input' in obj) return { action: 'modify', input: obj.input };
+    logger?.('warn', 'PreToolUse modify action missing `input` field; treating as continue', {
+      toolName,
+    });
+    return { action: 'continue' };
+  }
+  logger?.('warn', 'PreToolUse handler returned unrecognised action; treating as continue', {
+    toolName,
+    action: obj.action,
+  });
+  return { action: 'continue' };
 }
 
 function deriveCompletionStatus(input: DeriveCompletionInput): AgentCoreEventStatus {
