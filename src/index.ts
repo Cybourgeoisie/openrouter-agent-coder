@@ -32,6 +32,7 @@ export {
   taskCreateTool,
   taskUpdateTool,
   editNotebookTool,
+  monitorTool,
 } from './tools/index.js';
 export type {
   ToolContext,
@@ -54,6 +55,9 @@ export type {
   EditNotebookResult,
   EditNotebookSuccess,
   EditNotebookError,
+  MonitorResult,
+  MonitorLine,
+  MonitorError,
 } from './tools/index.js';
 export { tool, createSdkMcpServer } from './custom-tools.js';
 export type { CustomToolConfig, SdkMcpServer, CreateSdkMcpServerConfig } from './custom-tools.js';

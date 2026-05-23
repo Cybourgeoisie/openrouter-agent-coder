@@ -12,12 +12,13 @@ import {
   taskCreateTool,
   taskUpdateTool,
   editNotebookTool,
+  monitorTool,
   type TaskListRef,
 } from './index.js';
 
 describe('tools barrel', () => {
-  it('exports all eleven tools', () => {
-    expect(allTools()).toHaveLength(11);
+  it('exports all twelve tools', () => {
+    expect(allTools()).toHaveLength(12);
   });
 
   it('includes every tool by name', () => {
@@ -34,6 +35,7 @@ describe('tools barrel', () => {
       'task_create',
       'task_update',
       'edit_notebook',
+      'monitor',
     ]);
   });
 
@@ -49,6 +51,7 @@ describe('tools barrel', () => {
     expect(taskCreateTool().function.name).toBe('task_create');
     expect(taskUpdateTool().function.name).toBe('task_update');
     expect(editNotebookTool().function.name).toBe('edit_notebook');
+    expect(monitorTool().function.name).toBe('monitor');
   });
 
   it('all tools have execute functions', () => {
@@ -78,23 +81,32 @@ describe('tools barrel', () => {
       const candidate = exec(
         t.function.name === 'run_command'
           ? { command: 'true' }
-          : t.function.name === 'ask_user_question'
-            ? { question: 'q?', options: [{ label: 'A' }, { label: 'B' }] }
-            : t.function.name === 'task_create'
-              ? { content: 'x' }
-              : t.function.name === 'task_update'
-                ? { taskId: 'nope', state: 'completed' }
-                : t.function.name === 'edit_notebook'
-                  ? { path: 'nonexistent', operation: 'delete', cell_index: 0 }
-                  : t.function.name === 'list_directory' ||
-                      t.function.name === 'grep_files' ||
-                      t.function.name === 'glob'
-                    ? { path: '.', pattern: 'x', file_glob: '*', case_sensitive: true }
-                    : { path: 'nonexistent', old_string: 'a', new_string: 'b', content: '' },
+          : t.function.name === 'monitor'
+            ? { command: 'true' }
+            : t.function.name === 'ask_user_question'
+              ? { question: 'q?', options: [{ label: 'A' }, { label: 'B' }] }
+              : t.function.name === 'task_create'
+                ? { content: 'x' }
+                : t.function.name === 'task_update'
+                  ? { taskId: 'nope', state: 'completed' }
+                  : t.function.name === 'edit_notebook'
+                    ? { path: 'nonexistent', operation: 'delete', cell_index: 0 }
+                    : t.function.name === 'list_directory' ||
+                        t.function.name === 'grep_files' ||
+                        t.function.name === 'glob'
+                      ? { path: '.', pattern: 'x', file_glob: '*', case_sensitive: true }
+                      : { path: 'nonexistent', old_string: 'a', new_string: 'b', content: '' },
       );
       if (t.function.name === 'run_command') {
         // run_command resolves with an error result rather than throwing.
         await expect(candidate).resolves.toMatchObject({ exitCode: 1 });
+      } else if (t.function.name === 'monitor') {
+        // monitor resolves with a truncated empty buffer on the pre-aborted path.
+        await expect(candidate).resolves.toMatchObject({
+          exitCode: null,
+          lines: [],
+          truncated: true,
+        });
       } else if (t.function.name === 'ask_user_question') {
         await expect(candidate).resolves.toEqual({ error: 'aborted' });
       } else if (t.function.name === 'task_create') {

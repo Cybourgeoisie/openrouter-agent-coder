@@ -9,6 +9,7 @@ import { globTool } from './glob.js';
 import { askUserQuestionTool, type AskUserQuestionToolOptions } from './ask-user-question.js';
 import { taskCreateTool, taskUpdateTool, type OnTasksChanged, type TaskListRef } from './tasks.js';
 import { editNotebookTool } from './edit-notebook.js';
+import { monitorTool } from './monitor.js';
 import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
 
 export { readFileTool } from './read-file.js';
@@ -33,6 +34,8 @@ export type {
   EditNotebookSuccess,
   EditNotebookError,
 } from './edit-notebook.js';
+export { monitorTool } from './monitor.js';
+export type { MonitorResult, MonitorLine, MonitorError } from './monitor.js';
 export type {
   TaskState,
   Task,
@@ -99,5 +102,6 @@ export function allTools(
     taskCreateTool(ctx, { taskListRef, onTasksChanged: opts.onTasksChanged }),
     taskUpdateTool(ctx, { taskListRef, onTasksChanged: opts.onTasksChanged }),
     editNotebookTool(ctx),
+    monitorTool(ctx),
   ];
 }
