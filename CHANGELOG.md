@@ -24,6 +24,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New `monitor` client tool — spawn a shell command via `/bin/sh -c` and
+  stream its stdout/stderr line-by-line into a capture buffer that resolves
+  on one of four stop conditions: natural process exit, line-count cap hit,
+  duration cap hit, or `ctx.signal` abort. Inputs: `command` (string,
+  required), optional `cwd` (resolved against the run's `cwd`), optional
+  `pattern` (JS regex string — compiled once at execute-time; invalid
+  patterns resolve with `{ error: 'invalid pattern: <message>' }` rather
+  than throwing), optional `max_lines` (default `1000`, silently clamped
+  to `10_000` with a `warn` notification), optional `max_duration_ms`
+  (default `60_000`, silently clamped to `600_000` with a `warn`
+  notification). Pattern filtering happens per-line; non-matching lines
+  are dropped on the floor (no buffer entry). All three forced-stop paths
+  (line cap, duration cap, abort) SIGTERM the child with a 250ms SIGKILL
+  grace mirroring `run_command`, and mark the returned result
+  `truncated: true` with `exitCode: null`. Natural exit returns
+  `truncated: false` with the real exit code. Result shape:
+  `{ exitCode: number | null, lines: { stream: 'stdout' | 'stderr', text: string }[], truncated: boolean, durationMs: number }`.
+  Wired into `allTools()` as the twelfth client tool; the agent's default
+  tool set now ships with 12 client tools. (Phase 4.4)
 - New `edit_notebook` client tool — Jupyter notebook (`.ipynb`) cell
   manipulation. Inputs: `path` (relative to the agent `cwd`), `operation`
   (Zod enum: `'replace_source'` / `'insert'` / `'delete'` /

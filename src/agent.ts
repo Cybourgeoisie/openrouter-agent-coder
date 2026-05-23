@@ -115,7 +115,7 @@ export interface OpenRouterAgentRunOptions {
   /** Max cumulative cost in USD. Defaults to 1.0. */
   maxBudgetUsd?: number;
   /**
-   * Tool set passed to the model. Defaults to the built-in 11-client-tool set
+   * Tool set passed to the model. Defaults to the built-in 12-client-tool set
    * bound to a {@link ToolContext} derived from the run's `cwd` and composite
    * AbortSignal; server tools (datetime/web_search/web_fetch) are injected via
    * hooks. Custom tools supplied here are NOT context-bound — callers are
