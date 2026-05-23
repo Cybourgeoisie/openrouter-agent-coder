@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New `glob` client tool — recursive file finder by glob pattern, separate
+  from the flat `list_directory` listing. Inputs: `pattern` (required, e.g.
+  `**/*.ts`, `src/**/*.test.ts`, `*.md`), `path` (defaults to the agent
+  `cwd`; relative paths resolve against `ctx.cwd`, absolute paths pass
+  through), and `case_sensitive` (default `true`, Linux convention).
+  Patterns support `**` (recursive across path separators, with
+  zero-or-more-segments semantics when followed by `/` — `**/*.ts` matches
+  both `top.ts` and `a/b/deep.ts`), `*` (per-segment wildcard, does not
+  cross `/`), `?` (single non-`/` character), and `[...]` character
+  classes (e.g. `[a-z]`, `[!abc]` for negation). Walk strategy: BFS by
+  directory level (more even path-length distribution under truncation
+  than DFS). Skips `node_modules`, `dist`, `coverage`, and any name
+  starting with `.` at every depth. Honors `ctx.signal` — aborts promptly
+  on cancellation between BFS levels and between directories within a
+  level. Result shape: `{ pattern, path, matches: string[], matchCount,
+truncated }`, with `matches` sorted lexicographically and capped at
+  `MAX_MATCHES = 1000`. The `compileGlobToRegex` helper in
+  `src/utils/glob.ts` was extended in place to support `?`, `[...]`
+  character classes, and zero-or-more-segments matching when `**` is
+  followed by `/`; patterns that don't use those features compile to the
+  same regex as before.
+  ([#50](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/50))
 - Four optional input fields on the `grep_files` tool schema: `before_context`
   / `after_context` / `context` (context-line capture, like `grep -B`/`-A`/`-C`,
   each silently clamped to `[0, 20]`) and `type` (built-in filetype alias —

@@ -43,12 +43,12 @@ All builds-on items reference primitives already shipped. Most are independent a
 | ~~3.8~~  | ~~Rich message stream (typed `AssistantMessage` etc.)~~ (PR pending)                                                                                    | ~~`AgentCoreEvent`~~           | ~~6h~~ | ~~—~~        |
 | ~~3.9~~  | ~~Enhanced Bash: description field, configurable timeout~~ (PR pending)                                                                                 | ~~`run_command`~~              | ~~2h~~ | ~~—~~        |
 | ~~3.10~~ | ~~Enhanced Grep: `-A`/`-B`/`-C`, filetype filters, output modes~~ (PR pending [#49](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/49)) | ~~`grep_files`~~               | ~~4h~~ | ~~—~~        |
-| 3.11     | Glob tool (new, separate from `list_directory`)                                                                                                         | _new_                          | 3h     | —            |
+| ~~3.11~~ | ~~Glob tool (new, separate from `list_directory`)~~ (PR pending [#50](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/50))               | ~~_new_~~                      | ~~3h~~ | ~~—~~        |
 | 3.12     | `persistSession: false` (in-memory only sessions)                                                                                                       | `FileStateAccessor`            | 3h     | —            |
 
 **Phase 3 total:** ~50h.
 
-**Initial Ready state on the project board** (no prereqs within Phase 3): 3.1, 3.4, 3.5, 3.6, 3.8, 3.9, 3.10, 3.11, 3.12 (9 cards). **Backlog until prereq lands:** ~~3.2~~ (now Done), ~~3.3~~ (now Done), ~~3.4~~ (now Done), ~~3.5~~ (now Done), ~~3.6~~ (now Done), ~~3.7~~ (now Done).
+**Initial Ready state on the project board** (no prereqs within Phase 3): 3.1, 3.4, 3.5, 3.6, 3.8, 3.9, 3.10, 3.11, 3.12 (9 cards). **Backlog until prereq lands:** ~~3.2~~ (now Done), ~~3.3~~ (now Done), ~~3.4~~ (now Done), ~~3.5~~ (now Done), ~~3.6~~ (now Done), ~~3.7~~ (now Done), ~~3.11~~ (now Done).
 
 ---
 

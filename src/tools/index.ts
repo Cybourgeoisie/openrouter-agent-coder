@@ -5,6 +5,7 @@ import { editFileTool } from './edit-file.js';
 import { listDirectoryTool } from './list-directory.js';
 import { runCommandTool } from './run-command.js';
 import { grepFilesTool } from './grep-files.js';
+import { globTool } from './glob.js';
 import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
 
 export { readFileTool } from './read-file.js';
@@ -13,6 +14,7 @@ export { editFileTool } from './edit-file.js';
 export { listDirectoryTool } from './list-directory.js';
 export { runCommandTool } from './run-command.js';
 export { grepFilesTool } from './grep-files.js';
+export { globTool } from './glob.js';
 export { SERVER_TOOLS, createServerToolsHooks } from './server-tools.js';
 export { DEFAULT_TOOL_CONTEXT } from './context.js';
 export type { ToolContext } from './context.js';
@@ -31,5 +33,6 @@ export function allTools(ctx: ToolContext = DEFAULT_TOOL_CONTEXT): readonly Tool
     listDirectoryTool(ctx),
     runCommandTool(ctx),
     grepFilesTool(ctx),
+    globTool(ctx),
   ];
 }
