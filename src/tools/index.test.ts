@@ -8,11 +8,12 @@ import {
   runCommandTool,
   grepFilesTool,
   globTool,
+  askUserQuestionTool,
 } from './index.js';
 
 describe('tools barrel', () => {
-  it('exports all seven tools', () => {
-    expect(allTools()).toHaveLength(7);
+  it('exports all eight tools', () => {
+    expect(allTools()).toHaveLength(8);
   });
 
   it('includes every tool by name', () => {
@@ -25,6 +26,7 @@ describe('tools barrel', () => {
       'run_command',
       'grep_files',
       'glob',
+      'ask_user_question',
     ]);
   });
 
@@ -36,6 +38,7 @@ describe('tools barrel', () => {
     expect(runCommandTool().function.name).toBe('run_command');
     expect(grepFilesTool().function.name).toBe('grep_files');
     expect(globTool().function.name).toBe('glob');
+    expect(askUserQuestionTool().function.name).toBe('ask_user_question');
   });
 
   it('all tools have execute functions', () => {
@@ -55,7 +58,8 @@ describe('tools barrel', () => {
     const ctrl = new AbortController();
     const tools = allTools({ cwd: '.', signal: ctrl.signal });
     ctrl.abort();
-    // Every client tool's execute should reject promptly once the signal aborts.
+    // Every client tool's execute should reject (or resolve to a cancellation
+    // payload for the well-behaved ones) once the signal aborts.
     for (const t of tools) {
       const exec = (
         t.function as { execute: (params: Record<string, unknown>) => Promise<unknown> | unknown }
@@ -64,18 +68,45 @@ describe('tools barrel', () => {
       const candidate = exec(
         t.function.name === 'run_command'
           ? { command: 'true' }
-          : t.function.name === 'list_directory' ||
-              t.function.name === 'grep_files' ||
-              t.function.name === 'glob'
-            ? { path: '.', pattern: 'x', file_glob: '*', case_sensitive: true }
-            : { path: 'nonexistent', old_string: 'a', new_string: 'b', content: '' },
+          : t.function.name === 'ask_user_question'
+            ? { question: 'q?', options: [{ label: 'A' }, { label: 'B' }] }
+            : t.function.name === 'list_directory' ||
+                t.function.name === 'grep_files' ||
+                t.function.name === 'glob'
+              ? { path: '.', pattern: 'x', file_glob: '*', case_sensitive: true }
+              : { path: 'nonexistent', old_string: 'a', new_string: 'b', content: '' },
       );
       if (t.function.name === 'run_command') {
         // run_command resolves with an error result rather than throwing.
         await expect(candidate).resolves.toMatchObject({ exitCode: 1 });
+      } else if (t.function.name === 'ask_user_question') {
+        await expect(candidate).resolves.toEqual({ error: 'aborted' });
       } else {
         await expect(candidate).rejects.toThrow(/cancelled/);
       }
     }
+  });
+
+  it('allTools forwards onAskUserQuestion into the ask_user_question factory', async () => {
+    let received: unknown;
+    const tools = allTools(
+      { cwd: '.' },
+      {
+        onAskUserQuestion: async (req) => {
+          received = req;
+          return { questionId: req.questionId, selectedOptionId: 'a' };
+        },
+      },
+    );
+    const ask = tools.find((t) => t.function.name === 'ask_user_question')!;
+    const exec = (
+      ask.function as { execute: (params: Record<string, unknown>) => Promise<unknown> }
+    ).execute;
+    const result = await exec({
+      question: 'pick',
+      options: [{ label: 'X' }, { label: 'Y' }],
+    });
+    expect(received).toMatchObject({ question: 'pick' });
+    expect(result).toEqual({ selectedOptionId: 'a', label: 'X' });
   });
 });

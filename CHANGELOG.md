@@ -24,6 +24,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New `ask_user_question` client tool — multiple-choice clarifying
+  questions surfaced to a host UI during a run. Inputs: `question`
+  (string), `options` (2–26 entries; each `{ label, preview? }`), optional
+  `allow_free_text`, optional `timeout_ms` (default 300 000, clamped to
+  600 000). The library generates a UUID `questionId` and auto-assigns
+  per-option ids `'a'`–`'z'` lexicographically. The tool returns
+  `{ selectedOptionId, label, freeTextAnswer? }` on success — `label`
+  resolved from the request's options so the model never has to remember
+  the lettering. Aborting via `signal` / `run.abort()` resolves promptly
+  with `{ error: 'aborted' }`; a missing host handler returns
+  `{ error: 'no host handler registered for ask_user_question' }`; a
+  timeout returns `{ error: 'timed out after <ms>ms' }`. (Phase 4.1)
+- `onAskUserQuestion` constructor option on `OpenRouterAgentRun` — host
+  callback `(req: UserQuestionRequest) => Promise<UserQuestionResponse>`
+  that powers `ask_user_question`. Plumbed through `allTools(ctx, {
+onAskUserQuestion })`. Ignored when the caller supplies a custom `tools`
+  array. (Phase 4.1)
+- New public exports from the library root: `askUserQuestionTool`,
+  `AllToolsOptions`, `AskUserQuestionToolOptions`,
+  `AskUserQuestionToolResult`, `OnAskUserQuestion`, `UserQuestionRequest`,
+  `UserQuestionResponse`. (Phase 4.1)
+- The `Notification` lifecycle hook now fires once per
+  `ask_user_question` call with `level: 'info'`,
+  `message: 'ask_user_question'`, and the full request payload as
+  `context`. Subscribers without a UI still observe every question.
+  (Phase 4.1)
 - `persistSession` constructor option on `OpenRouterAgentRun` (default
   `true`, backward-compatible). When `false`, the run swaps the
   `FileStateAccessor` for an in-memory accessor and skips every write under
