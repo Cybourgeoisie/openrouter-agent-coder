@@ -21,11 +21,12 @@ a deterministic stand-in for `@openrouter/agent`.
 
 ## Fixture provenance
 
-| Fixture                                                                                                                                                                                                       | Source                                  | Notes                                                                                                                                                                  |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `abort-mid-stream`, `abort-then-throw`, `max-turns`, `single-turn-no-usage`, `tool-call-sdk-omits-ctx-callid`, `single-run-command*`, `plan-mode-write-then-read`, `single-tool-call`, `multi-turn-with-tool` | Hand-rolled                             | Exercise specific code branches (abort, denial, omitted ctx, max-turns) that the real SDK either does not produce or that would require lossy assertions to test live. |
-| `multi-turn-with-tool-haiku.json`                                                                                                                                                                             | Recorded — `anthropic/claude-haiku-4.5` | Round-trip proof for the recorder against the same shape as `multi-turn-with-tool`.                                                                                    |
-| `single-tool-call-gemini.json`                                                                                                                                                                                | Recorded — `google/gemini-3.5-flash`    | Cross-provider proof that the recorder produces a replayable fixture for a non-Anthropic model.                                                                        |
+| Fixture                                                                                                                                                                                                           | Source                                  | Notes                                                                                                                                                                  |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `abort-mid-stream`, `abort-then-throw`, `max-turns`, `single-turn-no-usage`, `tool-call-sdk-omits-ctx-callid`, `single-run-command-echo`, `plan-mode-write-then-read`, `single-tool-call`, `multi-turn-with-tool` | Hand-rolled                             | Exercise specific code branches (abort, denial, omitted ctx, max-turns) that the real SDK either does not produce or that would require lossy assertions to test live. |
+| `multi-turn-with-tool-haiku.json`                                                                                                                                                                                 | Recorded — `anthropic/claude-haiku-4.5` | Round-trip proof for the recorder against the same shape as `multi-turn-with-tool`.                                                                                    |
+| `single-tool-call-gemini.json`                                                                                                                                                                                    | Recorded — `google/gemini-3.5-flash`    | Cross-provider proof that the recorder produces a replayable fixture for a non-Anthropic model.                                                                        |
+| `single-run-command.json`                                                                                                                                                                                         | Recorded — `anthropic/claude-haiku-4.5` | Drives the `permissionMode:'default'` denial test (`full-run.test.ts:372`). 26 steps, 1 `tool_execute`, 1 `invoke_turn_end`, ~749 total tokens, ~$0.00076.             |
 
 ## Recording new fixtures
 
@@ -83,8 +84,8 @@ The recorder will:
 
 - `prompt` (required) — the user message.
 - `tools` (optional, default `[]`) — names from the recorder's tool registry
-  in `scripts/record-fixture.ts`. Currently registered: `echo`. Add more by
-  editing the `TOOL_REGISTRY` constant.
+  in `scripts/record-fixture.ts`. Currently registered: `echo`, `run_command`.
+  Add more by editing the `TOOL_REGISTRY` constant.
 - `instructions` (optional) — system instructions.
 - `model` (optional) — overridden by `--model`.
 - `maxTurns` (optional, default `5`) — hard cap on the inner loop.
