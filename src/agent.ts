@@ -29,6 +29,7 @@ import type {
 } from './events.js';
 import { permissionModeToCanUseTool, type PermissionMode } from './permission-modes.js';
 import { buildToolFilterCanUseTool } from './tool-filters.js';
+import { composeInstructions, type SettingSource } from './context-discovery.js';
 
 const DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
 const DEFAULT_MAX_TURNS = 25;
@@ -156,6 +157,28 @@ export interface OpenRouterAgentRunOptions {
   appTitle?: string;
   /** Optional diagnostic logger. No logger → silent. */
   logger?: AgentLogger;
+  /**
+   * Opt-in context-discovery sources. When non-empty, the agent walks each
+   * source on the first iteration and **prepends** the discovered CLAUDE.md
+   * content to {@link instructions} (or {@link DEFAULT_INSTRUCTIONS} when
+   * unset). Final composed order is: `user` → `project` → `local` →
+   * constructor `instructions`.
+   *
+   * Sources:
+   * - `'project'` — walks up from `cwd`, picking up `<dir>/CLAUDE.md` and
+   *   `<dir>/.claude/CLAUDE.md` at each level. Stops at the first directory
+   *   containing `.git`, or at the filesystem root. Walk depth capped at 10.
+   * - `'user'` — `<os.homedir()>/.claude/CLAUDE.md`.
+   * - `'local'` — `<cwd>/.claude/CLAUDE.local.md`.
+   *
+   * Missing or unreadable files are silently skipped. The composed
+   * instructions are capped at ~50k characters; on overflow the agent drops
+   * contributions from the oldest source (user → project → local) and emits
+   * a `'warn'`-level log via {@link logger}.
+   *
+   * Defaults to `[]` (back-compat: no discovery, no FS reads).
+   */
+  settingSources?: readonly SettingSource[];
 }
 
 interface ResolvedOptions {
@@ -175,6 +198,7 @@ interface ResolvedOptions {
   signal?: AbortSignal;
   baseUrl?: string;
   logger?: AgentLogger;
+  settingSources: readonly SettingSource[];
 }
 
 function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
@@ -237,6 +261,7 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     signal: opts.signal,
     baseUrl: opts.baseUrl,
     logger: opts.logger,
+    settingSources: opts.settingSources ?? [],
   };
 }
 
@@ -287,7 +312,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       apiKey,
       sessionId,
       prompt,
-      instructions,
+      instructions: baseInstructions,
       model,
       cwd,
       maxTurns,
@@ -298,7 +323,15 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       baseUrl,
       logger,
       onHook,
+      settingSources,
     } = this.opts;
+    // Discovery happens here (not in resolveOptions) so the constructor stays
+    // synchronous and the public API shape is unchanged. When settingSources
+    // is empty, composeInstructions short-circuits without any FS reads.
+    const instructions =
+      settingSources.length > 0
+        ? await composeInstructions({ cwd, settingSources, instructions: baseInstructions, logger })
+        : baseInstructions;
 
     const startMs = Date.now();
     let maxTurnNumber = 0;

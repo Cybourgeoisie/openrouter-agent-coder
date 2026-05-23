@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createGate, loadFixture, type MockState } from './mock-openrouter.js';
 
@@ -542,6 +543,37 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
     expect(complete.type).toBe('stream_complete');
     expect(complete.status).toBe('success');
+  });
+
+  it('composes discovered CLAUDE.md into the callModel instructions when settingSources is set', async () => {
+    state.fixture = loadFixture('single-turn-no-usage');
+    const workdir = await mkdtemp(join(tmpdir(), 'integration-settingsources-'));
+    try {
+      // Drop a project CLAUDE.md and a .git so the project source resolves
+      // deterministically without depending on the host environment.
+      await writeFile(join(workdir, 'CLAUDE.md'), 'PROJECT-CONTEXT-LINE', 'utf8');
+      await mkdir(join(workdir, '.git'), { recursive: true });
+      await writeFile(join(workdir, '.git', 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+
+      const run = new OpenRouterAgentRun({
+        apiKey: 'sk-int-test',
+        sessionId: TEST_SESSION,
+        prompt: 'discover context',
+        cwd: workdir,
+        logsRoot: join(workdir, 'logs'),
+        instructions: 'INSTRUCTIONS_BLOCK',
+        settingSources: ['project'],
+        tools: [echoTool()] as unknown as ConstructorParameters<
+          typeof OpenRouterAgentRun
+        >[0]['tools'],
+      });
+      await collect(run);
+
+      const callArgs = state.callModelArgs[0] as { instructions?: string };
+      expect(callArgs.instructions).toBe('PROJECT-CONTEXT-LINE\n\nINSTRUCTIONS_BLOCK');
+    } finally {
+      await rm(workdir, { recursive: true, force: true });
+    }
   });
 
   it('reports stream_complete{status:max_turns} when the turn count reaches maxTurns', async () => {
