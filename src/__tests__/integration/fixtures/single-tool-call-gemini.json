@@ -6,17 +6,7 @@
       "event": {
         "type": "turn.start",
         "turnNumber": 0,
-        "timestamp": 1779534603053
-      }
-    },
-    {
-      "type": "yield",
-      "event": {
-        "raw": {
-          "type": "response.keep_alive"
-        },
-        "type": "UNKNOWN",
-        "isUnknown": true
+        "timestamp": 1779535051072
       }
     },
     {
@@ -35,16 +25,16 @@
         "response": {
           "background": false,
           "completedAt": null,
-          "createdAt": 1779534602,
+          "createdAt": 1779535050,
           "error": null,
           "frequencyPenalty": 0,
-          "id": "gen-1779534602-uvLru57ULfbtIswlKCTN",
+          "id": "gen-1779535050-Svy42MywKmUXbXexlYdp",
           "incompleteDetails": null,
           "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Make tool calls when asked; otherwise reply with the exact requested text.",
           "maxOutputTokens": null,
           "maxToolCalls": null,
           "metadata": {},
-          "model": "google/gemini-2.5-flash",
+          "model": "google/gemini-3.5-flash-20260519",
           "object": "response",
           "output": [],
           "parallelToolCalls": true,
@@ -98,16 +88,16 @@
         "response": {
           "background": false,
           "completedAt": null,
-          "createdAt": 1779534602,
+          "createdAt": 1779535050,
           "error": null,
           "frequencyPenalty": 0,
-          "id": "gen-1779534602-uvLru57ULfbtIswlKCTN",
+          "id": "gen-1779535050-Svy42MywKmUXbXexlYdp",
           "incompleteDetails": null,
           "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Make tool calls when asked; otherwise reply with the exact requested text.",
           "maxOutputTokens": null,
           "maxToolCalls": null,
           "metadata": {},
-          "model": "google/gemini-2.5-flash",
+          "model": "google/gemini-3.5-flash-20260519",
           "object": "response",
           "output": [],
           "parallelToolCalls": true,
@@ -159,12 +149,10 @@
       "type": "yield",
       "event": {
         "item": {
-          "arguments": "",
-          "callId": "tool_echo_uzBoQy8GaQkkjRUrmTwb",
-          "id": "fc_tmp_w9msz4ad0ch",
-          "name": "echo",
+          "id": "tool_echo_ae0mlq0yV2RnHbzr09kY",
           "status": "in_progress",
-          "type": "function_call"
+          "summary": [],
+          "type": "reasoning"
         },
         "outputIndex": 0,
         "sequenceNumber": 2,
@@ -174,10 +162,26 @@
     {
       "type": "yield",
       "event": {
-        "delta": "{\"value\":\"gated\"}",
-        "itemId": "fc_tmp_w9msz4ad0ch",
-        "outputIndex": 0,
+        "item": {
+          "arguments": "",
+          "callId": "tool_echo_ae0mlq0yV2RnHbzr09kY",
+          "id": "fc_tmp_e19sqydxye7",
+          "name": "echo",
+          "status": "in_progress",
+          "type": "function_call"
+        },
+        "outputIndex": 1,
         "sequenceNumber": 3,
+        "type": "response.output_item.added"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "delta": "{\"value\":\"gated\"}",
+        "itemId": "fc_tmp_e19sqydxye7",
+        "outputIndex": 1,
+        "sequenceNumber": 4,
         "type": "response.function_call_arguments.delta"
       }
     },
@@ -185,10 +189,10 @@
       "type": "yield",
       "event": {
         "arguments": "{\"value\":\"gated\"}",
-        "itemId": "fc_tmp_w9msz4ad0ch",
+        "itemId": "fc_tmp_e19sqydxye7",
         "name": "echo",
-        "outputIndex": 0,
-        "sequenceNumber": 4,
+        "outputIndex": 1,
+        "sequenceNumber": 5,
         "type": "response.function_call_arguments.done"
       }
     },
@@ -197,14 +201,14 @@
       "event": {
         "item": {
           "arguments": "{\"value\":\"gated\"}",
-          "callId": "tool_echo_uzBoQy8GaQkkjRUrmTwb",
-          "id": "fc_tmp_w9msz4ad0ch",
+          "callId": "tool_echo_ae0mlq0yV2RnHbzr09kY",
+          "id": "fc_tmp_e19sqydxye7",
           "name": "echo",
           "status": "completed",
           "type": "function_call"
         },
-        "outputIndex": 0,
-        "sequenceNumber": 5,
+        "outputIndex": 1,
+        "sequenceNumber": 6,
         "type": "response.output_item.done"
       }
     },
@@ -214,30 +218,54 @@
       "input": {
         "value": "gated"
       },
-      "callId": "tool_echo_uzBoQy8GaQkkjRUrmTwb"
+      "callId": "tool_echo_ae0mlq0yV2RnHbzr09kY"
+    },
+    {
+      "type": "yield",
+      "event": {
+        "item": {
+          "encryptedContent": "AY89a184qk93GFVTWJ4ThzrczyV4H4Ea5AXW/lf12lVzyTWl5JQ1waYBBp1vJzn3t+3hXk6nKCKpjO/Ulj/VFcebMYwftLHCLPyQ2T7U1AHcIAjFLyBjpz7XMO2b4SyrqgQV83ymVn8Z1KMnqXkLCwi4lhmD5g/3Yuy4potTTlTckKmiHL/K2NF12Lm6yJiyaHU/gbdXnhnQ6rfHFng4R8w7E+fTdMibrr6rU5LzeVZN44FVtTQkUeem+YDbzv14RmCbm1QGyr9dRewQeBaLphHb1EZa4Xqz61ML3CcEV9XoTnjVyhX1rgzkA3Z97bdwhGCFZPqDYgwS7UBg44gogoGEjJpbySA5oR+8MAuYj1AWhHHuX6x36CNcUXikcVcawDmCNNQQ5LMcHpHQ",
+          "id": "tool_echo_ae0mlq0yV2RnHbzr09kY",
+          "status": "completed",
+          "summary": [],
+          "type": "reasoning",
+          "format": "google-gemini-v1"
+        },
+        "outputIndex": 0,
+        "sequenceNumber": 7,
+        "type": "response.output_item.done"
+      }
     },
     {
       "type": "yield",
       "event": {
         "response": {
           "background": false,
-          "completedAt": 1779534603,
-          "createdAt": 1779534602,
+          "completedAt": 1779535051,
+          "createdAt": 1779535050,
           "error": null,
           "frequencyPenalty": 0,
-          "id": "gen-1779534602-uvLru57ULfbtIswlKCTN",
+          "id": "gen-1779535050-Svy42MywKmUXbXexlYdp",
           "incompleteDetails": null,
           "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Make tool calls when asked; otherwise reply with the exact requested text.",
           "maxOutputTokens": null,
           "maxToolCalls": null,
           "metadata": {},
-          "model": "google/gemini-2.5-flash",
+          "model": "google/gemini-3.5-flash-20260519",
           "object": "response",
           "output": [
             {
+              "encryptedContent": "AY89a184qk93GFVTWJ4ThzrczyV4H4Ea5AXW/lf12lVzyTWl5JQ1waYBBp1vJzn3t+3hXk6nKCKpjO/Ulj/VFcebMYwftLHCLPyQ2T7U1AHcIAjFLyBjpz7XMO2b4SyrqgQV83ymVn8Z1KMnqXkLCwi4lhmD5g/3Yuy4potTTlTckKmiHL/K2NF12Lm6yJiyaHU/gbdXnhnQ6rfHFng4R8w7E+fTdMibrr6rU5LzeVZN44FVtTQkUeem+YDbzv14RmCbm1QGyr9dRewQeBaLphHb1EZa4Xqz61ML3CcEV9XoTnjVyhX1rgzkA3Z97bdwhGCFZPqDYgwS7UBg44gogoGEjJpbySA5oR+8MAuYj1AWhHHuX6x36CNcUXikcVcawDmCNNQQ5LMcHpHQ",
+              "id": "tool_echo_ae0mlq0yV2RnHbzr09kY",
+              "status": "completed",
+              "summary": [],
+              "type": "reasoning",
+              "format": "google-gemini-v1"
+            },
+            {
               "arguments": "{\"value\":\"gated\"}",
-              "callId": "tool_echo_uzBoQy8GaQkkjRUrmTwb",
-              "id": "fc_tmp_w9msz4ad0ch",
+              "callId": "tool_echo_ae0mlq0yV2RnHbzr09kY",
+              "id": "fc_tmp_e19sqydxye7",
               "name": "echo",
               "status": "completed",
               "type": "function_call"
@@ -283,25 +311,25 @@
           "topP": 1,
           "truncation": "disabled",
           "usage": {
-            "inputTokens": 88,
+            "inputTokens": 99,
             "inputTokensDetails": {
               "cachedTokens": 0
             },
-            "outputTokens": 4,
+            "outputTokens": 69,
             "outputTokensDetails": {
-              "reasoningTokens": 0
+              "reasoningTokens": 54
             },
-            "totalTokens": 92,
-            "cost": 0.000036036,
+            "totalTokens": 168,
+            "cost": 0.000761805,
             "costDetails": {
-              "upstreamInferenceCost": 0.0000364,
-              "upstreamInferenceInputCost": 0.0000264,
-              "upstreamInferenceOutputCost": 0.00001
+              "upstreamInferenceCost": 0.0007695,
+              "upstreamInferenceInputCost": 0.0001485,
+              "upstreamInferenceOutputCost": 0.000621
             },
             "isByok": false
           }
         },
-        "sequenceNumber": 6,
+        "sequenceNumber": 8,
         "type": "response.completed"
       }
     },
@@ -310,7 +338,7 @@
       "event": {
         "type": "turn.end",
         "turnNumber": 0,
-        "timestamp": 1779534603062
+        "timestamp": 1779535051145
       }
     },
     {
@@ -318,7 +346,7 @@
       "event": {
         "type": "turn.start",
         "turnNumber": 1,
-        "timestamp": 1779534604147
+        "timestamp": 1779535052192
       }
     },
     {
@@ -337,16 +365,16 @@
         "response": {
           "background": false,
           "completedAt": null,
-          "createdAt": 1779534603,
+          "createdAt": 1779535051,
           "error": null,
           "frequencyPenalty": 0,
-          "id": "gen-1779534603-0Bbm78SXOBHPAsBTpOpz",
+          "id": "gen-1779535051-0J41FzVxE9hvIOD1ZSlA",
           "incompleteDetails": null,
           "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Make tool calls when asked; otherwise reply with the exact requested text.",
           "maxOutputTokens": null,
           "maxToolCalls": null,
           "metadata": {},
-          "model": "google/gemini-2.5-flash",
+          "model": "google/gemini-3.5-flash-20260519",
           "object": "response",
           "output": [],
           "parallelToolCalls": true,
@@ -400,16 +428,16 @@
         "response": {
           "background": false,
           "completedAt": null,
-          "createdAt": 1779534603,
+          "createdAt": 1779535051,
           "error": null,
           "frequencyPenalty": 0,
-          "id": "gen-1779534603-0Bbm78SXOBHPAsBTpOpz",
+          "id": "gen-1779535051-0J41FzVxE9hvIOD1ZSlA",
           "incompleteDetails": null,
           "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Make tool calls when asked; otherwise reply with the exact requested text.",
           "maxOutputTokens": null,
           "maxToolCalls": null,
           "metadata": {},
-          "model": "google/gemini-2.5-flash",
+          "model": "google/gemini-3.5-flash-20260519",
           "object": "response",
           "output": [],
           "parallelToolCalls": true,
@@ -462,7 +490,7 @@
       "event": {
         "item": {
           "content": [],
-          "id": "msg_tmp_0pfr2gnfgxx",
+          "id": "msg_tmp_2s8yu60jw56",
           "role": "assistant",
           "status": "in_progress",
           "type": "message"
@@ -476,7 +504,7 @@
       "type": "yield",
       "event": {
         "contentIndex": 0,
-        "itemId": "msg_tmp_0pfr2gnfgxx",
+        "itemId": "msg_tmp_2s8yu60jw56",
         "outputIndex": 0,
         "part": {
           "annotations": [],
@@ -493,7 +521,7 @@
       "event": {
         "contentIndex": 0,
         "delta": "ok",
-        "itemId": "msg_tmp_0pfr2gnfgxx",
+        "itemId": "msg_tmp_2s8yu60jw56",
         "logprobs": [],
         "outputIndex": 0,
         "sequenceNumber": 4,
@@ -503,11 +531,25 @@
     {
       "type": "yield",
       "event": {
+        "item": {
+          "id": "rs_tmp_mvc8fe4aze7",
+          "status": "in_progress",
+          "summary": [],
+          "type": "reasoning"
+        },
+        "outputIndex": 1,
+        "sequenceNumber": 5,
+        "type": "response.output_item.added"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
         "contentIndex": 0,
-        "itemId": "msg_tmp_0pfr2gnfgxx",
+        "itemId": "msg_tmp_2s8yu60jw56",
         "logprobs": [],
         "outputIndex": 0,
-        "sequenceNumber": 5,
+        "sequenceNumber": 6,
         "text": "ok",
         "type": "response.output_text.done"
       }
@@ -516,7 +558,7 @@
       "type": "yield",
       "event": {
         "contentIndex": 0,
-        "itemId": "msg_tmp_0pfr2gnfgxx",
+        "itemId": "msg_tmp_2s8yu60jw56",
         "outputIndex": 0,
         "part": {
           "annotations": [],
@@ -524,7 +566,7 @@
           "text": "ok",
           "type": "output_text"
         },
-        "sequenceNumber": 6,
+        "sequenceNumber": 7,
         "type": "response.content_part.done"
       }
     },
@@ -540,13 +582,29 @@
               "type": "output_text"
             }
           ],
-          "id": "msg_tmp_0pfr2gnfgxx",
+          "id": "msg_tmp_2s8yu60jw56",
           "role": "assistant",
           "status": "completed",
           "type": "message"
         },
         "outputIndex": 0,
-        "sequenceNumber": 7,
+        "sequenceNumber": 8,
+        "type": "response.output_item.done"
+      }
+    },
+    {
+      "type": "yield",
+      "event": {
+        "item": {
+          "encryptedContent": "AY89a19yV8Q+DoAJGDBq7Vt2VqioStpWQGf3TUQsG2iI8N4Lm1FgAComAgYXI4VqQPzwkW1M8eQkauYLVIAlCJN7bYsJchhdg4DrRnk1Emt1EU8Ca3b85YZSLXWh2wdE9VoterY4Kff+Uun4hWRgX8knWQq2Z4wNWOJx6tSHNa+qlFDWGKttrhXbnvOY0iBnuQ==",
+          "id": "rs_tmp_mvc8fe4aze7",
+          "status": "completed",
+          "summary": [],
+          "type": "reasoning",
+          "format": "google-gemini-v1"
+        },
+        "outputIndex": 1,
+        "sequenceNumber": 9,
         "type": "response.output_item.done"
       }
     },
@@ -555,17 +613,17 @@
       "event": {
         "response": {
           "background": false,
-          "completedAt": 1779534604,
-          "createdAt": 1779534603,
+          "completedAt": 1779535052,
+          "createdAt": 1779535051,
           "error": null,
           "frequencyPenalty": 0,
-          "id": "gen-1779534603-0Bbm78SXOBHPAsBTpOpz",
+          "id": "gen-1779535051-0J41FzVxE9hvIOD1ZSlA",
           "incompleteDetails": null,
           "instructions": "You are a fixture-recording test agent. Follow the user's directions literally. Make tool calls when asked; otherwise reply with the exact requested text.",
           "maxOutputTokens": null,
           "maxToolCalls": null,
           "metadata": {},
-          "model": "google/gemini-2.5-flash",
+          "model": "google/gemini-3.5-flash-20260519",
           "object": "response",
           "output": [
             {
@@ -577,10 +635,18 @@
                   "type": "output_text"
                 }
               ],
-              "id": "msg_tmp_0pfr2gnfgxx",
+              "id": "msg_tmp_2s8yu60jw56",
               "role": "assistant",
               "status": "completed",
               "type": "message"
+            },
+            {
+              "encryptedContent": "AY89a19yV8Q+DoAJGDBq7Vt2VqioStpWQGf3TUQsG2iI8N4Lm1FgAComAgYXI4VqQPzwkW1M8eQkauYLVIAlCJN7bYsJchhdg4DrRnk1Emt1EU8Ca3b85YZSLXWh2wdE9VoterY4Kff+Uun4hWRgX8knWQq2Z4wNWOJx6tSHNa+qlFDWGKttrhXbnvOY0iBnuQ==",
+              "id": "rs_tmp_mvc8fe4aze7",
+              "status": "completed",
+              "summary": [],
+              "type": "reasoning",
+              "format": "google-gemini-v1"
             }
           ],
           "parallelToolCalls": true,
@@ -623,25 +689,25 @@
           "topP": 1,
           "truncation": "disabled",
           "usage": {
-            "inputTokens": 99,
+            "inputTokens": 172,
             "inputTokensDetails": {
               "cachedTokens": 0
             },
-            "outputTokens": 1,
+            "outputTokens": 21,
             "outputTokensDetails": {
-              "reasoningTokens": 0
+              "reasoningTokens": 20
             },
-            "totalTokens": 100,
-            "cost": 0.000031878,
+            "totalTokens": 193,
+            "cost": 0.00044253,
             "costDetails": {
-              "upstreamInferenceCost": 0.0000322,
-              "upstreamInferenceInputCost": 0.0000297,
-              "upstreamInferenceOutputCost": 0.0000025
+              "upstreamInferenceCost": 0.000447,
+              "upstreamInferenceInputCost": 0.000258,
+              "upstreamInferenceOutputCost": 0.000189
             },
             "isByok": false
           }
         },
-        "sequenceNumber": 8,
+        "sequenceNumber": 10,
         "type": "response.completed"
       }
     },
@@ -653,28 +719,28 @@
       "event": {
         "type": "turn.end",
         "turnNumber": 1,
-        "timestamp": 1779534604168
+        "timestamp": 1779535052198
       }
     }
   ],
   "response": {
-    "id": "gen-1779534603-0Bbm78SXOBHPAsBTpOpz",
-    "model": "google/gemini-2.5-flash",
+    "id": "gen-1779535051-0J41FzVxE9hvIOD1ZSlA",
+    "model": "google/gemini-3.5-flash-20260519",
     "usage": {
-      "inputTokens": 99,
+      "inputTokens": 172,
       "inputTokensDetails": {
         "cachedTokens": 0
       },
-      "outputTokens": 1,
+      "outputTokens": 21,
       "outputTokensDetails": {
-        "reasoningTokens": 0
+        "reasoningTokens": 20
       },
-      "totalTokens": 100,
-      "cost": 0.000031878,
+      "totalTokens": 193,
+      "cost": 0.00044253,
       "costDetails": {
-        "upstreamInferenceCost": 0.0000322,
-        "upstreamInferenceInputCost": 0.0000297,
-        "upstreamInferenceOutputCost": 0.0000025
+        "upstreamInferenceCost": 0.000447,
+        "upstreamInferenceInputCost": 0.000258,
+        "upstreamInferenceOutputCost": 0.000189
       },
       "isByok": false
     },
@@ -688,10 +754,18 @@
             "type": "output_text"
           }
         ],
-        "id": "msg_tmp_0pfr2gnfgxx",
+        "id": "msg_tmp_2s8yu60jw56",
         "role": "assistant",
         "status": "completed",
         "type": "message"
+      },
+      {
+        "encryptedContent": "AY89a19yV8Q+DoAJGDBq7Vt2VqioStpWQGf3TUQsG2iI8N4Lm1FgAComAgYXI4VqQPzwkW1M8eQkauYLVIAlCJN7bYsJchhdg4DrRnk1Emt1EU8Ca3b85YZSLXWh2wdE9VoterY4Kff+Uun4hWRgX8knWQq2Z4wNWOJx6tSHNa+qlFDWGKttrhXbnvOY0iBnuQ==",
+        "id": "rs_tmp_mvc8fe4aze7",
+        "status": "completed",
+        "summary": [],
+        "type": "reasoning",
+        "format": "google-gemini-v1"
       }
     ]
   }

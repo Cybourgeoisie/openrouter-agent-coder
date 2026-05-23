@@ -122,7 +122,7 @@ describe('integration: recorded fixtures (live-recorded via scripts/record-fixtu
     expect(complete.costUsd).toBeGreaterThan(0);
   });
 
-  it('single-tool-call-gemini (google/gemini-2.5-flash): replays cleanly with a tool call', async () => {
+  it('single-tool-call-gemini (google/gemini-3.5-flash): replays cleanly with a tool call', async () => {
     state.fixture = loadFixture('single-tool-call-gemini');
     const run = new OpenRouterAgentRun({
       apiKey: 'sk-int-test',
