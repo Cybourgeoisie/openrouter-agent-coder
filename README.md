@@ -359,7 +359,7 @@ Throws on non-OK responses. Optional `baseUrl` override.
 
 ### `allTools`
 
-The bundled tool preset — `allTools({ cwd, signal })` returns the six client tools below, context-bound. It is the default value for `OpenRouterAgentRun`'s `tools` option; you only need to reference it directly when composing a custom tool array.
+The bundled tool preset — `allTools({ cwd, signal })` returns the seven client tools below, context-bound. It is the default value for `OpenRouterAgentRun`'s `tools` option; you only need to reference it directly when composing a custom tool array.
 
 ### Custom tools
 
@@ -412,14 +412,15 @@ Today this is purely a value bag — real MCP transports (stdio / HTTP+SSE / `.m
 
 Client tools (execute in the host process):
 
-| Tool             | Purpose                                                                                                                                                                                                                                                                   |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `read_file`      | Read file contents.                                                                                                                                                                                                                                                       |
-| `write_file`     | Write/create files (auto-creates parent dirs).                                                                                                                                                                                                                            |
-| `edit_file`      | Find-and-replace a unique string in a file.                                                                                                                                                                                                                               |
-| `list_directory` | List files and directories.                                                                                                                                                                                                                                               |
-| `grep_files`     | Search file contents by regex across a tree. Optional `before_context`/`after_context`/`context` (capped at 20/side), `type` filetype filter (e.g. `'ts'`, `'py'` — unions with `file_glob`), and `output_mode` (`'content'` default, `'files_with_matches'`, `'count'`). |
-| `run_command`    | Execute shell commands. Optional `description` (advisory) and `timeout_ms` (default 30s, clamped to 10 min) fields; SIGTERM + 250ms grace on timeout / abort.                                                                                                             |
+| Tool             | Purpose                                                                                                                                                                                                                                                                        |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `read_file`      | Read file contents.                                                                                                                                                                                                                                                            |
+| `write_file`     | Write/create files (auto-creates parent dirs).                                                                                                                                                                                                                                 |
+| `edit_file`      | Find-and-replace a unique string in a file.                                                                                                                                                                                                                                    |
+| `list_directory` | List files and directories.                                                                                                                                                                                                                                                    |
+| `grep_files`     | Search file contents by regex across a tree. Optional `before_context`/`after_context`/`context` (capped at 20/side), `type` filetype filter (e.g. `'ts'`, `'py'` — unions with `file_glob`), and `output_mode` (`'content'` default, `'files_with_matches'`, `'count'`).      |
+| `run_command`    | Execute shell commands. Optional `description` (advisory) and `timeout_ms` (default 30s, clamped to 10 min) fields; SIGTERM + 250ms grace on timeout / abort.                                                                                                                  |
+| `glob`           | Find files by glob pattern across a directory tree. Supports `**/foo` (recursive, zero-or-more segments), `*` per-segment wildcard, `?` single-char, and `[a-z]` character classes. Optional `case_sensitive` (default `true`). Returns sorted relative paths, capped at 1000. |
 
 Server-side tools (execute on OpenRouter's backend, injected via SDK hooks):
 

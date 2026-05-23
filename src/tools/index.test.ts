@@ -7,11 +7,12 @@ import {
   listDirectoryTool,
   runCommandTool,
   grepFilesTool,
+  globTool,
 } from './index.js';
 
 describe('tools barrel', () => {
-  it('exports all six tools', () => {
-    expect(allTools()).toHaveLength(6);
+  it('exports all seven tools', () => {
+    expect(allTools()).toHaveLength(7);
   });
 
   it('includes every tool by name', () => {
@@ -23,6 +24,7 @@ describe('tools barrel', () => {
       'list_directory',
       'run_command',
       'grep_files',
+      'glob',
     ]);
   });
 
@@ -33,6 +35,7 @@ describe('tools barrel', () => {
     expect(listDirectoryTool().function.name).toBe('list_directory');
     expect(runCommandTool().function.name).toBe('run_command');
     expect(grepFilesTool().function.name).toBe('grep_files');
+    expect(globTool().function.name).toBe('glob');
   });
 
   it('all tools have execute functions', () => {
@@ -61,7 +64,9 @@ describe('tools barrel', () => {
       const candidate = exec(
         t.function.name === 'run_command'
           ? { command: 'true' }
-          : t.function.name === 'list_directory' || t.function.name === 'grep_files'
+          : t.function.name === 'list_directory' ||
+              t.function.name === 'grep_files' ||
+              t.function.name === 'glob'
             ? { path: '.', pattern: 'x', file_glob: '*', case_sensitive: true }
             : { path: 'nonexistent', old_string: 'a', new_string: 'b', content: '' },
       );

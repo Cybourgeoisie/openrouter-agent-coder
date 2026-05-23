@@ -7,12 +7,12 @@
 
 | Status             | Count  |
 | ------------------ | ------ |
-| Full parity        | 19     |
-| Partial parity     | 6      |
+| Full parity        | 20     |
+| Partial parity     | 5      |
 | Missing            | 21     |
 | **Total features** | **46** |
 
-Net change vs the original 2026-05-21 snapshot: **+11 Full** (`canUseTool`, new `Interrupt/abort` row, `Allowed/disallowed tools` after Phase 3.2, `Plan mode` after Phase 3.3, `CLAUDE.md / project context` after Phase 3.4, `Session lifecycle hooks` and `Notification hook` after Phase 3.6, `PreToolUse`/`PostToolUse` block-and-modify after Phase 3.7, `Streaming output` (rich message stream) after Phase 3.8, `Bash / run command` after Phase 3.9, `Grep (content search)` after Phase 3.10), **+1 Partial** (constructor-injected tools). Most "Missing" rows softened to "Partial" because their building blocks landed in Phase 1; the remaining gap is the ergonomic / discovery layer on top.
+Net change vs the original 2026-05-21 snapshot: **+12 Full** (`canUseTool`, new `Interrupt/abort` row, `Allowed/disallowed tools` after Phase 3.2, `Plan mode` after Phase 3.3, `CLAUDE.md / project context` after Phase 3.4, `Session lifecycle hooks` and `Notification hook` after Phase 3.6, `PreToolUse`/`PostToolUse` block-and-modify after Phase 3.7, `Streaming output` (rich message stream) after Phase 3.8, `Bash / run command` after Phase 3.9, `Grep (content search)` after Phase 3.10, `Glob (file search)` after Phase 3.11), **+1 Partial** (constructor-injected tools). Most "Missing" rows softened to "Partial" because their building blocks landed in Phase 1; the remaining gap is the ergonomic / discovery layer on top.
 
 ---
 
@@ -40,7 +40,7 @@ Net change vs the original 2026-05-21 snapshot: **+11 Full** (`canUseTool`, new 
 | Write file                  | `Write` tool — create/overwrite                       | `write_file` — create/overwrite with auto-mkdir                                                                                                                                                                                                                         | **Full**    |
 | Edit file                   | `Edit` tool — precise string replacement              | `edit_file` — exact unique string replacement                                                                                                                                                                                                                           | **Full**    |
 | Bash / run command          | `Bash` — full shell with description, timeout         | `run_command` — `sh -c`, 30s default timeout (configurable via `timeout_ms`, clamped to 10 min), 1MB buffer, optional advisory `description` field (Phase 3.9)                                                                                                          | **Full**    |
-| Glob (file search)          | `Glob` — find files by pattern                        | `list_directory` — flat listing only, no glob patterns                                                                                                                                                                                                                  | **Partial** |
+| Glob (file search)          | `Glob` — find files by pattern                        | `glob` — recursive find with `**`/`*`/`?`/`[a-z]`, optional `case_sensitive`, sorted output capped at 1000, BFS walk honoring `ctx.signal`, skips `node_modules`/`dist`/`coverage`/hidden (Phase 3.11)                                                                  | **Full**    |
 | Grep (content search)       | `Grep` — regex search with context lines, file types  | `grep_files` — regex with glob filter, recursion, match limits, context lines (`before_context`/`after_context`/`context`, capped 20/side), `type` filetype filter (unions with `file_glob`), `output_mode` (`'content'`/`'files_with_matches'`/`'count'`) — Phase 3.10 | **Full**    |
 | WebSearch                   | Built-in WebSearch tool                               | Server-side `openrouter:web_search`                                                                                                                                                                                                                                     | **Full**    |
 | WebFetch                    | Built-in WebFetch tool                                | Server-side `openrouter:web_fetch`                                                                                                                                                                                                                                      | **Partial** |
@@ -126,7 +126,7 @@ Items shipped in Phase 1 are crossed through with a back-pointer; the **layer-on
 
 3. ~~**Hooks (PreToolUse / PostToolUse).**~~ _Shipped in Phase 1.7 via `onHook` (audit-only)._ Block-and-modify capability moves to P1.
 
-4. **Glob tool.** File pattern matching (e.g., `**/*.ts`) separate from `list_directory`.
+4. ~~**Glob tool.** File pattern matching (e.g., `**/*.ts`) separate from `list_directory`.~~ _Shipped in Phase 3.11 — [✅ #50] `src/tools/glob.ts` exposes a `glob` client tool with `**`/`*`/`?`/`[a-z]` patterns, optional `case_sensitive`, BFS walk, 1000-match cap, sorted output, and skips `node_modules`/`dist`/`coverage`/hidden._
 
 5. **AskUserQuestion tool.** Structured multiple-choice clarifying questions during execution.
 
