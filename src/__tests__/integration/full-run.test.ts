@@ -478,6 +478,72 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     expect(parsed.error).toMatch(/disallowedTools/);
   });
 
+  it('plan mode: denies write_file with plan-specific reason, allows read_file, completes successfully', async () => {
+    state.fixture = loadFixture('plan-mode-write-then-read');
+    const writeExecSpy = vi.fn(async () => 'written ok');
+    const readExecSpy = vi.fn(async () => 'file contents');
+    const writeStub = {
+      type: 'function' as const,
+      function: {
+        name: 'write_file',
+        description: 'stub write_file',
+        parameters: {
+          type: 'object',
+          properties: { path: { type: 'string' }, content: { type: 'string' } },
+        },
+        execute: writeExecSpy,
+      },
+    };
+    const readStub = {
+      type: 'function' as const,
+      function: {
+        name: 'read_file',
+        description: 'stub read_file',
+        parameters: { type: 'object', properties: { path: { type: 'string' } } },
+        execute: readExecSpy,
+      },
+    };
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'in plan mode, please write a file',
+      tools: [writeStub, readStub] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+      permissionMode: 'plan',
+    });
+    const events = await collect(run);
+
+    // write_file must never reach its handler under plan mode.
+    expect(writeExecSpy).not.toHaveBeenCalled();
+    // read_file is read-only and passes the plan gate normally.
+    expect(readExecSpy).toHaveBeenCalledWith({ path: 'existing.txt' }, expect.anything());
+
+    const toolResults = events.filter((e) => e.type === 'tool_result') as Array<
+      Extract<AgentCoreEvent, { type: 'tool_result' }>
+    >;
+    expect(toolResults.length).toBe(2);
+    const writeResult = toolResults.find((r) => r.callId === 'call_write');
+    const readResult = toolResults.find((r) => r.callId === 'call_read');
+    expect(writeResult).toBeDefined();
+    expect(readResult).toBeDefined();
+
+    expect(writeResult!.isError).toBe(true);
+    const parsedWrite = JSON.parse(String(writeResult!.output));
+    expect(parsedWrite).toEqual({
+      error: 'plan mode: read-only — propose edits in your reply',
+      denied: true,
+    });
+
+    expect(readResult!.isError).toBe(false);
+    expect(readResult!.output).toBe('file contents');
+
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.type).toBe('stream_complete');
+    expect(complete.status).toBe('success');
+  });
+
   it('reports stream_complete{status:max_turns} when the turn count reaches maxTurns', async () => {
     state.fixture = loadFixture('max-turns');
     const run = new OpenRouterAgentRun({

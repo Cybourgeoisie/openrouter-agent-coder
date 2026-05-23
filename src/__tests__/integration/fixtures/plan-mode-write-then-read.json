@@ -1,0 +1,66 @@
+{
+  "name": "plan-mode-write-then-read",
+  "steps": [
+    { "type": "yield", "event": { "type": "turn.start", "turnNumber": 0, "timestamp": 1 } },
+    {
+      "type": "yield",
+      "event": {
+        "type": "response.output_item.done",
+        "outputIndex": 0,
+        "sequenceNumber": 1,
+        "item": {
+          "type": "function_call",
+          "callId": "call_write",
+          "name": "write_file",
+          "arguments": "{\"path\":\"out.txt\",\"content\":\"hi\"}"
+        }
+      }
+    },
+    {
+      "type": "tool_execute",
+      "toolName": "write_file",
+      "input": { "path": "out.txt", "content": "hi" },
+      "callId": "call_write"
+    },
+    { "type": "yield", "event": { "type": "turn.end", "turnNumber": 0, "timestamp": 2 } },
+    { "type": "invoke_turn_end" },
+    { "type": "yield", "event": { "type": "turn.start", "turnNumber": 1, "timestamp": 3 } },
+    {
+      "type": "yield",
+      "event": {
+        "type": "response.output_item.done",
+        "outputIndex": 0,
+        "sequenceNumber": 1,
+        "item": {
+          "type": "function_call",
+          "callId": "call_read",
+          "name": "read_file",
+          "arguments": "{\"path\":\"existing.txt\"}"
+        }
+      }
+    },
+    {
+      "type": "tool_execute",
+      "toolName": "read_file",
+      "input": { "path": "existing.txt" },
+      "callId": "call_read"
+    },
+    { "type": "yield", "event": { "type": "turn.end", "turnNumber": 1, "timestamp": 4 } },
+    { "type": "invoke_turn_end" },
+    { "type": "yield", "event": { "type": "turn.start", "turnNumber": 2, "timestamp": 5 } },
+    {
+      "type": "yield",
+      "event": {
+        "type": "response.output_text.delta",
+        "delta": "Plan: I'd like to write 'hi' to out.txt."
+      }
+    },
+    { "type": "yield", "event": { "type": "turn.end", "turnNumber": 2, "timestamp": 6 } }
+  ],
+  "response": {
+    "id": "resp-plan-mode",
+    "model": "mock-model",
+    "usage": { "cost": 0.003, "inputTokens": 30, "outputTokens": 12, "totalTokens": 42 },
+    "output": []
+  }
+}
