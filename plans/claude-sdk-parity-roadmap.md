@@ -31,20 +31,20 @@ Bucket D rationale: the library is consumed by a host application. The host alre
 
 All builds-on items reference primitives already shipped. Most are independent and can be picked in any order subject to the sequencing rules at the bottom of this doc.
 
-| Card    | Title                                                                                                                                       | Builds on                      | Est.   | Depends on   |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ------ | ------------ |
-| ~~3.1~~ | ~~Named permission modes (default/acceptEdits/bypassPermissions)~~ ([#65](https://github.com/Cybourgeoisie/openrouter-agent-coder/pull/65)) | ~~`canUseTool` (Phase 1.4)~~   | ~~4h~~ | ~~—~~        |
-| ~~3.2~~ | ~~`allowedTools` / `disallowedTools` config syntax (`Bash(npm *)`)~~ (PR pending)                                                           | ~~`canUseTool` + 3.1~~         | ~~3h~~ | ~~3.1~~      |
-| ~~3.3~~ | ~~Plan mode (read-only tool filter)~~ ([#68](https://github.com/Cybourgeoisie/openrouter-agent-coder/pull/68))                              | ~~`canUseTool` + 3.1~~         | ~~1h~~ | ~~3.1~~      |
-| ~~3.4~~ | ~~CLAUDE.md / `.claude/` auto-discovery → `instructions`~~ (PR pending)                                                                     | ~~`instructions` (Phase 1.5)~~ | ~~4h~~ | ~~—~~        |
-| ~~3.5~~ | ~~`tool()` helper + Zod-schema convenience + SDK-MCP-shaped helper~~ (PR pending)                                                           | ~~`tools` arg (Phase 1.2)~~    | ~~5h~~ | ~~—~~        |
-| ~~3.6~~ | ~~Remaining lifecycle hooks: `Stop`, `Setup`, `Notification`~~ (PR pending)                                                                 | ~~`onHook` (Phase 1.7)~~       | ~~5h~~ | ~~—~~        |
-| ~~3.7~~ | ~~Block-and-modify hook capability (`PreToolUse` can short-circuit)~~ (PR pending)                                                          | ~~`onHook` + `canUseTool`~~    | ~~6h~~ | ~~3.1, 3.2~~ |
-| ~~3.8~~ | ~~Rich message stream (typed `AssistantMessage` etc.)~~ (PR pending)                                                                        | ~~`AgentCoreEvent`~~           | ~~6h~~ | ~~—~~        |
-| ~~3.9~~ | ~~Enhanced Bash: description field, configurable timeout~~ (PR pending)                                                                     | ~~`run_command`~~              | ~~2h~~ | ~~—~~        |
-| 3.10    | Enhanced Grep: `-A`/`-B`/`-C`, filetype filters, output modes                                                                               | `grep_files`                   | 4h     | —            |
-| 3.11    | Glob tool (new, separate from `list_directory`)                                                                                             | _new_                          | 3h     | —            |
-| 3.12    | `persistSession: false` (in-memory only sessions)                                                                                           | `FileStateAccessor`            | 3h     | —            |
+| Card     | Title                                                                                                                                                   | Builds on                      | Est.   | Depends on   |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ------ | ------------ |
+| ~~3.1~~  | ~~Named permission modes (default/acceptEdits/bypassPermissions)~~ ([#65](https://github.com/Cybourgeoisie/openrouter-agent-coder/pull/65))             | ~~`canUseTool` (Phase 1.4)~~   | ~~4h~~ | ~~—~~        |
+| ~~3.2~~  | ~~`allowedTools` / `disallowedTools` config syntax (`Bash(npm *)`)~~ (PR pending)                                                                       | ~~`canUseTool` + 3.1~~         | ~~3h~~ | ~~3.1~~      |
+| ~~3.3~~  | ~~Plan mode (read-only tool filter)~~ ([#68](https://github.com/Cybourgeoisie/openrouter-agent-coder/pull/68))                                          | ~~`canUseTool` + 3.1~~         | ~~1h~~ | ~~3.1~~      |
+| ~~3.4~~  | ~~CLAUDE.md / `.claude/` auto-discovery → `instructions`~~ (PR pending)                                                                                 | ~~`instructions` (Phase 1.5)~~ | ~~4h~~ | ~~—~~        |
+| ~~3.5~~  | ~~`tool()` helper + Zod-schema convenience + SDK-MCP-shaped helper~~ (PR pending)                                                                       | ~~`tools` arg (Phase 1.2)~~    | ~~5h~~ | ~~—~~        |
+| ~~3.6~~  | ~~Remaining lifecycle hooks: `Stop`, `Setup`, `Notification`~~ (PR pending)                                                                             | ~~`onHook` (Phase 1.7)~~       | ~~5h~~ | ~~—~~        |
+| ~~3.7~~  | ~~Block-and-modify hook capability (`PreToolUse` can short-circuit)~~ (PR pending)                                                                      | ~~`onHook` + `canUseTool`~~    | ~~6h~~ | ~~3.1, 3.2~~ |
+| ~~3.8~~  | ~~Rich message stream (typed `AssistantMessage` etc.)~~ (PR pending)                                                                                    | ~~`AgentCoreEvent`~~           | ~~6h~~ | ~~—~~        |
+| ~~3.9~~  | ~~Enhanced Bash: description field, configurable timeout~~ (PR pending)                                                                                 | ~~`run_command`~~              | ~~2h~~ | ~~—~~        |
+| ~~3.10~~ | ~~Enhanced Grep: `-A`/`-B`/`-C`, filetype filters, output modes~~ (PR pending [#49](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/49)) | ~~`grep_files`~~               | ~~4h~~ | ~~—~~        |
+| 3.11     | Glob tool (new, separate from `list_directory`)                                                                                                         | _new_                          | 3h     | —            |
+| 3.12     | `persistSession: false` (in-memory only sessions)                                                                                                       | `FileStateAccessor`            | 3h     | —            |
 
 **Phase 3 total:** ~50h.
 
