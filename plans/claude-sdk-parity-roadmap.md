@@ -160,6 +160,26 @@ Established patterns to reuse:
 - **API helper tests** — recorded fixtures under `src/__tests__/fixtures/openrouter-api/`. Wrong-type and 401/403 paths are first-class test scenarios.
 - **Tool tests** — colocated `src/tools/<name>.test.ts`. Each new tool ships with its own test file.
 
+### Reference implementations (use freely for inspiration)
+
+When stuck on a design call or implementation detail, implementing agents are explicitly authorized to consult the following open-source reference implementations. Pattern-match what they do; don't blindly copy.
+
+- **Claude Code source** — Anthropic open-sourced parts of Claude Code. The Agent SDK shape (`tool()`, hooks, permission modes, message-stream types) is the authoritative parity target. Check both their public SDK examples and any internal reference shipped in their open release.
+- **opencode** ([sst/opencode](https://github.com/sst/opencode)) — community-built Claude-Code-alike with its own takes on subagents, MCP integration, and the tool ergonomics layer. Particularly useful for Cards 3.5 (`tool()` helper), 4.7 (subagent system), and 5.2 (MCP server support).
+- **codex** ([openai/codex](https://github.com/openai/codex)) — OpenAI's open-source CLI. Shares the same problem space (agent loop, tool ergonomics, session persistence) under a different SDK. Useful for cross-checking design calls that aren't Anthropic-specific.
+
+**When to consult them:**
+
+- A Claude SDK feature's behavior is ambiguous from docs alone → check Claude Code source first.
+- Stuck on `tool()` / MCP / subagent shape → cross-reference opencode's approach.
+- Cross-vendor design pattern (file checkpointing, session forking, message streams) → check both opencode and codex for convergent patterns.
+
+**What to avoid:**
+
+- Copy-pasting code wholesale — license-mix risk. Read for ideas; write fresh implementations.
+- Adopting a divergent design just because a reference uses it — the Claude SDK shape is the parity target; deviating needs a justified reason.
+- Skipping the spike doc for Phase 5 items just because you saw how opencode/codex did it. The spike is a contract record that the build estimate has a basis.
+
 ### README + docs maintenance
 
 Every user-facing card must include a documentation update in the same PR:
