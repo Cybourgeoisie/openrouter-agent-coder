@@ -82,21 +82,21 @@ Each is a self-contained implementation. Sequencing matters only within the suba
 
 Three architectural items need investigation before we can responsibly size them. Each spike is a small standalone card (1–2h of research + a short write-up), and answers a yes/no question that determines whether the full feature is doable, blocked, or expensive.
 
-| Spike | Question                                                                                              | If yes (build est.) | If blocked                                                  |
-| ----- | ----------------------------------------------------------------------------------------------------- | ------------------- | ----------------------------------------------------------- |
-| 5.S1  | Does `@openrouter/agent` expose the message history (vs only `previousResponseId`)?                   | 15–25h compaction   | File upstream issue, defer.                                 |
-| 5.S2  | Does `@openrouter/agent` `callModel` accept mid-call message injection for streaming-input semantics? | 10–20h streaming    | Document gap; consider host-driven multi-prompt workaround. |
-| 5.S3  | Does OR's API accept an `effort` / reasoning-depth parameter?                                         | ~5h passthrough     | Mark Missing permanently.                                   |
+| Spike | Question                                                                                              | If yes (build est.)                                                               | If blocked                                                  |
+| ----- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| 5.S1  | Does `@openrouter/agent` expose the message history (vs only `previousResponseId`)?                   | ~~15–25h~~ **12–18h** compaction ([spike](./spikes/5.S1-message-history.md): Yes) | File upstream issue, defer.                                 |
+| 5.S2  | Does `@openrouter/agent` `callModel` accept mid-call message injection for streaming-input semantics? | 10–20h streaming                                                                  | Document gap; consider host-driven multi-prompt workaround. |
+| 5.S3  | Does OR's API accept an `effort` / reasoning-depth parameter?                                         | ~5h passthrough                                                                   | Mark Missing permanently.                                   |
 
 **Full build-out items (gated on the spikes):**
 
-| Card | Title                                 | Est.   | Notes                                                                                                             |
-| ---- | ------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------- |
-| 5.1  | Context compaction (post-5.S1)        | 15–25h | Depends on history exposure + token counting. Includes PreCompact hook.                                           |
-| 5.2  | MCP server support (stdio + HTTP/SSE) | 30–50h | Full MCP-client implementation + `.mcp.json` config + tool-bridge. **Biggest single item in the entire roadmap.** |
-| 5.3  | Streaming input mode (post-5.S2)      | 10–20h | Mid-call message injection, image attachments, interrupts.                                                        |
-| 5.4  | Effort / reasoning level (post-5.S3)  | ~5h    | Passthrough if upstream supports.                                                                                 |
-| 5.5  | `ToolSearch` (post-5.2)               | 8h     | Dynamic tool loading from large MCP tool sets; needs 5.2 first.                                                   |
+| Card | Title                                 | Est.   | Notes                                                                                                                                                                                    |
+| ---- | ------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 5.1  | Context compaction (post-5.S1)        | 12–18h | History exposure confirmed via `ConversationState.messages` ([spike 5.S1](./spikes/5.S1-message-history.md)). Token counting via char-length heuristic for v1; includes PreCompact hook. |
+| 5.2  | MCP server support (stdio + HTTP/SSE) | 30–50h | Full MCP-client implementation + `.mcp.json` config + tool-bridge. **Biggest single item in the entire roadmap.**                                                                        |
+| 5.3  | Streaming input mode (post-5.S2)      | 10–20h | Mid-call message injection, image attachments, interrupts.                                                                                                                               |
+| 5.4  | Effort / reasoning level (post-5.S3)  | ~5h    | Passthrough if upstream supports.                                                                                                                                                        |
+| 5.5  | `ToolSearch` (post-5.2)               | 8h     | Dynamic tool loading from large MCP tool sets; needs 5.2 first.                                                                                                                          |
 
 **Phase 5 total:** ~50–120h depending on spike outcomes.
 
