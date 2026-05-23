@@ -35,7 +35,7 @@ All builds-on items reference primitives already shipped. Most are independent a
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ------ | ---------- |
 | ~~3.1~~ | ~~Named permission modes (default/acceptEdits/bypassPermissions)~~ ([#65](https://github.com/Cybourgeoisie/openrouter-agent-coder/pull/65)) | ~~`canUseTool` (Phase 1.4)~~ | ~~4h~~ | ~~—~~      |
 | ~~3.2~~ | ~~`allowedTools` / `disallowedTools` config syntax (`Bash(npm *)`)~~ (PR pending)                                                           | ~~`canUseTool` + 3.1~~       | ~~3h~~ | ~~3.1~~    |
-| ~~3.3~~ | ~~Plan mode (read-only tool filter)~~ ([#67](https://github.com/Cybourgeoisie/openrouter-agent-coder/pull/67))                              | ~~`canUseTool` + 3.1~~       | ~~1h~~ | ~~3.1~~    |
+| ~~3.3~~ | ~~Plan mode (read-only tool filter)~~ ([#68](https://github.com/Cybourgeoisie/openrouter-agent-coder/pull/68))                              | ~~`canUseTool` + 3.1~~       | ~~1h~~ | ~~3.1~~    |
 | 3.4     | CLAUDE.md / `.claude/` auto-discovery → `instructions`                                                                                      | `instructions` (Phase 1.5)   | 4h     | —          |
 | 3.5     | `tool()` helper + Zod-schema convenience + SDK-MCP-shaped helper                                                                            | `tools` arg (Phase 1.2)      | 5h     | —          |
 | 3.6     | Remaining lifecycle hooks: `Stop`, `Setup`, `Notification`                                                                                  | `onHook` (Phase 1.7)         | 5h     | —          |
