@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { allTools } from './tools/index.js';
 import { createServerToolsHooks } from './tools/server-tools.js';
 import { type ToolContext } from './tools/context.js';
+import type { OnAskUserQuestion } from './tools/ask-user-question.js';
 import { createFileStateAccessor } from './state/file-state.js';
 import { createMemoryStateAccessor } from './state/memory-state.js';
 import {
@@ -113,13 +114,28 @@ export interface OpenRouterAgentRunOptions {
   /** Max cumulative cost in USD. Defaults to 1.0. */
   maxBudgetUsd?: number;
   /**
-   * Tool set passed to the model. Defaults to the built-in 7-client-tool set
+   * Tool set passed to the model. Defaults to the built-in 8-client-tool set
    * bound to a {@link ToolContext} derived from the run's `cwd` and composite
    * AbortSignal; server tools (datetime/web_search/web_fetch) are injected via
    * hooks. Custom tools supplied here are NOT context-bound — callers are
    * responsible for their own cwd resolution and cancellation if needed.
    */
   tools?: readonly Tool[];
+  /**
+   * Host callback that powers the built-in `ask_user_question` tool. The
+   * callback receives a {@link UserQuestionRequest} (UUID `questionId`,
+   * question text, options with auto-assigned ids `a`/`b`/`c`…, optional
+   * `allowFreeText` flag) and must resolve with a {@link UserQuestionResponse}
+   * carrying the user's choice. When omitted, the tool surfaces an
+   * `{ error: 'no host handler registered for ask_user_question' }` tool
+   * result so the model can recover gracefully. Ignored when a custom `tools`
+   * array is supplied (callers wire their own `ask_user_question` if needed).
+   *
+   * The same request payload is also pushed via the `Notification` hook
+   * (level `'info'`, message `'ask_user_question'`, context = the request),
+   * so subscribers that only listen on `onHook` still observe the question.
+   */
+  onAskUserQuestion?: OnAskUserQuestion;
   /**
    * Permission gate invoked before each client tool's execute. Resolve to
    * `{ behavior: 'allow' }` to run the handler as-is, `{ behavior: 'allow',
@@ -248,6 +264,7 @@ interface ResolvedOptions {
   logsRoot: string;
   canUseTool?: CanUseTool;
   onHook?: OnHook;
+  onAskUserQuestion?: OnAskUserQuestion;
   signal?: AbortSignal;
   baseUrl?: string;
   logger?: AgentLogger;
@@ -312,6 +329,7 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     logsRoot: opts.logsRoot ?? join(cwd, 'logs'),
     canUseTool,
     onHook: opts.onHook,
+    onAskUserQuestion: opts.onAskUserQuestion,
     signal: opts.signal,
     baseUrl: opts.baseUrl,
     logger: opts.logger,
@@ -399,6 +417,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       onHook,
       settingSources,
       persistSession,
+      onAskUserQuestion,
     } = this.opts;
     // Discovery happens here (not in resolveOptions) so the constructor stays
     // synchronous and the public API shape is unchanged. When settingSources
@@ -536,7 +555,9 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       // PreToolUse fires before the canUseTool decision (audit always fires,
       // even on deny), and PostToolUse fires after the inner result/error is
       // resolved — including the synth-deny payload from a canUseTool denial.
-      const baseTools: readonly Tool[] = this.hasCustomTools ? userTools : allTools(ctx);
+      const baseTools: readonly Tool[] = this.hasCustomTools
+        ? userTools
+        : allTools(ctx, { onAskUserQuestion });
       const permissionedTools = this.opts.canUseTool
         ? baseTools.map((t) => wrapToolWithPermission(t, this.opts.canUseTool!))
         : baseTools;

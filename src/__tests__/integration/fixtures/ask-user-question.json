@@ -1,0 +1,36 @@
+{
+  "name": "ask-user-question",
+  "steps": [
+    { "type": "yield", "event": { "type": "turn.start", "turnNumber": 0, "timestamp": 1 } },
+    {
+      "type": "yield",
+      "event": {
+        "type": "response.output_item.done",
+        "outputIndex": 0,
+        "sequenceNumber": 1,
+        "item": {
+          "type": "function_call",
+          "callId": "call_q",
+          "name": "ask_user_question",
+          "arguments": "{\"question\":\"Which framework?\",\"options\":[{\"label\":\"React\"},{\"label\":\"Vue\"}]}"
+        }
+      }
+    },
+    {
+      "type": "tool_execute",
+      "toolName": "ask_user_question",
+      "input": {
+        "question": "Which framework?",
+        "options": [{ "label": "React" }, { "label": "Vue" }]
+      },
+      "callId": "call_q"
+    },
+    { "type": "yield", "event": { "type": "turn.end", "turnNumber": 0, "timestamp": 2 } }
+  ],
+  "response": {
+    "id": "resp-ask",
+    "model": "mock-model",
+    "usage": { "cost": 0.001, "inputTokens": 4, "outputTokens": 2, "totalTokens": 6 },
+    "output": []
+  }
+}

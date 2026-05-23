@@ -683,6 +683,67 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     expect(stop.reason).toBeUndefined();
   });
 
+  it('routes ask_user_question through onAskUserQuestion and fires the Notification hook', async () => {
+    state.fixture = loadFixture('ask-user-question');
+    const hookEvents: Array<{ event: HookEvent; payload: HookPayload }> = [];
+    const askSpy = vi.fn(async (req: { questionId: string; options: Array<{ id: string }> }) => ({
+      questionId: req.questionId,
+      selectedOptionId: req.options[1].id,
+    }));
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'need clarification',
+      // Default tool bundle so the built-in `ask_user_question` is wired.
+      onAskUserQuestion: askSpy as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['onAskUserQuestion'],
+      onHook: (event, payload) => {
+        hookEvents.push({ event, payload });
+      },
+    });
+    const events = await collect(run);
+
+    // The host callback received a request with id 'a'/'b' on the options.
+    expect(askSpy).toHaveBeenCalledTimes(1);
+    const requestArg = askSpy.mock.calls[0][0] as unknown as {
+      question: string;
+      options: Array<{ id: string; label: string }>;
+    };
+    expect(requestArg.question).toBe('Which framework?');
+    expect(requestArg.options).toEqual([
+      { id: 'a', label: 'React' },
+      { id: 'b', label: 'Vue' },
+    ]);
+
+    // The tool result echoed the chosen option's id + label back to the model.
+    const toolResult = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(toolResult.isError).toBe(false);
+    expect(toolResult.output).toMatchObject({ selectedOptionId: 'b', label: 'Vue' });
+
+    // The Notification hook fired with the request payload (level=info,
+    // message='ask_user_question'). One notification per call.
+    const notifications = hookEvents.filter((h) => h.event === 'Notification');
+    expect(notifications).toHaveLength(1);
+    const notify = notifications[0].payload as Extract<HookPayload, { event: 'Notification' }>;
+    expect(notify.level).toBe('info');
+    expect(notify.message).toBe('ask_user_question');
+    expect(notify.context).toMatchObject({
+      question: 'Which framework?',
+      options: [
+        { id: 'a', label: 'React' },
+        { id: 'b', label: 'Vue' },
+      ],
+    });
+
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.status).toBe('success');
+  });
+
   it('runs a Zod-schema custom tool built via tool() / createSdkMcpServer end-to-end', async () => {
     state.fixture = loadFixture('single-tool-call');
 

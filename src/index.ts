@@ -25,8 +25,16 @@ export type {
   PreToolUseAction,
   TokenUsage,
 } from './events.js';
-export { allTools, DEFAULT_TOOL_CONTEXT } from './tools/index.js';
-export type { ToolContext } from './tools/index.js';
+export { allTools, DEFAULT_TOOL_CONTEXT, askUserQuestionTool } from './tools/index.js';
+export type {
+  ToolContext,
+  AllToolsOptions,
+  AskUserQuestionToolOptions,
+  AskUserQuestionToolResult,
+  OnAskUserQuestion,
+  UserQuestionRequest,
+  UserQuestionResponse,
+} from './tools/index.js';
 export { tool, createSdkMcpServer } from './custom-tools.js';
 export type { CustomToolConfig, SdkMcpServer, CreateSdkMcpServerConfig } from './custom-tools.js';
 export { accountInfo, supportedModels } from './openrouter-api.js';
