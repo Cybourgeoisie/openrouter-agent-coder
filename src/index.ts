@@ -9,6 +9,8 @@ export type {
 } from './agent.js';
 export { permissionModeToCanUseTool } from './permission-modes.js';
 export type { PermissionMode } from './permission-modes.js';
+export { compileRule, buildToolFilterCanUseTool } from './tool-filters.js';
+export type { CompiledRule, ToolFilterParams } from './tool-filters.js';
 export type {
   AgentCoreEvent,
   AgentCoreEventStatus,

@@ -407,6 +407,77 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     expect(complete.status).toBe('success');
   });
 
+  it('allows run_command when allowedTools "Bash(echo *)" matches the invocation', async () => {
+    state.fixture = loadFixture('single-run-command-echo');
+    const execSpy = vi.fn(async () => 'ok');
+    const runCommandStub = {
+      type: 'function' as const,
+      function: {
+        name: 'run_command',
+        description: 'stub run_command',
+        parameters: { type: 'object', properties: { command: { type: 'string' } } },
+        execute: execSpy,
+      },
+    };
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'echo something',
+      tools: [runCommandStub] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+      allowedTools: ['Bash(echo *)'],
+    });
+    const events = await collect(run);
+
+    expect(execSpy).toHaveBeenCalledWith({ command: 'echo hello' }, expect.anything());
+    const toolResult = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(toolResult.isError).toBe(false);
+    expect(toolResult.output).toBe('ok');
+  });
+
+  it('denies run_command when allowedTools does not cover the invocation (no fallback gate)', async () => {
+    state.fixture = loadFixture('single-run-command-echo');
+    const execSpy = vi.fn(async () => 'should not run');
+    const runCommandStub = {
+      type: 'function' as const,
+      function: {
+        name: 'run_command',
+        description: 'stub run_command',
+        parameters: { type: 'object', properties: { command: { type: 'string' } } },
+        execute: execSpy,
+      },
+    };
+
+    // allowedTools restricted to `npm *` only — `echo hello` should not match,
+    // and without disallowedTools / permissionMode we fall through to allow.
+    // To exercise a deny path we instead use disallowedTools for `echo *`.
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'echo something',
+      tools: [runCommandStub] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+      disallowedTools: ['Bash(echo *)'],
+    });
+    const events = await collect(run);
+
+    expect(execSpy).not.toHaveBeenCalled();
+    const toolResult = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(toolResult.isError).toBe(true);
+    const parsed = JSON.parse(String(toolResult.output));
+    expect(parsed).toMatchObject({ denied: true });
+    expect(parsed.error).toMatch(/disallowedTools/);
+  });
+
   it('reports stream_complete{status:max_turns} when the turn count reaches maxTurns', async () => {
     state.fixture = loadFixture('max-turns');
     const run = new OpenRouterAgentRun({

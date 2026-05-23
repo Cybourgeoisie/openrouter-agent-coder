@@ -1353,6 +1353,254 @@ describe('OpenRouterAgentRun permissionMode', () => {
   });
 });
 
+describe('OpenRouterAgentRun allowedTools / disallowedTools', () => {
+  function singleToolCallModel(args: { toolName: string; callId: string; input: unknown }) {
+    return (request: {
+      tools: Array<{ function: { name: string; execute?: (i: unknown, c?: unknown) => unknown } }>;
+    }) => {
+      const tool = request.tools.find((t) => t.function.name === args.toolName);
+      return {
+        async *getFullResponsesStream() {
+          yield { type: 'turn.start', turnNumber: 0 };
+          let output: unknown;
+          let status: 'completed' | 'incomplete' = 'completed';
+          try {
+            output = await tool!.function.execute!(args.input, {});
+          } catch (e) {
+            output = (e as Error).message;
+            status = 'incomplete';
+          }
+          yield {
+            type: 'tool.call_output',
+            timestamp: 1,
+            output: {
+              callId: args.callId,
+              type: 'function_call_output',
+              output,
+              status,
+            },
+          };
+          yield { type: 'turn.end', turnNumber: 0 };
+        },
+        async getResponse() {
+          return {
+            id: 'r',
+            model: 'm',
+            usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            output: [],
+          };
+        },
+      };
+    };
+  }
+
+  function makeRunCommandTool(execSpy?: (input: unknown) => unknown) {
+    return {
+      type: 'function' as const,
+      function: {
+        name: 'run_command',
+        description: 'stub run_command',
+        execute: async (input: unknown) => {
+          execSpy?.(input);
+          return 'ran';
+        },
+      },
+    };
+  }
+
+  it('allows a run_command call whose command matches allowedTools "Bash(echo *)"', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'run_command',
+        callId: 'c-allow-echo',
+        input: { command: 'echo hi' },
+      }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeRunCommandTool(execSpy)] as unknown as never,
+      allowedTools: ['Bash(echo *)'],
+    });
+    const events = await collect(run);
+
+    expect(execSpy).toHaveBeenCalledWith({ command: 'echo hi' });
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(false);
+    expect(result.output).toBe('ran');
+  });
+
+  it('denies a run_command call when disallowedTools matches', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'run_command',
+        callId: 'c-deny-rm',
+        input: { command: 'rm -rf /' },
+      }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeRunCommandTool(execSpy)] as unknown as never,
+      disallowedTools: ['Bash(rm *)'],
+    });
+    const events = await collect(run);
+
+    expect(execSpy).not.toHaveBeenCalled();
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(String(result.output));
+    expect(parsed).toMatchObject({ denied: true });
+    expect(parsed.error).toMatch(/disallowedTools/);
+  });
+
+  it('denies the call when both lists match (deny wins over allow)', async () => {
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'run_command',
+        callId: 'c-both',
+        input: { command: 'rm -rf /' },
+      }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeRunCommandTool()] as unknown as never,
+      allowedTools: ['Bash(rm *)'],
+      disallowedTools: ['Bash(rm *)'],
+    });
+    const events = await collect(run);
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(true);
+  });
+
+  it('allowedTools entries layer on top of permissionMode "default" — mode-denied calls become allowed', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'run_command',
+        callId: 'c-mode-layer',
+        input: { command: 'echo allowed' },
+      }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeRunCommandTool(execSpy)] as unknown as never,
+      permissionMode: 'default',
+      allowedTools: ['Bash(echo *)'],
+    });
+    const events = await collect(run);
+
+    expect(execSpy).toHaveBeenCalledWith({ command: 'echo allowed' });
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(false);
+  });
+
+  it('falls through to permissionMode for non-allowed calls — mode-default still denies them', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'run_command',
+        callId: 'c-mode-fallthrough',
+        input: { command: 'pnpm install' },
+      }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeRunCommandTool(execSpy)] as unknown as never,
+      permissionMode: 'default',
+      allowedTools: ['Bash(echo *)'],
+    });
+    const events = await collect(run);
+
+    expect(execSpy).not.toHaveBeenCalled();
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(String(result.output))).toEqual({
+      error: 'requires approval',
+      denied: true,
+    });
+  });
+
+  it('explicit canUseTool wins over allowedTools/disallowedTools and emits the conflict warn log', async () => {
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'run_command',
+        callId: 'c-explicit-wins',
+        input: { command: 'rm -rf /' },
+      }),
+    );
+    const logger = vi.fn();
+    // disallowedTools would deny `rm *`. Explicit canUseTool says allow — the
+    // explicit callback must win and the lists are ignored.
+    const canUseTool = vi.fn().mockResolvedValue({ behavior: 'allow' });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeRunCommandTool()] as unknown as never,
+      disallowedTools: ['Bash(rm *)'],
+      canUseTool,
+      logger,
+    });
+    const events = await collect(run);
+
+    expect(canUseTool).toHaveBeenCalledWith('run_command', { command: 'rm -rf /' });
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(false);
+
+    const warnCall = logger.mock.calls.find((call) => call[0] === 'warn');
+    expect(warnCall).toBeDefined();
+    expect(warnCall![1]).toMatch(/canUseTool/);
+    expect(warnCall![1]).toMatch(/allowedTools\/disallowedTools/);
+  });
+
+  it('throws at construction when a rule is malformed', () => {
+    expect(
+      () =>
+        new OpenRouterAgentRun({
+          apiKey: 'k',
+          sessionId: TEST_SESSION,
+          prompt: 'p',
+          allowedTools: ['Bash(npm install'],
+        }),
+    ).toThrow(/closing parenthesis/i);
+  });
+});
+
 describe('OpenRouterAgentRun constructor options', () => {
   it('throws if apiKey is missing', () => {
     expect(

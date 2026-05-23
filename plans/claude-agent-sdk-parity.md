@@ -1,18 +1,18 @@
 # Claude Agent SDK vs OpenRouter Agent Coder — Parity Analysis
 
 > Comparison of the [Claude Code Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) (TypeScript) against the openrouter-agent-coder feature set.
-> Originally generated 2026-05-21. **Last reviewed against this codebase: 2026-05-23** (after Phase 3.1 landed — see [`claude-sdk-parity-roadmap.md`](./claude-sdk-parity-roadmap.md)).
+> Originally generated 2026-05-21. **Last reviewed against this codebase: 2026-05-23** (after Phase 3.1 + 3.2 landed — see [`claude-sdk-parity-roadmap.md`](./claude-sdk-parity-roadmap.md)).
 
 ## Summary
 
 | Status             | Count  |
 | ------------------ | ------ |
-| Full parity        | 10     |
+| Full parity        | 11     |
 | Partial parity     | 12     |
-| Missing            | 24     |
+| Missing            | 23     |
 | **Total features** | **46** |
 
-Net change vs the original 2026-05-21 snapshot: **+2 Full** (`canUseTool`, new `Interrupt/abort` row), **+4 Partial** (`PreToolUse`/`PostToolUse` are audit-only — hooks can log but can't block/modify like the Claude SDK; `SessionStart`/`SessionEnd` half of lifecycle hooks; constructor-injected tools; constructor-supplied system prompt). Most "Missing" rows softened to "Partial" because their building blocks landed in Phase 1; the remaining gap is the ergonomic / discovery / block-modify layer on top.
+Net change vs the original 2026-05-21 snapshot: **+3 Full** (`canUseTool`, new `Interrupt/abort` row, `Allowed/disallowed tools` after Phase 3.2), **+4 Partial** (`PreToolUse`/`PostToolUse` are audit-only — hooks can log but can't block/modify like the Claude SDK; `SessionStart`/`SessionEnd` half of lifecycle hooks; constructor-injected tools; constructor-supplied system prompt). Most "Missing" rows softened to "Partial" because their building blocks landed in Phase 1; the remaining gap is the ergonomic / discovery / block-modify layer on top.
 
 ---
 
@@ -52,12 +52,12 @@ Net change vs the original 2026-05-21 snapshot: **+2 Full** (`canUseTool`, new `
 
 ### Permissions & Safety
 
-| Feature                  | Claude Agent SDK                                                          | OpenRouter Agent Coder                                                                                                                                                                                                                              | Parity      |
-| ------------------------ | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| Permission modes         | 6 modes: default, dontAsk, acceptEdits, bypassPermissions, plan, auto     | `permissionMode` constructor option — 4 of 6 modes implemented (`default` / `acceptEdits` / `bypassPermissions` / `plan`). `dontAsk` and `auto` not implemented. The `allowedTools`/`disallowedTools` syntax that completes the layer lands in 3.2. | **Partial** |
-| Allowed/disallowed tools | `allowedTools`, `disallowedTools` with scoped rules (e.g., `Bash(npm *)`) | Not implemented as a separate concept; functionally expressible via `canUseTool`                                                                                                                                                                    | **None**    |
-| canUseTool callback      | Runtime approval/deny/modify for each tool call                           | `canUseTool` constructor option — returns `{ behavior: 'allow' \| 'deny', reason?, updatedInput? }`. Server-side tools bypass.                                                                                                                      | **Full**    |
-| Plan mode (read-only)    | Restricts to read-only tools; explores before editing                     | Not implemented                                                                                                                                                                                                                                     | **None**    |
+| Feature                  | Claude Agent SDK                                                          | OpenRouter Agent Coder                                                                                                                                                                                                                                                                 | Parity      |
+| ------------------------ | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| Permission modes         | 6 modes: default, dontAsk, acceptEdits, bypassPermissions, plan, auto     | `permissionMode` constructor option — 4 of 6 modes implemented (`default` / `acceptEdits` / `bypassPermissions` / `plan`). `dontAsk` and `auto` not implemented. Composes with the `allowedTools`/`disallowedTools` layer (Phase 3.2).                                                 | **Partial** |
+| Allowed/disallowed tools | `allowedTools`, `disallowedTools` with scoped rules (e.g., `Bash(npm *)`) | `allowedTools` / `disallowedTools` constructor options accept plain names and scoped `<Tool>(<pattern>)` rules. Bash patterns use `*` as a wildcard; Edit/Read/Write/List/Grep patterns are path globs. Layers on top of `permissionMode`; explicit `canUseTool` overrides both lists. | **Full**    |
+| canUseTool callback      | Runtime approval/deny/modify for each tool call                           | `canUseTool` constructor option — returns `{ behavior: 'allow' \| 'deny', reason?, updatedInput? }`. Server-side tools bypass.                                                                                                                                                         | **Full**    |
+| Plan mode (read-only)    | Restricts to read-only tools; explores before editing                     | Not implemented                                                                                                                                                                                                                                                                        | **None**    |
 
 ### Hooks System
 

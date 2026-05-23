@@ -3,6 +3,7 @@ import { z } from 'zod/v4';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
+import { compileGlobToRegex } from '../utils/glob.js';
 
 export interface GrepMatch {
   file: string;
@@ -55,20 +56,7 @@ async function collectFiles(dir: string, globPattern: string): Promise<string[]>
 }
 
 function matchesGlob(filename: string, pattern: string): boolean {
-  const re = new RegExp(
-    '^' +
-      pattern
-        .split('**')
-        .map((part) =>
-          part
-            .split('*')
-            .map((s) => s.replace(/[.+^${}()|[\]\\]/g, '\\$&'))
-            .join('[^/]*'),
-        )
-        .join('.*') +
-      '$',
-  );
-  return re.test(filename);
+  return compileGlobToRegex(pattern).test(filename);
 }
 
 export function grepFilesTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
