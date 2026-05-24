@@ -297,7 +297,7 @@ export function spawnSubagentTool(
       // it, so we fall back to the factory-time ctx) and a subagent-internal
       // controller. The internal controller is unused here (no surface to
       // call abort() on it from outside), but it is documented for the
-      //4.9 parallel-subagent phase that will need finer-grained control.
+      // 4.9 parallel-subagent phase that will need finer-grained control.
       const subagentInternalCtl = new AbortController();
       const parentSignal = (execCtx as { signal?: AbortSignal } | undefined)?.signal ?? ctx.signal;
       const signal = parentSignal

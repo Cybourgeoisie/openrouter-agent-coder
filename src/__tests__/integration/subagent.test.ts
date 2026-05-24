@@ -630,4 +630,65 @@ describe('integration: spawn_subagent via OpenRouterAgentRun', () => {
     // Cleanup the temp dir.
     await rm(tmpDir, { recursive: true, force: true });
   });
+
+  it('Phase 4.8: per-subagent overrides omitted → child inherits parent allowedTools / disallowedTools / effort', async () => {
+    // Parent sets ALL four Phase 4.8 inheritable knobs (permissionMode +
+    // allowedTools + disallowedTools + effort). The spawn call omits every
+    // override, so the child must inherit each one from the parent's
+    // already-resolved opts. We don't have a direct handle on the child
+    // OpenRouterAgentRun — it's constructed inside agent.ts's `runSubagent`
+    // closure — so we capture the resolved opts by wrapping the prototype's
+    // async-iterator method, which is invoked once per run (parent + child).
+    // Asserting on the child's opts here exercises the resolveOptions
+    // truthy spreads and the child-ctor truthy spreads for all four fields.
+    type Iterable = { [Symbol.asyncIterator]: () => AsyncIterator<AgentCoreEvent> };
+    const proto = OpenRouterAgentRun.prototype as unknown as Iterable & {
+      opts: Record<string, unknown>;
+    };
+    const origIter = proto[Symbol.asyncIterator];
+    const capturedOpts: Array<Record<string, unknown>> = [];
+    proto[Symbol.asyncIterator] = function (this: { opts: Record<string, unknown> }) {
+      capturedOpts.push({ ...this.opts });
+      return origIter.call(this);
+    };
+
+    try {
+      state.fixtureQueue = [
+        parentFixtureCallingSubagent({ description: 'inherit test' }),
+        childFixtureSimpleText(),
+      ];
+
+      const parent = new OpenRouterAgentRun({
+        apiKey: 'sk-test',
+        sessionId: PARENT_SESSION,
+        prompt: 'verify inheritance',
+        enableSubagents: true,
+        persistSession: false,
+        // `bypassPermissions` is chosen so the parent can issue the spawn
+        // (the `plan`-mode read-only set excludes `spawn_subagent`, which
+        // also isn't a valid `allowedTools` rule name → can't be allow-
+        // listed there either). The exact mode is incidental — what
+        // matters is that the same value flows verbatim into the child.
+        permissionMode: 'bypassPermissions',
+        allowedTools: ['read_file'],
+        disallowedTools: ['Bash(rm *)'],
+        effort: 'high',
+      });
+
+      for await (const _ev of parent) {
+        void _ev;
+      }
+
+      // Both the parent and the child iterated through the spied
+      // Symbol.asyncIterator → opts captured in spawn order.
+      expect(capturedOpts).toHaveLength(2);
+      const childOpts = capturedOpts[1]!;
+      expect(childOpts.permissionMode).toBe('bypassPermissions');
+      expect(childOpts.allowedTools).toEqual(['read_file']);
+      expect(childOpts.disallowedTools).toEqual(['Bash(rm *)']);
+      expect(childOpts.effort).toBe('high');
+    } finally {
+      proto[Symbol.asyncIterator] = origIter;
+    }
+  });
 });
