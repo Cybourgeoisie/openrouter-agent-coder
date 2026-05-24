@@ -22,6 +22,7 @@ import {
   type ToolSearchToolOptions,
   type ToolLoadToolOptions,
 } from './tool-search.js';
+import { skillTool, type SkillToolOptions } from './skill.js';
 import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
 
 export { readFileTool } from './read-file.js';
@@ -87,6 +88,13 @@ export type {
   ToolLoadToolResult,
   ToolLoadToolOptions,
 } from './tool-search.js';
+export {
+  skillTool,
+  splitAllowedTools,
+  buildSkillListing,
+  DEFAULT_SKILL_DESCRIPTION_BUDGET,
+} from './skill.js';
+export type { SkillToolOptions, SkillToolResult, ActiveSkillContext } from './skill.js';
 export type {
   TaskState,
   Task,
@@ -162,6 +170,13 @@ export interface AllToolsOptions {
    * See {@link ToolLoadToolOptions}.
    */
   toolLoad?: ToolLoadToolOptions;
+  /**
+   * Phase 5.7: opt-in {@link skillTool} configuration. When set, the `skill`
+   * tool is included in the default bundle with its description populated
+   * from the loader's listing block. Wired by `agent.ts` whenever a
+   * `skills` or `skillsDir` option is supplied to `OpenRouterAgentRun`.
+   */
+  skill?: SkillToolOptions;
 }
 
 /**
@@ -204,6 +219,9 @@ export function allTools(
   }
   if (opts.toolLoad !== undefined) {
     tools.push(toolLoadTool(opts.toolLoad, ctx));
+  }
+  if (opts.skill !== undefined) {
+    tools.push(skillTool(opts.skill, ctx));
   }
   return tools;
 }

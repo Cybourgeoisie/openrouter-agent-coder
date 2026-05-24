@@ -147,3 +147,37 @@ export type {
   ToolResultContent,
 } from './messages.js';
 export type { UserInput } from './streaming-input.js';
+export {
+  createSkillLoader,
+  loadSkills,
+  parseSkillFile,
+  parseYamlFrontmatter,
+  normalizeFrontmatterKeys,
+  splitShellArgs,
+  renderSkillBody,
+  substituteVariables,
+  substituteArguments,
+  skillFrontmatterSchema,
+  SKILL_NAME_REGEX,
+  MAX_PROJECT_WALK_DEPTH as MAX_SKILL_PROJECT_WALK_DEPTH,
+  MAX_DESCRIPTION_CHARS as MAX_SKILL_DESCRIPTION_CHARS,
+  MAX_WHEN_TO_USE_CHARS as MAX_SKILL_WHEN_TO_USE_CHARS,
+  MAX_COMPATIBILITY_CHARS as MAX_SKILL_COMPATIBILITY_CHARS,
+  DEFAULT_SHELL_TIMEOUT_MS as DEFAULT_SKILL_SHELL_TIMEOUT_MS,
+  SHELL_DISABLED_MARKER as SKILL_SHELL_DISABLED_MARKER,
+} from './skills/index.js';
+export type {
+  SkillFrontmatter,
+  SkillInfo,
+  SkillSource,
+  SkillLoader,
+  SkillLoaderOptions,
+  SubstitutionContext,
+} from './skills/index.js';
+export {
+  skillTool,
+  splitAllowedTools,
+  buildSkillListing,
+  DEFAULT_SKILL_DESCRIPTION_BUDGET,
+} from './tools/skill.js';
+export type { SkillToolOptions, SkillToolResult, ActiveSkillContext } from './tools/skill.js';
