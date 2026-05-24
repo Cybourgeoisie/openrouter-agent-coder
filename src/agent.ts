@@ -328,6 +328,19 @@ export interface OpenRouterAgentRunOptions {
    * undefined (the default `0`).
    */
   currentSubagentDepth?: number;
+  /**
+   * Phase 4.8 stub (pending Phase 5.4): per-run effort / reasoning-depth
+   * override. **Currently accepted-but-not-consumed** — the value is stored
+   * on the resolved options struct so the field surface is stable for the
+   * `spawn_subagent` per-subagent `effort` override, but the OR `callModel`
+   * call does not yet forward it. Real wiring lands in Phase 5.4 (gated on
+   * spike 5.S3 — whether OR's API accepts an effort parameter at all).
+   *
+   * Until then, setting this is a no-op. Behavior may change once 5.4 lands;
+   * callers that care about a stable downstream effect should wait for that
+   * phase.
+   */
+  effort?: string;
 }
 
 interface ResolvedOptions {
@@ -356,6 +369,24 @@ interface ResolvedOptions {
   enableSubagents: boolean;
   maxSubagentDepth: number;
   currentSubagentDepth: number;
+  /**
+   * Phase 4.8: preserved here so the subagent runner can inherit the parent's
+   * already-resolved `permissionMode` when a spawn call omits its own
+   * override. The composed {@link canUseTool} is what actually gates the
+   * parent's own tool calls — this field is only the inheritance source for
+   * children.
+   */
+  permissionMode?: PermissionMode;
+  /** Phase 4.8: same as {@link permissionMode}, but for `allowedTools`. */
+  allowedTools?: readonly string[];
+  /** Phase 4.8: same as {@link permissionMode}, but for `disallowedTools`. */
+  disallowedTools?: readonly string[];
+  /**
+   * Phase 4.8 stub: stored-but-not-consumed effort override. Forwarded onto
+   * spawned subagents as the inheritance source until Phase 5.4 wires it
+   * into the OR `callModel` call.
+   */
+  effort?: string;
 }
 
 function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
@@ -427,6 +458,10 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     enableSubagents: opts.enableSubagents ?? false,
     maxSubagentDepth: opts.maxSubagentDepth ?? DEFAULT_MAX_SUBAGENT_DEPTH,
     currentSubagentDepth: opts.currentSubagentDepth ?? 0,
+    ...(opts.permissionMode !== undefined && { permissionMode: opts.permissionMode }),
+    ...(opts.allowedTools !== undefined && { allowedTools: opts.allowedTools }),
+    ...(opts.disallowedTools !== undefined && { disallowedTools: opts.disallowedTools }),
+    ...(opts.effort !== undefined && { effort: opts.effort }),
   };
 }
 
@@ -740,12 +775,23 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           toolNames !== undefined
             ? childAllTools.filter((t) => toolNames.includes(t.function.name))
             : childAllTools;
+        // Phase 4.8: per-subagent overrides REPLACE the parent's resolved
+        // value (instead of composing). The parent's `permissionMode` /
+        // `allowedTools` / `disallowedTools` / `model` / `effort` only flow
+        // into the child when the spawn call omits its own override. This
+        // mirrors the documented semantics in the `spawn_subagent` Zod
+        // schema's doc comment — keep the two in sync if either changes.
+        const childModel = config.model ?? this.opts.model;
+        const childPermissionMode = config.permissionMode ?? this.opts.permissionMode;
+        const childAllowedTools = config.allowedTools ?? this.opts.allowedTools;
+        const childDisallowedTools = config.disallowedTools ?? this.opts.disallowedTools;
+        const childEffort = config.effort ?? this.opts.effort;
         const child = new OpenRouterAgentRun({
           apiKey,
           sessionId: config.sessionId,
           prompt: config.prompt,
           instructions: config.instructions ?? baseInstructions,
-          model,
+          model: childModel,
           cwd,
           maxTurns: config.maxTurns ?? maxTurns,
           maxBudgetUsd: config.maxBudgetUsd ?? maxBudgetUsd,
@@ -757,6 +803,10 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           ...(baseUrl && { baseUrl }),
           ...(logger && { logger }),
           ...(onHook && { onHook }),
+          ...(childPermissionMode !== undefined && { permissionMode: childPermissionMode }),
+          ...(childAllowedTools !== undefined && { allowedTools: childAllowedTools }),
+          ...(childDisallowedTools !== undefined && { disallowedTools: childDisallowedTools }),
+          ...(childEffort !== undefined && { effort: childEffort }),
         });
         let text = '';
         let summary: SubagentRunResult = {

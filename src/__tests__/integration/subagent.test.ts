@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { rm } from 'node:fs/promises';
+import { rm, readFile, mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Fixture, MockState } from './mock-openrouter.js';
 
@@ -458,5 +459,175 @@ describe('integration: spawn_subagent via OpenRouterAgentRun', () => {
     // Subagent's session id is derived from the parent's.
     const childCallArgs = state.callModelArgs[1] as { sessionId: string };
     expect(childCallArgs.sessionId).toMatch(/^integration-subagent-parent:sub:/);
+  });
+
+  it('Phase 4.8: per-subagent permission_mode override does not leak into the parent (no-leak guard)', async () => {
+    // Parent runs with `bypassPermissions` (write_file is allowed). It spawns
+    // a subagent with `permission_mode: 'plan'` (write_file denied — read
+    // only). After the subagent returns, the parent calls write_file itself
+    // — that call MUST succeed, proving the override applied to the child's
+    // ctor args only and never mutated the parent's resolved options.
+    const tmpDir = await mkdtemp(join(tmpdir(), 'subagent-no-leak-'));
+    const parentWritePath = join(tmpDir, 'parent-wrote.txt');
+
+    const spawnArgs = {
+      description: 'try to write',
+      permission_mode: 'plan' as const,
+    };
+    const parentFixture: Fixture = {
+      name: 'parent-no-leak',
+      steps: [
+        { type: 'yield', event: { type: 'turn.start', turnNumber: 0, timestamp: 1 } },
+        // Step 1: spawn the subagent with the plan-mode override.
+        {
+          type: 'yield',
+          event: {
+            type: 'response.output_item.done',
+            outputIndex: 0,
+            sequenceNumber: 1,
+            item: {
+              type: 'function_call',
+              callId: 'spawn_call',
+              name: 'spawn_subagent',
+              arguments: JSON.stringify(spawnArgs),
+            },
+          },
+        },
+        {
+          type: 'tool_execute',
+          toolName: 'spawn_subagent',
+          input: spawnArgs,
+          callId: 'spawn_call',
+        },
+        // Step 2: after the subagent returns, the parent attempts its own
+        // write_file. bypassPermissions on the parent must still be in
+        // effect — the spawn-call override must NOT have leaked into the
+        // parent's canUseTool gate.
+        {
+          type: 'yield',
+          event: {
+            type: 'response.output_item.done',
+            outputIndex: 1,
+            sequenceNumber: 2,
+            item: {
+              type: 'function_call',
+              callId: 'parent_write_call',
+              name: 'write_file',
+              arguments: JSON.stringify({ path: parentWritePath, content: 'parent-ok' }),
+            },
+          },
+        },
+        {
+          type: 'tool_execute',
+          toolName: 'write_file',
+          input: { path: parentWritePath, content: 'parent-ok' },
+          callId: 'parent_write_call',
+        },
+        { type: 'yield', event: { type: 'turn.end', turnNumber: 0, timestamp: 2 } },
+      ],
+      response: {
+        id: 'resp-parent',
+        model: 'mock-model',
+        usage: { cost: 0.001, inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        output: [],
+      },
+    };
+
+    // The child fixture tries write_file. The child's resolved permission
+    // mode is 'plan' (the override), so the canUseTool gate denies write.
+    const childWritePath = join(tmpDir, 'child-should-be-blocked.txt');
+    const childFixture: Fixture = {
+      name: 'child-blocked',
+      steps: [
+        { type: 'yield', event: { type: 'turn.start', turnNumber: 0, timestamp: 1 } },
+        {
+          type: 'yield',
+          event: {
+            type: 'response.output_item.done',
+            outputIndex: 0,
+            sequenceNumber: 1,
+            item: {
+              type: 'function_call',
+              callId: 'child_write_call',
+              name: 'write_file',
+              arguments: JSON.stringify({ path: childWritePath, content: 'should-fail' }),
+            },
+          },
+        },
+        {
+          type: 'tool_execute',
+          toolName: 'write_file',
+          input: { path: childWritePath, content: 'should-fail' },
+          callId: 'child_write_call',
+        },
+        { type: 'yield', event: { type: 'turn.end', turnNumber: 0, timestamp: 2 } },
+      ],
+      response: {
+        id: 'resp-child',
+        model: 'mock-model',
+        usage: { cost: 0, inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        output: [],
+      },
+    };
+
+    state.fixtureQueue = [parentFixture, childFixture];
+
+    const parent = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: PARENT_SESSION,
+      prompt: 'verify no leak',
+      cwd: tmpDir,
+      enableSubagents: true,
+      permissionMode: 'bypassPermissions',
+      persistSession: false,
+    });
+
+    const events: AgentCoreEvent[] = [];
+    for await (const ev of parent) events.push(ev);
+
+    // The parent's write_file MUST have succeeded — proving the override
+    // never mutated the parent's permission gate.
+    const parentWriteResult = events.find(
+      (e): e is Extract<AgentCoreEvent, { type: 'tool_result' }> =>
+        e.type === 'tool_result' && e.callId === 'parent_write_call',
+    );
+    expect(parentWriteResult).toBeDefined();
+    expect(parentWriteResult?.isError).toBe(false);
+    const parentBytes = await readFile(parentWritePath, 'utf8');
+    expect(parentBytes).toBe('parent-ok');
+
+    // The subagent's write_file MUST have been denied by the plan-mode
+    // override (canUseTool wrapper throws the synth-deny JSON, surfaced as
+    // a tool_call_output with status incomplete → isError = true → the
+    // runner captures it as a status: 'success' but with no text. The
+    // spawn_subagent tool_result itself succeeds; what we verify is that
+    // the child's denial is observable somewhere — the parent's
+    // `tool_result` for spawn_subagent carries the captured summary).
+    const spawnResult = events.find(
+      (e): e is Extract<AgentCoreEvent, { type: 'tool_result' }> =>
+        e.type === 'tool_result' && e.callId === 'spawn_call',
+    );
+    expect(spawnResult).toBeDefined();
+    expect(spawnResult?.isError).toBe(false);
+
+    // Subagent's callModel got `permissionMode: 'plan'` even though the
+    // parent's was `bypassPermissions`. The child's tool array is filtered
+    // by the canUseTool wrapper at execute time; we assert here only that
+    // the child ran and its callModel was issued (two callModel invocations
+    // in total: parent + child).
+    expect(state.callModelArgs.length).toBe(2);
+
+    // The child's write_file attempt was denied by the plan-mode gate, so
+    // its target file must NOT exist on disk.
+    let childWroteAnyway = true;
+    try {
+      await readFile(childWritePath, 'utf8');
+    } catch {
+      childWroteAnyway = false;
+    }
+    expect(childWroteAnyway).toBe(false);
+
+    // Cleanup the temp dir.
+    await rm(tmpDir, { recursive: true, force: true });
   });
 });

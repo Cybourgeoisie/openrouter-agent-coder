@@ -24,6 +24,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Phase 4.8: per-subagent tool / model / effort overrides on
+  `spawn_subagent`. The Zod input schema gains five optional fields —
+  `model?: string`, `permission_mode?: 'default' | 'acceptEdits' |
+'bypassPermissions' | 'plan'`, `allowed_tools?: string[]` and
+  `disallowed_tools?: string[]` (both reuse the Phase 3.2 rule grammar:
+  plain names like `'read_file'` / `'Read'` or scoped rules like
+  `'Bash(npm *)'` / `'Edit(src/**/*.ts)'`), and `effort?: string` — that
+  the runner maps to the child `OpenRouterAgentRun`'s constructor args
+  (snake_case in the tool schema → camelCase on the ctor). Each override
+  REPLACES the parent's resolved value rather than composing — so
+  `permission_mode: 'plan'` from a `bypassPermissions` parent isolates
+  the read-only restriction to the child; the parent's own subsequent
+  tool calls remain unrestricted. The 4.7 `tools?: string[]`
+  pool-narrowing whitelist still composes on top of the 3.2 filters:
+  `tools` controls which tool factories are available to the child;
+  `allowed_tools` / `disallowed_tools` then gate calls within that pool.
+  `effort` is **accepted-but-no-op** — the value is stored on both the
+  spawn config and the child run's `OpenRouterAgentRunOptions.effort`
+  field, but the OR `callModel` call does not yet forward it. Full
+  wiring lands in Phase 5.4 (gated on spike 5.S3 — whether OR's API
+  accepts an effort parameter at all). The new `effort?: string` field
+  on `OpenRouterAgentRunOptions` is documented as a stub with the same
+  no-op caveat so the surface stays stable. Documented in the README
+  Subagents subsection and parity matrix (`Subagent tool restrictions`
+  graduates Partial → Full). ([#59](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/59))
+
 - Phase 4.7: subagent system — basic, sequential. New `spawnSubagentTool(opts, ctx?)` factory (exported from the library root) plus `OpenRouterAgentRun({ enableSubagents: true, maxSubagentDepth?: 3, currentSubagentDepth?: 0 })` constructor options that wire the built-in `spawn_subagent` tool into the default bundle. The tool's Zod input schema accepts `description: string`, optional `tools?: string[]` (whitelist of tool names that narrows the inherited parent pool — unknown names silently dropped), optional `instructions?: string`, `max_turns?: number`, and `max_budget_usd?: number` (each defaults to the parent's value when omitted). When invoked, the parent's `spawn_subagent.execute` derives a child session id (`<parentSessionId>:sub:<uuid>`), composes the parent's abort signal with a subagent-internal `AbortController` via `AbortSignal.any`, and builds a child `OpenRouterAgentRun` inheriting the parent's `apiKey` / `baseUrl` / `appTitle` / `logsRoot` / `logger` / `onHook` / `model` / `cwd` / `persistSession`. The runner drains the child's `AgentCoreEvent` stream and returns the captured `SubagentResultSummary` (status, usage, costUsd, durationMs, reason, plus concatenated assistant text) as a single `tool_result` — subagent events do NOT bleed into the parent's `for await`. Recursion cap: the spawn check `parent.currentSubagentDepth + 1` against `maxSubagentDepth` rejects when the next depth would meet or exceed the cap (default 3 → chain of at most three levels: parent → sub → sub-sub → reject 4th), surfacing `{ error: 'max subagent depth (3) exceeded', subagentSessionId }`. The `HookEvent` union is extended with `'SubagentStart'` and `'SubagentEnd'`; both payloads carry `parentSessionId`, `subagentSessionId`, `depth`, and (on End) the full `SubagentResultSummary`. Both fire even on the depth-cap rejection path so audit consumers see a matched Start/End pair. Opt-in via `OpenRouterAgentRun({ enableSubagents: true })` or by passing `AllToolsOptions.spawnSubagent` to `allTools()`; the tool is **NOT** in the default bundle when `enableSubagents` is unset (mirrors the host-hook opt-in pattern from Phase 4.1/4.2). ([#58](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/58))
 
 - Phase 4.6: file checkpointing. New `createCheckpoint(sessionId,

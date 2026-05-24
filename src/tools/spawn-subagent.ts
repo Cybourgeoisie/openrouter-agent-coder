@@ -9,6 +9,7 @@ import type {
   SubagentResultSummary,
   TokenUsage,
 } from '../events.js';
+import type { PermissionMode } from '../permission-modes.js';
 
 /**
  * Default cap on the subagent chain depth (root counts as `0`). With the
@@ -34,6 +35,22 @@ export interface SubagentRunConfig {
   maxBudgetUsd?: number;
   /** Optional whitelist of tool names — subagent's pool narrows to these only. */
   toolNames?: readonly string[];
+  /**
+   * Phase 4.8: per-subagent overrides. Each field, when set, REPLACES the
+   * corresponding parent-resolved value on the child run's constructor args
+   * (override wins; child does not COMPOSE with the parent's filters). When
+   * omitted, the runner falls back to the parent's already-resolved value.
+   */
+  model?: string;
+  permissionMode?: PermissionMode;
+  allowedTools?: readonly string[];
+  disallowedTools?: readonly string[];
+  /**
+   * Pass-through to {@link OpenRouterAgentRunOptions.effort}. Currently a
+   * no-op — the field is stored on the child run's opts but not consumed by
+   * the OR call (`effort` wiring lands in Phase 5.4).
+   */
+  effort?: string;
   /** Composite abort signal that fires when either the parent or the subagent itself aborts. */
   signal: AbortSignal;
   /** Chain depth of the new subagent (root = 0, first subagent = 1, …). */
@@ -125,6 +142,35 @@ export interface SpawnSubagentToolResult {
  *   inherit the parent's.
  * - `max_turns?: number` — per-subagent override; omit to inherit.
  * - `max_budget_usd?: number` — per-subagent override; omit to inherit.
+ * - `model?: string` — per-subagent model override (Phase 4.8); omit to
+ *   inherit the parent's resolved `model`.
+ * - `permission_mode?: PermissionMode` — per-subagent permission preset
+ *   (`'default'` / `'acceptEdits'` / `'bypassPermissions'` / `'plan'`)
+ *   (Phase 4.8); omit to inherit the parent's `permissionMode`.
+ * - `allowed_tools?: string[]` — per-subagent allow list using the
+ *   Phase 3.2 rule grammar (Phase 4.8). REPLACES the parent's list —
+ *   parent's `allowedTools` does NOT bleed into the child.
+ * - `disallowed_tools?: string[]` — per-subagent deny list using the
+ *   Phase 3.2 rule grammar (Phase 4.8). Also REPLACES rather than
+ *   COMPOSES.
+ * - `effort?: string` — per-subagent effort override (Phase 4.8).
+ *   Currently stored-but-no-op (consumed in Phase 5.4).
+ *
+ * Composition layers (innermost → outermost):
+ * 1. `tools` (Phase 4.7) narrows the inherited tool *pool* by name.
+ * 2. `permission_mode` (Phase 3.1) gates each call by tool name.
+ * 3. `allowed_tools` / `disallowed_tools` (Phase 3.2) layer scoped rules
+ *    on top of the mode gate.
+ * 4. An optional caller-supplied `canUseTool` is the final word.
+ *
+ * The override semantics: each field, when supplied on the spawn call,
+ * REPLACES the parent's resolved value on the child run's constructor.
+ * Parent's mode/lists do NOT bleed in. (Composing would surprise users
+ * — see the 4.8 PR body for the rationale.)
+ *
+ * The keys above are snake_case to match the model-facing tool-call
+ * convention; they are mapped to camelCase on the child run's
+ * constructor args.
  *
  * Recursion cap: the check `parent.depth + 1 >= maxDepth` fires before
  * the runner is invoked. On rejection the tool resolves with
@@ -173,9 +219,50 @@ export function spawnSubagentTool(
         .positive()
         .optional()
         .describe("Per-subagent cost cap in USD. Omit to inherit the parent's `maxBudgetUsd`."),
+      model: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          "Per-subagent model override (e.g. `'~anthropic/claude-sonnet-latest'`). Omit to inherit the parent's resolved `model`.",
+        ),
+      permission_mode: z
+        .enum(['default', 'acceptEdits', 'bypassPermissions', 'plan'])
+        .optional()
+        .describe("Per-subagent permission preset. Omit to inherit the parent's `permissionMode`."),
+      allowed_tools: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Per-subagent allow list using the same rule grammar as `OpenRouterAgentRun.allowedTools` (plain names or `Tool(pattern)`). REPLACES — does not compose with — the parent's allow list.",
+        ),
+      disallowed_tools: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Per-subagent deny list using the same rule grammar as `OpenRouterAgentRun.disallowedTools`. REPLACES — does not compose with — the parent's deny list.",
+        ),
+      effort: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'Per-subagent effort override. Currently a no-op pass-through stored on the child run (full wiring lands in Phase 5.4).',
+        ),
     }),
     execute: async (
-      { description, tools, instructions, max_turns, max_budget_usd },
+      {
+        description,
+        tools,
+        instructions,
+        max_turns,
+        max_budget_usd,
+        model,
+        permission_mode,
+        allowed_tools,
+        disallowed_tools,
+        effort,
+      },
       execCtx,
     ): Promise<SpawnSubagentToolResult> => {
       const subagentSessionId = `${opts.parentSessionId}:sub:${randomUUID()}`;
@@ -235,6 +322,11 @@ export function spawnSubagentTool(
           ...(max_turns !== undefined && { maxTurns: max_turns }),
           ...(max_budget_usd !== undefined && { maxBudgetUsd: max_budget_usd }),
           ...(tools !== undefined && { toolNames: tools }),
+          ...(model !== undefined && { model }),
+          ...(permission_mode !== undefined && { permissionMode: permission_mode }),
+          ...(allowed_tools !== undefined && { allowedTools: allowed_tools }),
+          ...(disallowed_tools !== undefined && { disallowedTools: disallowed_tools }),
+          ...(effort !== undefined && { effort }),
           signal,
           depth: childDepth,
         });

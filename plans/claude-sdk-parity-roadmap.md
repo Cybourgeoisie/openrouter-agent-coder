@@ -56,17 +56,17 @@ All builds-on items reference primitives already shipped. Most are independent a
 
 Each is a self-contained implementation. Sequencing matters only within the subagent sub-tree (4.7 → 4.8/4.9). All other cards are independent.
 
-| Card    | Title                                                                                                                 | Est.    | Risk                 | Depends on |
-| ------- | --------------------------------------------------------------------------------------------------------------------- | ------- | -------------------- | ---------- |
-| ~~4.1~~ | ~~AskUserQuestion tool~~ ([#52](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/52))                   | ~~4h~~  | ~~host-UI contract~~ | ~~—~~      |
-| ~~4.2~~ | ~~TaskCreate / TaskUpdate tools~~ ([#53](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/53))          | ~~8h~~  | ~~host-UI contract~~ | ~~—~~      |
-| ~~4.3~~ | ~~NotebookEdit tool~~ ([#54](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/54))                      | ~~10h~~ | ~~low~~              | ~~—~~      |
-| ~~4.4~~ | ~~Monitor tool (background-script watch)~~ ([#55](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/55)) | ~~10h~~ | ~~low~~              | ~~—~~      |
-| ~~4.5~~ | ~~Session forking~~ ([#56](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/56))                        | ~~8h~~  | ~~low~~              | ~~—~~      |
-| ~~4.6~~ | ~~File checkpointing~~ ([#57](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/57))                     | ~~12h~~ | ~~moderate~~         | ~~—~~      |
-| ~~4.7~~ | ~~Subagent system — basic, sequential~~ ([#88](https://github.com/Cybourgeoisie/openrouter-agent-coder/pull/88))      | ~~15h~~ | ~~moderate~~         | ~~—~~      |
-| 4.8     | Subagent tool / model / effort overrides                                                                              | 5h      | moderate             | 4.7        |
-| 4.9     | Parallel subagent execution                                                                                           | 7h      | moderate             | 4.7        |
+| Card    | Title                                                                                                                   | Est.    | Risk                 | Depends on |
+| ------- | ----------------------------------------------------------------------------------------------------------------------- | ------- | -------------------- | ---------- |
+| ~~4.1~~ | ~~AskUserQuestion tool~~ ([#52](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/52))                     | ~~4h~~  | ~~host-UI contract~~ | ~~—~~      |
+| ~~4.2~~ | ~~TaskCreate / TaskUpdate tools~~ ([#53](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/53))            | ~~8h~~  | ~~host-UI contract~~ | ~~—~~      |
+| ~~4.3~~ | ~~NotebookEdit tool~~ ([#54](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/54))                        | ~~10h~~ | ~~low~~              | ~~—~~      |
+| ~~4.4~~ | ~~Monitor tool (background-script watch)~~ ([#55](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/55))   | ~~10h~~ | ~~low~~              | ~~—~~      |
+| ~~4.5~~ | ~~Session forking~~ ([#56](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/56))                          | ~~8h~~  | ~~low~~              | ~~—~~      |
+| ~~4.6~~ | ~~File checkpointing~~ ([#57](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/57))                       | ~~12h~~ | ~~moderate~~         | ~~—~~      |
+| ~~4.7~~ | ~~Subagent system — basic, sequential~~ ([#88](https://github.com/Cybourgeoisie/openrouter-agent-coder/pull/88))        | ~~15h~~ | ~~moderate~~         | ~~—~~      |
+| ~~4.8~~ | ~~Subagent tool / model / effort overrides~~ ([#59](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/59)) | ~~5h~~  | ~~moderate~~         | ~~4.7~~    |
+| 4.9     | Parallel subagent execution                                                                                             | 7h      | moderate             | 4.7        |
 
 **Phase 4 total:** ~70h (estimate; 4.7 is the largest single card and most likely to slip).
 
