@@ -829,33 +829,71 @@ Today this is purely a value bag — real MCP transports (stdio / HTTP+SSE / `.m
 
 ### MCP servers (preview)
 
-Phase 5.2.1 ships an `McpStdioClient` (`src/mcp/transport-stdio.ts`) — a thin
-wrapper around [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk)'s
-client. It spawns a subprocess, completes the MCP `initialize` handshake, and
-exposes typed `listTools` / `callTool` / `listResources` / `readResource` /
-`listPrompts` / `getPrompt` passthroughs. The SDK is `import()`-loaded lazily
-inside `connect()`, so users without configured MCP servers pay zero
-cold-start cost.
+Phase 5.2 ships two MCP client transports — thin async wrappers around
+[`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk)'s
+`Client`. Both expose the same public surface (`connect` / `close` /
+`listTools` / `callTool` / `listResources` / `readResource` / `listPrompts` /
+`getPrompt`, each accepting a trailing `signal?: AbortSignal`). The SDK is
+`import()`-loaded lazily inside `connect()`, so users without configured MCP
+servers pay zero cold-start cost.
+
+**Stdio** (`McpStdioClient`, Phase 5.2.1) spawns a subprocess and speaks
+MCP over its stdin/stdout. Use this for local MCP servers shipped as
+executables or scripts.
 
 ```ts
 import { McpStdioClient } from 'openrouter-agent-coder/dist/mcp/transport-stdio.js';
 
-const client = new McpStdioClient({
+const stdio = new McpStdioClient({
   command: 'node',
   args: ['./my-mcp-server.mjs'],
   signal: someAbortController.signal,
 });
-await client.connect();
-const { tools } = await client.listTools();
-const result = await client.callTool('search', { query: 'mcp' });
-await client.close();
+await stdio.connect();
+const { tools } = await stdio.listTools();
+const result = await stdio.callTool('search', { query: 'mcp' });
+await stdio.close();
 ```
 
-**Preview status — NOT wired into agent runs yet.** Card 5.2.2 adds the
-Streamable-HTTP + SSE transport, 5.2.3 adds `.mcp.json` discovery, 5.2.4
-bridges discovered MCP tools into the agent's `Tool[]` registry, and 5.2.5
-adds `McpServerStart` / `McpServerStop` lifecycle hooks. Until those land
-the surface here is exported but not consumed by `OpenRouterAgentRun`.
+**HTTP + SSE** (`McpHttpClient`, Phase 5.2.2) speaks MCP over a URL. The
+constructor takes a discriminated-union options object selecting one of
+two transports per the MCP spec:
+
+- `transport: 'streamableHttp'` — **modern Streamable HTTP** (preferred).
+  Uses HTTP POST for sending and HTTP GET + SSE for server-streamed
+  responses, supports stateful sessions via `Mcp-Session-Id`, and resumes
+  dropped streams via `Last-Event-ID` replay.
+- `transport: 'sse'` — **legacy plain SSE** (deprecated by the MCP spec,
+  kept here for back-compat with servers that haven't migrated yet).
+
+```ts
+import { McpHttpClient } from 'openrouter-agent-coder/dist/mcp/transport-http.js';
+
+// Modern Streamable HTTP
+const http = new McpHttpClient({
+  transport: 'streamableHttp',
+  url: 'https://example.com/mcp',
+  headers: { Authorization: 'Bearer …' },
+  signal: someAbortController.signal,
+});
+await http.connect();
+const { tools } = await http.listTools();
+await http.close();
+
+// Legacy SSE
+const sse = new McpHttpClient({
+  transport: 'sse',
+  url: 'https://example.com/sse',
+});
+await sse.connect();
+await sse.close();
+```
+
+**Preview status — NOT wired into agent runs yet.** Card 5.2.3 adds
+`.mcp.json` discovery, 5.2.4 bridges discovered MCP tools into the
+agent's `Tool[]` registry, and 5.2.5 adds `McpServerStart` /
+`McpServerStop` lifecycle hooks. Until those land the surface here is
+exported but not consumed by `OpenRouterAgentRun`.
 
 ## Tools shipped with the library
 

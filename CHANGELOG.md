@@ -30,6 +30,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Phase 5.2.2: MCP HTTP + SSE transport (preview). New
+  `McpHttpClient` in `src/mcp/transport-http.ts` wraps
+  `@modelcontextprotocol/sdk`'s `Client` driven by either
+  `StreamableHTTPClientTransport` (modern, preferred — supports
+  stateful sessions via `Mcp-Session-Id` and `Last-Event-ID` stream
+  replay) or `SSEClientTransport` (deprecated, kept for back-compat
+  with servers that haven't migrated yet). The constructor takes a
+  discriminated-union options object selecting
+  `transport: 'streamableHttp' | 'sse'`. Public surface mirrors
+  `McpStdioClient` exactly so Card 5.2.4's tool-bridge can consume
+  either client structurally — `connect` / `close` / `listTools` /
+  `callTool` / `listResources` / `readResource` / `listPrompts` /
+  `getPrompt`, each accepting a trailing `signal?: AbortSignal`.
+  Lifecycle + per-call `AbortSignal` composition matches stdio
+  (per-call signal rejects ONE request without closing the
+  transport; lifecycle signal tears the client down). SDK
+  lazy-loaded via dynamic `import()` inside `connect()` — zero
+  cold-start cost for users without configured MCP servers. **Not
+  wired into `OpenRouterAgentRun` yet** — that flips in Card 5.2.5
+  (lifecycle hooks) after the bridge in 5.2.4 lands.
 - Phase 5.2.1: MCP stdio transport (preview). New
   `McpStdioClient` in `src/mcp/transport-stdio.ts` wraps
   `@modelcontextprotocol/sdk@^1.29.0`'s `Client` +
