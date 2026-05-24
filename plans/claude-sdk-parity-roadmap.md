@@ -80,37 +80,42 @@ Each is a self-contained implementation. Sequencing matters only within the suba
 
 ## Phase 5 — Hard / contingent (spike before commit)
 
-Three architectural items need investigation before we can responsibly size them. Each spike is a small standalone card (1–2h of research + a short write-up), and answers a yes/no question that determines whether the full feature is doable, blocked, or expensive.
+Four architectural areas needed investigation before we could responsibly size them. Each spike is a small standalone card (1–5h of research + a short write-up). Three are complete; one remains.
 
-| Spike | Question                                                                                              | If yes (build est.)                                                                                       | If blocked                                                  |
-| ----- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| 5.S1  | Does `@openrouter/agent` expose the message history (vs only `previousResponseId`)?                   | ~~15–25h~~ **12–18h** compaction ([spike](./spikes/5.S1-message-history.md): Yes)                         | File upstream issue, defer.                                 |
-| 5.S2  | Does `@openrouter/agent` `callModel` accept mid-call message injection for streaming-input semantics? | ~~10–20h~~ **16–24h** workaround ([spike](./spikes/5.S2-streaming-input.md): No — interrupt-then-restart) | Document gap; consider host-driven multi-prompt workaround. |
-| 5.S3  | Does OR's API accept an `effort` / reasoning-depth parameter?                                         | ~~~5h~~ **3–5h** passthrough ([spike](./spikes/5.S3-effort.md): Yes — normalized `reasoning.effort` enum) | Mark Missing permanently.                                   |
+| Spike  | Question                                                                                              | Verdict + refined estimate                                                                           |
+| ------ | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| 5.S1   | Does `@openrouter/agent` expose the message history (vs only `previousResponseId`)?                   | ✅ Yes — ~~15–25h~~ **12–18h** compaction ([spike](./spikes/5.S1-message-history.md))                |
+| 5.S2   | Does `@openrouter/agent` `callModel` accept mid-call message injection for streaming-input semantics? | ✅ No (workaround exists) — ~~10–20h~~ **16–24h** facade ([spike](./spikes/5.S2-streaming-input.md)) |
+| 5.S3   | Does OR's API accept an `effort` / reasoning-depth parameter?                                         | ✅ Yes (normalized enum) — ~~~5h~~ **3–5h** passthrough ([spike](./spikes/5.S3-effort.md))           |
+| 5.S4   | Claude Code's plugin / skill / slash-command architecture — what's the SDK-surface shape?             | ⏳ Pending — gates sizing for Cards 5.6 / 5.7 / 5.8                                                  |
+| 5.2.S1 | Should the MCP client depend on `@modelcontextprotocol/sdk` or roll our own transports?               | ⏳ Pending — gates sizing for Cards 5.2.1–5.2.5                                                      |
 
-**Full build-out items (gated on the spikes):**
+**Full build-out items** (gated on the spikes — Card 5.2 split into sub-cards because the original 30–50h estimate is too large for one PR):
 
-| Card | Title                                 | Est.                  | Notes                                                                                                                                                                                                                                                                                    |
-| ---- | ------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 5.1  | Context compaction (post-5.S1)        | 12–18h                | History exposure confirmed via `ConversationState.messages` ([spike 5.S1](./spikes/5.S1-message-history.md)). Token counting via char-length heuristic for v1; includes PreCompact hook.                                                                                                 |
-| 5.2  | MCP server support (stdio + HTTP/SSE) | 30–50h                | Full MCP-client implementation + `.mcp.json` config + tool-bridge. **Biggest single item in the entire roadmap.**                                                                                                                                                                        |
-| 5.3  | Streaming input mode (post-5.S2)      | ~~10–20h~~ **16–24h** | Mid-call message injection infeasible at SDK/wire layer (SSE one-way); ship Claude-SDK-shaped `AsyncIterable<UserMessage>` + `interrupt()` facade over OR's `interruptedBy` resume primitive. ([spike 5.S2](./spikes/5.S2-streaming-input.md))                                           |
-| 5.4  | Effort / reasoning level (post-5.S3)  | ~~~5h~~ **3–5h**      | OR exposes a normalized `reasoning.effort` enum (`xhigh\|high\|medium\|low\|minimal\|none`); `@openrouter/agent` `callModel` already accepts it via `CallModelInput`. One-line plumbing of the existing Phase 4.8 `effort` stub into `agent.ts`. ([spike 5.S3](./spikes/5.S3-effort.md)) |
-| 5.5  | `ToolSearch` (post-5.2)               | 8h                    | Dynamic tool loading from large MCP tool sets; needs 5.2 first.                                                                                                                                                                                                                          |
+| Card  | Title                                          | Est.   | Notes                                                                                                                                                                                                                                            |
+| ----- | ---------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 5.1   | Context compaction (post-5.S1)                 | 12–18h | History exposure confirmed via `ConversationState.messages` ([spike 5.S1](./spikes/5.S1-message-history.md)). Token counting via char-length heuristic for v1; includes PreCompact hook.                                                         |
+| 5.2.1 | MCP transport: stdio (post-5.2.S1)             | 8h     | Spawn MCP server subprocess; JSON-RPC over stdio; initialization handshake.                                                                                                                                                                      |
+| 5.2.2 | MCP transport: HTTP + SSE (post-5.2.S1)        | 8h     | Parallel surface to 5.2.1: POST + SSE-stream variant.                                                                                                                                                                                            |
+| 5.2.3 | MCP `.mcp.json` config discovery (post-5.2.S1) | 5h     | Project + user-level config file loading, server-spec validation.                                                                                                                                                                                |
+| 5.2.4 | MCP tool-bridge (post-5.2.1, 5.2.2, 5.2.3)     | 8h     | Expose MCP-server tools as `Tool[]` to the agent loop; map MCP tool schemas → our `Tool` shape.                                                                                                                                                  |
+| 5.2.5 | MCP lifecycle hooks + integration (post-5.2.4) | 6h     | `McpServerStart` / `McpServerStop` hooks; full-stack integration tests; README + parity-matrix docs.                                                                                                                                             |
+| 5.3   | Streaming input mode (post-5.S2)               | 16–24h | Mid-call message injection infeasible at SDK/wire layer (SSE one-way); ship Claude-SDK-shaped `AsyncIterable<UserMessage>` + `interrupt()` facade over OR's `interruptedBy` resume primitive.                                                    |
+| 5.4   | Effort / reasoning level (post-5.S3)           | 3–5h   | OR exposes a normalized `reasoning.effort` enum (`xhigh\|high\|medium\|low\|minimal\|none`); `@openrouter/agent` `callModel` already accepts it via `CallModelInput`. One-line plumbing of the existing Phase 4.8 `effort` stub into `agent.ts`. |
+| 5.5   | `ToolSearch` (post-5.2.4)                      | 8h     | Dynamic tool loading from large MCP tool sets; needs the bridge from 5.2.4 first.                                                                                                                                                                |
+| 5.6   | Slash commands (post-5.S4)                     | 5–8h   | Discovery of `.claude/commands/*.md` + library API for the host to enumerate + materialize commands. Smallest of the Bucket-D-formerly cards.                                                                                                    |
+| 5.7   | Skills system (post-5.S4)                      | 8–12h  | Discovery of `.claude/skills/<name>/SKILL.md` + invocation surface. Spike 5.S4 will pin which pattern (auto-loaded vs tool-based vs on-demand).                                                                                                  |
+| 5.8   | Plugins (post-5.S4, 5.2.5, 5.6, 5.7)           | 10–15h | Plugin manifest + discovery + composition. A plugin can register tools / hooks / MCP servers / commands / skills. Umbrella mechanism — depends on the MCP series + commands + skills landing first.                                              |
 
-**Phase 5 total:** ~50–120h depending on spike outcomes.
+**Phase 5 total:** ~85–117h across 12 build cards + 2 pending spikes.
 
 ---
 
-## Out of scope (Bucket D)
+## Card 3.0 — Bucket D reclassification (~1h, docs-only)
 
-| Row in matrix  | Recommendation                                                  |
-| -------------- | --------------------------------------------------------------- |
-| Skills system  | Host responsibility. Callboard has its own skill plugin system. |
-| Slash commands | Host responsibility. Callboard has its own command system.      |
-| Plugins        | Host responsibility. Callboard has its own plugin architecture. |
+Skills system, slash commands, and plugins were originally Bucket D (out of scope — host responsibility). They are now **in scope** for this library: the goal is to be a drop-in replacement for Claude Code + the Agent SDK combined, and host applications shouldn't have to reimplement these features just because they're stitching together the underlying SDK pieces.
 
-These three rows should be marked **"Out of scope — host responsibility"** in the parity matrix and excluded from the Missing total. Updating the matrix is a small follow-up card (call it 3.0 or do it as part of 3.4's CLAUDE.md PR since they touch related territory).
+Card 3.0 closes the bookkeeping debt — updates parity matrix row descriptions and removes the Bucket D framing in this roadmap. The actual feature implementations live in Cards 5.6 / 5.7 / 5.8 (gated on the 5.S4 spike).
 
 ---
 
@@ -195,11 +200,23 @@ Every user-facing card must include a documentation update in the same PR:
 
 The plan's phases have hard dependencies. Don't pull a Ready card whose prerequisite isn't Done.
 
-- **Phase 3 → Phase 4**: Phase 4 doesn't formally require Phase 3 complete, but to keep the surface stable while ergonomic layers land, Phase 4 cards stay Backlog until Phase 3 is ≥80% Done.
-- **Within Phase 3**: see the per-card `Depends on` column above.
-- **Within Phase 4**: 4.8 / 4.9 depend on 4.7.
-- **Phase 5 spikes (5.S1, 5.S2, 5.S3)**: can run any time, in parallel with Phase 3 / 4 work, since they're investigation-only.
-- **Phase 5 builds (5.1–5.5)**: gated on their corresponding spike + any cross-phase deps (5.5 ToolSearch depends on 5.2 MCP).
+- **Phase 3 → Phase 4** (historical): Phase 4 stayed Backlog until Phase 3 was ≥80% Done. Both phases are now complete.
+- **Within Phase 3** (historical): per-card `Depends on` column.
+- **Within Phase 4** (historical): 4.8 / 4.9 depended on 4.7.
+- **Phase 5 spikes (5.S1 / 5.S2 / 5.S3 / 5.S4 / 5.2.S1)**: can run any time, in parallel with build work, since they're investigation-only. Sub-spikes (5.S4, 5.2.S1) gate their respective sub-card sets.
+- **Phase 5 builds**:
+  - **5.1** post-5.S1 ✅ (Ready)
+  - **5.2.S1** sub-spike independent (Ready)
+  - **5.2.1 / 5.2.2 / 5.2.3** post-5.2.S1 (Backlog)
+  - **5.2.4** post-5.2.1 + 5.2.2 + 5.2.3 (Backlog)
+  - **5.2.5** post-5.2.4 (Backlog)
+  - **5.3** post-5.S2 ✅ + post-5.1 (StateAccessor surface; Backlog)
+  - **5.4** post-5.S3 ✅ (Ready)
+  - **5.5** post-5.2.4 (Backlog — needs the tool-bridge)
+  - **5.S4** independent spike (Ready)
+  - **5.6 / 5.7** post-5.S4 (Backlog)
+  - **5.8** post-5.S4 + 5.2.5 + 5.6 + 5.7 (Backlog)
+- **Card 3.0 (Bucket D reclassification)**: independent docs micro-card (Ready).
 
 **One in-flight coder session per repo at a time.** Same rule as Phase 1. When a card moves to Done, scan Backlog for the next unblocked card and move it to Ready.
 
@@ -207,15 +224,13 @@ The plan's phases have hard dependencies. Don't pull a Ready card whose prerequi
 
 ## Total roadmap estimate
 
-| Phase              | Effort (est.) | Status                                                     |
-| ------------------ | ------------- | ---------------------------------------------------------- |
-| Phase 3            | ~50h          | Carded; ready to start.                                    |
-| Phase 4            | ~70h          | Carded; blocked on Phase 3 ≥80%.                           |
-| Phase 5            | ~50–120h      | Spikes carded; build-out cards gated on spike outcomes.    |
-| Bucket D           | _0h_          | Out of scope.                                              |
-| **Total in-scope** | **~170–240h** | ~4–6 weeks full-time (likely 2 months calendar with slip). |
-
-With ~30% slip and integration cost, plan for a **two-month effort** to reach Full parity on the in-scope rows. Bucket D rows close as "Out of scope — host responsibility."
+| Phase               | Effort (est.)  | Status                                                                                                          |
+| ------------------- | -------------- | --------------------------------------------------------------------------------------------------------------- |
+| Phase 3             | ~50h           | ✅ Complete (12 cards, fast-track-merged 2026-05-22 → 2026-05-23).                                              |
+| Phase 4             | ~70h           | ✅ Complete (9 cards, fast-track-merged 2026-05-23 → 2026-05-24).                                               |
+| Phase 5             | ~85–117h       | 3 of 4 spikes complete; 12 build cards + 2 pending spikes + 1 micro-card carded.                                |
+| Bucket D            | _reclassified_ | Skills / SlashCommands / Plugins reclassified IN-scope (Cards 5.6 / 5.7 / 5.8); see Card 3.0.                   |
+| **Total remaining** | **~85–117h**   | Phase 5 only — Phases 3 + 4 done. ~2–3 weeks at current fast-track throughput (~3 merges/day when cooperative). |
 
 ---
 
