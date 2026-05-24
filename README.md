@@ -1032,6 +1032,108 @@ With `enableToolSearch: true`:
 
 Permission gates (`permissionMode` / `allowedTools` / `disallowedTools` / `canUseTool` from Phase 3.\*) still fire per call on dynamically-loaded tools — `tool_load` only changes which tools are advertised, not which ones are allowed to execute.
 
+### Skills (`.claude/skills/<name>/SKILL.md`)
+
+Phase 5.7 adds Claude Code-compatible **skills**: reusable markdown bodies discovered from `.claude/skills/<name>/SKILL.md` directories with YAML frontmatter. Each skill carries `(name, description, when_to_use)` metadata; when wired, the agent injects an `## Available Skills` listing into the system instructions and exposes a single `skill({ name, arguments? })` tool the model can call to render and consume a skill body.
+
+#### Quick start
+
+```ts
+import { OpenRouterAgentRun, createSkillLoader } from 'openrouter-agent-coder';
+
+// Discovery walks .claude/skills/ in the project (cwd up to .git) and user
+// (~/.claude/skills/) scopes. Plugin roots can be added for 5.8 wiring.
+const skills = createSkillLoader({ cwd: process.cwd() });
+
+const run = new OpenRouterAgentRun({
+  apiKey: process.env.OPENROUTER_API_KEY!,
+  sessionId: 'demo',
+  prompt: 'Pick the right skill for my request.',
+  skills,
+});
+```
+
+Or the path shorthand — equivalent to wiring a default loader against `cwd`:
+
+```ts
+const run = new OpenRouterAgentRun({
+  apiKey: process.env.OPENROUTER_API_KEY!,
+  sessionId: 'demo',
+  prompt: '…',
+  skillsDir: process.cwd(),
+});
+```
+
+#### Frontmatter
+
+YAML between `---` markers at the top of `SKILL.md`. Mirrors the [agentskills.io](https://agentskills.io/specification) cross-vendor spec plus Claude Code's extensions:
+
+```markdown
+---
+name: greet
+description: Greets the user politely
+when_to_use: when the user wants a friendly opening line
+arguments: [name, mood]
+allowed-tools: Read Bash(git:*)
+effort: low
+context: fork # optional — routes through the Phase 4.7 subagent runner
+agent: general-purpose # subagent type when context: fork
+---
+
+Hello, $name! I see you're feeling $mood.
+
+Latest git tag: !`git describe --tags`
+```
+
+Required: `name` (lowercase letters/digits/hyphens, 1–64 chars, must match the parent directory). Everything else is optional. Unknown fields are accepted and ignored so files written against a newer Claude Code build still load.
+
+#### Substitution
+
+When the model invokes `skill(name, arguments?)`, the body is rendered in a single pass:
+
+1. `${VAR}` interpolation: `${CLAUDE_SESSION_ID}`, `${CLAUDE_PROJECT_DIR}`, `${CLAUDE_SKILL_DIR}`, `${CLAUDE_EFFORT}`, `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}`, `${user_config.<key>}`, plus generic env-style passthrough via `skillEnv`.
+2. `$ARGUMENTS`, `$ARGUMENTS[N]` (0-indexed), `$N` (1-indexed), and `$<name>` (when the frontmatter declares `arguments: [foo, bar]`).
+3. Inline `` !`cmd` `` blocks — POSITION-RESTRICTED (only at start-of-line or after whitespace). The command runs under the run's abort signal and a 60s per-block timeout; stdout replaces the placeholder. Output is **NOT re-scanned**.
+4. Fenced ` ```! ... ``` ` multi-line blocks — same semantics.
+
+Set `disableSkillShellExecution: true` on `OpenRouterAgentRun` to replace every `` !`cmd` `` / fenced block with the literal `[shell command execution disabled by policy]`.
+
+#### Discovery + precedence
+
+Skills are resolved from three scopes, highest-precedence first:
+
+| Scope   | Location                                          | Notes                                                                                   |
+| ------- | ------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Plugin  | `<plugin>/skills/<name>/SKILL.md`                 | Namespaced as `<pluginName>:<skillName>` so plugin skills never collide.                |
+| User    | `<home>/.claude/skills/<name>/SKILL.md`           | Override `home` via `createSkillLoader({ home })`; default `os.homedir()`.              |
+| Project | `<cwd up to .git>/.claude/skills/<name>/SKILL.md` | Walk-up capped at 10 levels. Deepest match overrides shallower ones (monorepo support). |
+
+Collisions: user > project (no enterprise scope in v1 — equivalent to Claude Code's hierarchy minus the managed-settings tier).
+
+#### Listing budget
+
+The `## Available Skills` block injected into instructions is capped at `skillDescriptionBudget × 200,000` chars (~2,048 chars = 1% of a 200k-token window). Skills overflowing the budget are dropped in source-precedence + alphabetical order — they remain callable by exact name via the `skill` tool, but won't auto-trigger off the listing.
+
+#### `context: fork`
+
+When a skill's frontmatter sets `context: fork`, the rendered body becomes the prompt of a forked subagent (reusing the Phase 4.7 `spawn_subagent` runner). The agent's `enableSubagents: true` opt-in is required — without it, the skill falls back to inline render and surfaces a `runSubagent not wired` note on the tool result.
+
+#### Per-skill `allowed-tools`
+
+A skill's frontmatter `allowed-tools: Bash(git:*) Read` layers an additional narrowing gate on top of the run-level `canUseTool` / `permissionMode` / `allowedTools`. The narrowing is active only while the skill body renders (`onSkillActive` install + dispose). It does NOT widen the run-level policy — denials from the outer gate still win.
+
+#### Constructor options
+
+| Option                       | Type                              | Default                            | Behaviour                                                                                                                                       |
+| ---------------------------- | --------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `skills`                     | `SkillLoader`                     | —                                  | Pre-built loader (use `createSkillLoader(...)`). Wins over `skillsDir` when both are set.                                                       |
+| `skillsDir`                  | `string`                          | —                                  | Convenience: constructs a default loader from the supplied path. Skipped when `skills` is set.                                                  |
+| `skillDescriptionBudget`     | `number`                          | `0.01` (≈ 1% of a 200k-tok window) | Fraction of the model's context budget reserved for the `## Available Skills` listing block.                                                    |
+| `disableSkillShellExecution` | `boolean`                         | `false`                            | When `true`, every `` !`cmd` `` / fenced block becomes `[shell command execution disabled by policy]`.                                          |
+| `skillEnv`                   | `Readonly<Record<string,string>>` | `{}`                               | Caller-supplied env map for generic `${VAR}` passthrough in skill bodies. Pass NARROW — handing over `process.env` leaks host vars to the body. |
+
+Loaded skills fire a `Notification` hook (`level: 'info'`, `message: 'skill_loaded'`, `context: { name, source }`) on each successful render so audit consumers can observe activations without polling.
+
 ## Tools shipped with the library
 
 Client tools (execute in the host process):
@@ -1053,6 +1155,7 @@ Client tools (execute in the host process):
 | `spawn_subagent`    | **Opt-in** via `OpenRouterAgentRun({ enableSubagents: true })` (NOT in the default bundle). Delegate a focused subtask to a child `OpenRouterAgentRun`. Inputs: `description` (prompt, required), optional `tools?: string[]` whitelist that narrows the inherited pool (unknown names dropped), optional `instructions` / `max_turns` / `max_budget_usd` overrides, plus Phase 4.8 per-subagent overrides `model` / `permission_mode` / `allowed_tools` / `disallowed_tools` / `effort` (each REPLACES the parent's resolved value on the child run; `effort` is a stored-but-no-op stub pending Phase 5.4). Subagent events do not bleed into the parent's `for await` — captured internally and surfaced as a single `tool_result` carrying `{ subagentSessionId, status, text, costUsd?, durationMs?, usage?, reason? }`. Depth-cap rejection (`maxSubagentDepth = 3` default, chain of at most parent → sub → sub-sub) returns `{ error: 'max subagent depth (3) exceeded', subagentSessionId }`. Fires `SubagentStart` / `SubagentEnd` on the parent's `onHook` (matched pair, even on depth-cap rejection). See the [Subagents](#subagents) subsection.          |
 | `tool_search`       | **Opt-in** via `OpenRouterAgentRun({ enableToolSearch: true })` (NOT in the default bundle). Search the catalog of MCP tools registered via `mcpServers` / `autoDiscoverMcp`. Inputs: `query` (case-insensitive substring + token match), optional `limit` (default 10, capped at 50). Returns `{ matches: Array<{ name, server, description?, schema_preview?, score }>, note? }`; `schema_preview` is char-capped at 200 with `…` truncation. See ["Dynamic tool discovery"](#dynamic-tool-discovery-tool_search--tool_load).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `tool_load`         | **Opt-in** via `OpenRouterAgentRun({ enableToolSearch: true })` — bundled alongside `tool_search`. Register one or more MCP tools (by prefixed `serverName__toolName`, from a prior `tool_search`) into the run's working set so subsequent turns can call them. Input: `names: string[]` (1+ entries; duplicates within a single call coalesce). Returns `{ loaded, alreadyLoaded, notFound }`. Each successful load fires `Notification(level: 'info', message: 'tool_loaded', context: { name, server })`. Loaded state is per-run and does not propagate to subagents.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `skill`             | **Opt-in** via `OpenRouterAgentRun({ skills })` or `{ skillsDir }`. Invoke a discovered skill by name. Renders the body (variable + positional/named argument + inline/fenced shell substitution) and returns the result as the tool envelope `{ name, source, content, subagentSessionId?, error? }`. When the skill's frontmatter sets `context: fork`, routes through the Phase 4.7 subagent runner (requires `enableSubagents: true`). Per-skill `allowed-tools` narrows the run-level permission policy for the duration of the render. See the [Skills](#skills-claudeskillsnameskillmd) subsection.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `spawn_subagents`   | **Opt-in** via `OpenRouterAgentRun({ enableSubagents: true })` — bundled alongside `spawn_subagent`. Phase 4.9 plural variant: delegate MULTIPLE independent subtasks to child agents in parallel through an inline concurrency-capped promise pool. Input: `subagents: Array<spec>` (1 to `MAX_PARALLEL_BATCH_SIZE` = 16) where each spec accepts the same fields as the singular tool (per-spec `model` / `permission_mode` / `allowed_tools` / etc. propagate independently). Concurrency cap defaults to `maxParallelSubagents = 4` (configurable). No fail-fast — per-child failures isolate (envelope `{ status: 'success' \| 'error' \| 'aborted', subagentSessionId, output, error? }`); aggregate cost / tokens sum SUCCESS envelopes only. Parent abort fans out into every in-flight child (`AbortSignal.any` composition). Recursion-depth cap reuses the singular tool's gate — depth-N parent at the cap rejects each spec with the same `'max subagent depth (N) exceeded'` error envelope. Returns `{ results, aggregatedUsage: { usd, tokensIn, tokensOut, totalTokens }, durationMs }`. See the [Parallel subagents](#parallel-subagents) subsection. |
 
 Server-side tools (execute on OpenRouter's backend, injected via SDK hooks):

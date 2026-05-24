@@ -19,6 +19,17 @@ import {
   resolveCompactionThresholdChars,
 } from './compaction.js';
 import { allTools } from './tools/index.js';
+import {
+  createSkillLoader,
+  type SkillLoader,
+  type SkillInfo,
+  type SubstitutionContext,
+} from './skills/index.js';
+import {
+  DEFAULT_SKILL_DESCRIPTION_BUDGET,
+  buildSkillListing,
+  type ActiveSkillContext,
+} from './tools/skill.js';
 import { createServerToolsHooks } from './tools/server-tools.js';
 import { type ToolContext } from './tools/context.js';
 import type { OnAskUserQuestion } from './tools/ask-user-question.js';
@@ -476,6 +487,48 @@ export interface OpenRouterAgentRunOptions {
    * constructor opts produce.
    */
   enableToolSearch?: boolean;
+  /**
+   * Phase 5.7: opt-in skill registry. When set, the agent appends the `skill`
+   * built-in tool to the default bundle and injects a `## Available Skills`
+   * block into the system instructions (within {@link skillDescriptionBudget})
+   * so the model can pick a skill by name. Skills whose listing was dropped
+   * over budget remain callable by exact name but won't auto-trigger.
+   *
+   * Pass either a pre-built {@link SkillLoader} (host has already configured
+   * its scopes), or rely on {@link skillsDir} below to construct one from
+   * `cwd`. Ignored when the caller supplies a custom `tools` array.
+   */
+  skills?: SkillLoader;
+  /**
+   * Phase 5.7: convenience for the common case where the host just wants
+   * project-scope `.claude/skills/` + user-scope `~/.claude/skills/` discovery
+   * with no plugin roots. When set, the agent constructs a default
+   * {@link SkillLoader} bound to this path. Ignored when {@link skills} is
+   * also set (the explicit loader wins).
+   */
+  skillsDir?: string;
+  /**
+   * Phase 5.7: max fraction of the model's context window to spend on the
+   * skill listing block injected into the system prompt. Defaults to
+   * {@link DEFAULT_SKILL_DESCRIPTION_BUDGET} (~1%). Skills overflowing the
+   * budget are dropped from the listing in source-precedence + alphabetical
+   * order; the loader still knows them and they can be invoked by exact name.
+   */
+  skillDescriptionBudget?: number;
+  /**
+   * Phase 5.7: when `true`, every `` !`cmd` `` block inside a rendered skill
+   * body is replaced with `[shell command execution disabled by policy]`
+   * instead of running. Mirrors Claude Code's `disableSkillShellExecution`
+   * settings flag. Defaults to `false`.
+   */
+  disableSkillShellExecution?: boolean;
+  /**
+   * Phase 5.7: environment values exposed to the skill substitution helper
+   * via the generic `${VAR}` passthrough. Keep this NARROW — passing the full
+   * `process.env` would leak host env vars into the rendered body. Defaults
+   * to `{}` (only the well-known `CLAUDE_*` keys resolve).
+   */
+  skillEnv?: Readonly<Record<string, string>>;
 }
 
 interface ResolvedOptions {
@@ -536,6 +589,14 @@ interface ResolvedOptions {
   autoDiscoverMcp: boolean;
   /** Phase 5.5: resolved tool-search opt-in (defaults to `false`). */
   enableToolSearch: boolean;
+  /** Phase 5.7: resolved skill loader (or undefined when skills are not configured). */
+  skills?: SkillLoader;
+  /** Phase 5.7: resolved budget fraction for the listing block. */
+  skillDescriptionBudget: number;
+  /** Phase 5.7: resolved shell-exec policy flag. */
+  disableSkillShellExecution: boolean;
+  /** Phase 5.7: resolved env passthrough for skill substitution. */
+  skillEnv: Readonly<Record<string, string>>;
 }
 
 function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
@@ -581,6 +642,7 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
   } else if (opts.permissionMode !== undefined) {
     canUseTool = permissionModeToCanUseTool(opts.permissionMode);
   }
+  const skills = resolveSkillLoader(opts, cwd);
   return {
     apiKey: opts.apiKey,
     sessionId: opts.sessionId,
@@ -620,7 +682,29 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     ...(opts.mcpServers !== undefined && { mcpServers: opts.mcpServers }),
     autoDiscoverMcp: opts.autoDiscoverMcp ?? false,
     enableToolSearch: opts.enableToolSearch ?? false,
+    ...(skills !== undefined && { skills }),
+    skillDescriptionBudget: opts.skillDescriptionBudget ?? DEFAULT_SKILL_DESCRIPTION_BUDGET,
+    disableSkillShellExecution: opts.disableSkillShellExecution ?? false,
+    skillEnv: opts.skillEnv ?? {},
   };
+}
+
+/**
+ * Resolve the skill loader from the constructor options. Explicit `skills`
+ * wins; otherwise `skillsDir` constructs a default loader. Returns `undefined`
+ * when neither is set (no skill wiring happens).
+ */
+function resolveSkillLoader(opts: OpenRouterAgentRunOptions, cwd: string): SkillLoader | undefined {
+  if (opts.skills !== undefined) return opts.skills;
+  if (opts.skillsDir !== undefined) {
+    return createSkillLoader({ cwd: opts.skillsDir, ...(opts.logger && { logger: opts.logger }) });
+  }
+  // Pass cwd through so the inferred-default loader walks from the run's cwd
+  // when both `skills` and `skillsDir` are omitted but a caller-side helper
+  // wanted a loader-or-undefined. Currently no opt enables this implicit
+  // path — keeping the function shape future-proof for 5.8 plugin wiring.
+  void cwd;
+  return undefined;
 }
 
 /**
@@ -1040,10 +1124,35 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     // Discovery happens here (not in resolveOptions) so the constructor stays
     // synchronous and the public API shape is unchanged. When settingSources
     // is empty, composeInstructions short-circuits without any FS reads.
-    const instructions =
+    const composedInstructions =
       settingSources.length > 0
         ? await composeInstructions({ cwd, settingSources, instructions: baseInstructions, logger })
         : baseInstructions;
+    // Phase 5.7: discover skills (if a loader is configured) and append a
+    // `## Available Skills` block to the instructions within the configured
+    // budget. Skills dropped from the listing remain callable by exact name.
+    const skillsForRun = this.opts.skills ? await this.opts.skills.list() : [];
+    const skillVisibleNames: string[] = [];
+    let instructions = composedInstructions;
+    if (skillsForRun.length > 0) {
+      const budgetChars = Math.max(128, Math.floor(this.opts.skillDescriptionBudget * 200_000));
+      const listing = buildSkillListing(skillsForRun, budgetChars);
+      if (listing.length > 0) {
+        instructions = `${composedInstructions}\n\n${listing}`;
+        // Parse visible names back out of the listing block so the skill
+        // tool's description can mirror them. The listing entries are lines
+        // starting with `- \``. This avoids passing the buildSkillListing
+        // result back as a structured object and keeps the data flow simple.
+        for (const line of listing.split('\n')) {
+          const m = /^-\s+`([^`]+)`/.exec(line);
+          if (m && m[1] !== undefined) skillVisibleNames.push(m[1]);
+        }
+      } else {
+        // Listing was empty (every skill had disable-model-invocation or the
+        // budget was tighter than the smallest entry). Keep skillsForRun
+        // around so the tool can still be invoked by exact name.
+      }
+    }
 
     const startMs = Date.now();
     let maxTurnNumber = 0;
@@ -1328,6 +1437,43 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       const loadedToolNames = new Set<string>();
       const toolsForRun: Tool[] = [];
 
+      // Phase 5.7: per-skill active context. When the `skill` tool fires, it
+      // installs an {@link ActiveSkillContext} via `setActiveSkill` so the
+      // wrapped canUseTool below narrows the run-level permission rules to
+      // the skill's `allowed-tools`. Disposed in the skill tool's `finally`.
+      let activeSkill: ActiveSkillContext | undefined;
+      const setActiveSkill = (cxt: ActiveSkillContext): (() => void) => {
+        activeSkill = cxt;
+        return () => {
+          if (activeSkill === cxt) activeSkill = undefined;
+        };
+      };
+      // Compose: when a skill is active AND it declares an allow-list, layer
+      // those rules ON TOP of the run-level canUseTool. The narrowed gate
+      // matches first; if it denies, we still consult the run-level gate
+      // (which may further narrow). Allow → run-level gate may still deny.
+      const baseCanUseTool = this.opts.canUseTool;
+      const composedCanUseTool: CanUseTool | undefined =
+        baseCanUseTool || skillsForRun.length > 0
+          ? async (toolName, input) => {
+              if (activeSkill?.allowedToolsNarrowing) {
+                const skillGate = buildToolFilterCanUseTool({
+                  allowedTools: activeSkill.allowedToolsNarrowing,
+                });
+                const decision = await skillGate(toolName, input);
+                if (decision.behavior === 'deny') {
+                  // A skill's narrowing only adds tools; the build above
+                  // defaults to allow-all when nothing matches. Reaching here
+                  // means the model called a tool the skill DOES list but
+                  // the scoped pattern rejected — surface it.
+                  return decision;
+                }
+              }
+              if (baseCanUseTool) return baseCanUseTool(toolName, input);
+              return { behavior: 'allow' };
+            }
+          : undefined;
+
       // Order of wraps (innermost → outermost): ctx-bound execute, then
       // canUseTool gate, then hook wrapper. The hook wrapper is outermost so
       // PreToolUse fires before the canUseTool decision (audit always fires,
@@ -1335,8 +1481,8 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       // resolved — including the synth-deny payload from a canUseTool denial.
       const wrapTool = (t: Tool): Tool => {
         let wrapped: Tool = t;
-        if (this.opts.canUseTool) {
-          wrapped = wrapToolWithPermission(wrapped, this.opts.canUseTool);
+        if (composedCanUseTool) {
+          wrapped = wrapToolWithPermission(wrapped, composedCanUseTool);
         }
         if (onHook) {
           wrapped = wrapToolWithHooks(wrapped, safeFireHook, logger);
@@ -1395,6 +1541,40 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
                     context: { name, server },
                   });
                 },
+              },
+            }),
+            ...(this.opts.skills && {
+              skill: {
+                loader: this.opts.skills,
+                visibleNames: skillVisibleNames,
+                buildContext: (args, skill): SubstitutionContext => ({
+                  arguments: args,
+                  sessionId,
+                  projectDir: cwd,
+                  cwd,
+                  env: this.opts.skillEnv,
+                  signal,
+                  disableShellExecution: this.opts.disableSkillShellExecution,
+                  ...(this.opts.effort !== undefined && { effort: this.opts.effort }),
+                  ...(skill.frontmatter.arguments !== undefined && {
+                    named: namedFromPositional(skill.frontmatter.arguments, args),
+                  }),
+                }),
+                onSkillLoaded: async (skill: SkillInfo) => {
+                  await safeFireHook('Notification', {
+                    event: 'Notification',
+                    level: 'info',
+                    message: 'skill_loaded',
+                    context: { name: skill.name, source: skill.source },
+                  });
+                },
+                onSkillActive: setActiveSkill,
+                ...(this.opts.enableSubagents && {
+                  runSubagent,
+                  parentSessionId: sessionId,
+                  currentSubagentDepth: this.opts.currentSubagentDepth,
+                }),
+                ...(logger && { logger }),
               },
             }),
           });
@@ -2017,6 +2197,24 @@ function parsePreToolUseAction(
     action: obj.action,
   });
   return { action: 'continue' };
+}
+
+/**
+ * Build the `named` argument map a skill body's `$<name>` substitutions read
+ * from. The frontmatter's `arguments: [foo, bar]` list pairs positionally with
+ * the runtime argv — entry 0 maps to `$foo`, entry 1 maps to `$bar`. Missing
+ * positions resolve to empty strings (matches Claude Code's documented
+ * behaviour for "argument never supplied").
+ */
+function namedFromPositional(
+  names: readonly string[],
+  args: readonly string[],
+): Readonly<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (let i = 0; i < names.length; i++) {
+    out[names[i]!] = i < args.length ? args[i]! : '';
+  }
+  return out;
 }
 
 function deriveCompletionStatus(input: DeriveCompletionInput): AgentCoreEventStatus {
