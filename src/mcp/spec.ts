@@ -59,9 +59,17 @@ export interface McpStdioClientOptions {
   /** Optional diagnostics sink. Receives child-process stderr lines. */
   logger?: LoggerFn;
   /**
-   * Aborts the connection. When pre-aborted, `connect()` rejects synchronously.
-   * When fired mid-handshake or after connect, the underlying transport is
-   * closed and pending JSON-RPC requests reject with an `AbortError`.
+   * Client-lifecycle abort signal. Pre-aborted: `connect()` rejects
+   * synchronously. Fired during the handshake: the transport is closed and the
+   * SDK's pending `initialize` rejects with an `AbortError`. Fired after
+   * `connect()` resolves: the transport is still torn down and the client is
+   * marked closed, so subsequent wrapper calls reject via the same path as a
+   * post-`close()` call.
+   *
+   * For cancelling a single in-flight request without affecting the rest of
+   * the client, pass a per-call `signal?` to the individual wrapper methods
+   * (`listTools`, `callTool`, etc.). The lifecycle signal and per-call signal
+   * compose — whichever fires first rejects the underlying SDK request.
    */
   signal?: AbortSignal;
 }

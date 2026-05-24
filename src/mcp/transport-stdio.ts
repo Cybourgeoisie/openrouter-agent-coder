@@ -45,6 +45,7 @@ export class McpStdioClient {
   private transport?: StdioClientTransport;
   private closed = false;
   private connectStarted = false;
+  private lifecycleAbortListener?: () => void;
 
   constructor(opts: McpStdioClientOptions) {
     this.opts = opts;
@@ -54,8 +55,12 @@ export class McpStdioClient {
    * Spawns the subprocess, opens the stdio transport, and completes the MCP
    * `initialize` handshake. Idempotent in a narrow sense — calling twice is
    * an error (the SDK's `Client.connect` itself errors if called twice).
+   *
+   * The optional `signal` cancels this specific handshake call. It composes
+   * with the lifecycle signal passed to the constructor — whichever fires
+   * first aborts the SDK request.
    */
-  async connect(): Promise<void> {
+  async connect(signal?: AbortSignal): Promise<void> {
     if (this.closed) {
       throw new Error('McpStdioClient: cannot connect after close()');
     }
@@ -64,8 +69,12 @@ export class McpStdioClient {
     }
     this.connectStarted = true;
 
-    if (this.opts.signal?.aborted) {
-      throw abortError(this.opts.signal.reason);
+    const lifecycle = this.opts.signal;
+    if (lifecycle?.aborted) {
+      throw abortError(lifecycle.reason);
+    }
+    if (signal?.aborted) {
+      throw abortError(signal.reason);
     }
 
     const [{ Client: ClientCtor }, { StdioClientTransport: TransportCtor }] = await Promise.all([
@@ -94,29 +103,48 @@ export class McpStdioClient {
     this.client = client;
     this.transport = transport;
 
-    // Mid-handshake abort: tear the transport down so the SDK's pending
-    // `initialize` request settles with an AbortError instead of hanging.
-    const abortListener = () => {
-      void safeClose(transport);
-    };
-    const signal = this.opts.signal;
-    signal?.addEventListener('abort', abortListener, { once: true });
+    // Lifecycle-signal listener: extends past `connect()` so a post-handshake
+    // abort of the constructor signal also tears the client down. Removed in
+    // `close()` (or on handshake failure, below). Per-method signals are
+    // composed via `composeSignals` and do NOT trigger this teardown path.
+    if (lifecycle) {
+      const listener = () => {
+        // close() always removes this listener before resetting state, so by
+        // construction `this.closed` is false when the listener fires.
+        this.closed = true;
+        this.client = undefined;
+        this.transport = undefined;
+        void safeClose(transport);
+        const stderr = transport.stderr as { destroy?: () => void } | null | undefined;
+        stderr?.destroy?.();
+      };
+      this.lifecycleAbortListener = listener;
+      lifecycle.addEventListener('abort', listener);
+    }
 
     try {
-      await client.connect(transport, { signal });
+      const composed = composeSignals(lifecycle, signal);
+      await client.connect(transport, composed ? { signal: composed } : undefined);
     } catch (err) {
-      // Make sure we don't leak the subprocess if the handshake failed.
+      if (lifecycle && this.lifecycleAbortListener) {
+        lifecycle.removeEventListener('abort', this.lifecycleAbortListener);
+        this.lifecycleAbortListener = undefined;
+      }
       await safeClose(transport);
       this.client = undefined;
       this.transport = undefined;
       throw err;
-    } finally {
-      signal?.removeEventListener('abort', abortListener);
     }
   }
 
   /** Idempotent — calling on an already-closed client is a no-op. */
   async close(): Promise<void> {
+    // Always detach the lifecycle listener if present, even on a re-close, so
+    // we don't leak a reference back to the caller's AbortSignal.
+    if (this.opts.signal && this.lifecycleAbortListener) {
+      this.opts.signal.removeEventListener('abort', this.lifecycleAbortListener);
+      this.lifecycleAbortListener = undefined;
+    }
     if (this.closed) return;
     this.closed = true;
     const client = this.client;
@@ -143,31 +171,45 @@ export class McpStdioClient {
     return this.client?.getServerVersion();
   }
 
-  async listTools(): Promise<ListToolsResult> {
-    return this.requireClient().listTools();
+  async listTools(signal?: AbortSignal): Promise<ListToolsResult> {
+    return this.requireClient().listTools(undefined, this.requestOptions(signal));
   }
 
-  async callTool(name: string, args?: Record<string, unknown>): Promise<CallToolResult> {
-    return (await this.requireClient().callTool({
-      name,
-      arguments: args,
-    })) as CallToolResult;
+  async callTool(
+    name: string,
+    args?: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<CallToolResult> {
+    return (await this.requireClient().callTool(
+      { name, arguments: args },
+      undefined,
+      this.requestOptions(signal),
+    )) as CallToolResult;
   }
 
-  async listResources(): Promise<ListResourcesResult> {
-    return this.requireClient().listResources();
+  async listResources(signal?: AbortSignal): Promise<ListResourcesResult> {
+    return this.requireClient().listResources(undefined, this.requestOptions(signal));
   }
 
-  async readResource(uri: string): Promise<ReadResourceResult> {
-    return this.requireClient().readResource({ uri });
+  async readResource(uri: string, signal?: AbortSignal): Promise<ReadResourceResult> {
+    return this.requireClient().readResource({ uri }, this.requestOptions(signal));
   }
 
-  async listPrompts(): Promise<ListPromptsResult> {
-    return this.requireClient().listPrompts();
+  async listPrompts(signal?: AbortSignal): Promise<ListPromptsResult> {
+    return this.requireClient().listPrompts(undefined, this.requestOptions(signal));
   }
 
-  async getPrompt(name: string, args?: Record<string, string>): Promise<GetPromptResult> {
-    return this.requireClient().getPrompt({ name, arguments: args });
+  async getPrompt(
+    name: string,
+    args?: Record<string, string>,
+    signal?: AbortSignal,
+  ): Promise<GetPromptResult> {
+    return this.requireClient().getPrompt({ name, arguments: args }, this.requestOptions(signal));
+  }
+
+  private requestOptions(perCall?: AbortSignal): { signal: AbortSignal } | undefined {
+    const composed = composeSignals(this.opts.signal, perCall);
+    return composed ? { signal: composed } : undefined;
   }
 
   private requireClient(): Client {
@@ -176,6 +218,12 @@ export class McpStdioClient {
     }
     return this.client;
   }
+}
+
+function composeSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return AbortSignal.any([a, b]);
 }
 
 function abortError(reason: unknown): Error {

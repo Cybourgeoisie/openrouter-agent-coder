@@ -30,6 +30,15 @@ server.registerTool(
   }),
 );
 
+server.registerTool(
+  'hang',
+  {
+    description: 'Never resolves — used to test per-call signal cancellation',
+    inputSchema: {},
+  },
+  () => new Promise(() => {}),
+);
+
 server.registerResource(
   'greeting',
   'memory://greeting.txt',

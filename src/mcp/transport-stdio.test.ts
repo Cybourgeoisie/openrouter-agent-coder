@@ -1,3 +1,9 @@
+// NOTE: A cosmetic `close timed out after 10000ms` message can appear AFTER
+// `Tests closed successfully` when this file runs in vitest. Exit code is 0
+// and 100% of tests pass — root cause is the SDK's `StdioClientTransport`
+// cleanup outliving vitest's pool-close gate. Background in PR #115; do not
+// chase this.
+
 import { describe, it, expect } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -23,9 +29,15 @@ function makeClient(opts: ConstructorParameters<typeof McpStdioClient>[0]) {
 
 describe('McpStdioClient', () => {
   it('module import has no side-effects (does not load the SDK)', async () => {
-    // Reload the module under a fresh import and confirm it returns without
-    // requiring @modelcontextprotocol/sdk on the call path. The SDK is only
-    // imported inside connect().
+    // What this DOES cover: re-importing the module + constructing a client
+    // does not throw, does not perform I/O, and does not spawn a subprocess.
+    // What this does NOT cover: a static SDK import would still pass this
+    // test — the lazy-load contract is verified at build time (the top of
+    // `transport-stdio.ts` uses `import type` only) and by reading the
+    // compiled `dist/mcp/transport-stdio.js` for absence of `import` /
+    // `require` of the SDK. TODO(PR #115): consider strengthening to a child
+    // `node -e` that asserts `require.cache` / `process.moduleLoadList` has
+    // no `modelcontextprotocol` entries before connect().
     const mod = await import('./transport-stdio.js');
     expect(typeof mod.McpStdioClient).toBe('function');
     // No-op constructor, no I/O, no spawn.
@@ -52,7 +64,7 @@ describe('McpStdioClient', () => {
       await client.connect();
       const { tools } = await client.listTools();
       const names = tools.map((t) => t.name).sort();
-      expect(names).toEqual(['echo', 'fail']);
+      expect(names).toEqual(['echo', 'fail', 'hang']);
       const echo = tools.find((t) => t.name === 'echo');
       expect(echo?.inputSchema).toMatchObject({ type: 'object' });
     } finally {
@@ -127,14 +139,13 @@ describe('McpStdioClient', () => {
     }
   });
 
-  it('rejects connect() after close()', async () => {
+  it('rejects connect() after close() on the same instance', async () => {
+    // Exercise the post-close branch on the SAME instance: connect, close,
+    // then attempt to re-connect — should reject with /after close/.
     const client = echoClient();
     await client.connect();
     await client.close();
-    const reopen = echoClient();
-    // Verify the post-close branch on the same instance, not a fresh one.
-    await reopen.close();
-    await expect(reopen.connect()).rejects.toThrow(/after close/);
+    await expect(client.connect()).rejects.toThrow(/after close/);
   });
 
   it('listResources / readResource passthrough', async () => {
@@ -201,6 +212,107 @@ describe('McpStdioClient', () => {
         (l) => l.level === 'debug' && l.message.includes('hello-from-fixture'),
       );
       expect(debugMsg).toBeTruthy();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('connect(signal) rejects when the per-call signal is pre-aborted', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('per-call pre-abort'));
+    const client = echoClient();
+    await expect(client.connect(controller.signal)).rejects.toThrow(/per-call pre-abort/);
+    await client.close();
+  });
+
+  it('per-method signal pre-aborted on listTools rejects without affecting the client', async () => {
+    const client = echoClient();
+    try {
+      await client.connect();
+      const controller = new AbortController();
+      controller.abort(new Error('per-call listTools'));
+      await expect(client.listTools(controller.signal)).rejects.toThrow();
+      // Client is still healthy — a follow-up call without a signal succeeds.
+      const { tools } = await client.listTools();
+      expect(tools.length).toBeGreaterThan(0);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('mid-call abort on callTool rejects that call and leaves the client connected', async () => {
+    const client = echoClient();
+    try {
+      await client.connect();
+      const controller = new AbortController();
+      const pending = client.callTool('hang', {}, controller.signal);
+      setTimeout(() => controller.abort(new Error('mid-call abort')), 50);
+      await expect(pending).rejects.toThrow();
+      // Follow-up call on the same client succeeds — the abort did not tear
+      // down the transport.
+      const ok = await client.callTool('echo', { message: 'after abort' });
+      expect(ok.content).toMatchObject([{ type: 'text', text: 'after abort' }]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('per-method signal on readResource / getPrompt is honored', async () => {
+    const client = echoClient();
+    try {
+      await client.connect();
+      const c1 = new AbortController();
+      c1.abort(new Error('rr-abort'));
+      await expect(client.readResource('memory://greeting.txt', c1.signal)).rejects.toThrow();
+      const c2 = new AbortController();
+      c2.abort(new Error('gp-abort'));
+      await expect(client.getPrompt('wave', { name: 'x' }, c2.signal)).rejects.toThrow();
+      // Client still healthy.
+      const read = await client.readResource('memory://greeting.txt');
+      expect(read.contents[0]).toMatchObject({ text: 'hello from fixture' });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('lifecycle signal aborted AFTER connect causes subsequent calls to reject', async () => {
+    const controller = new AbortController();
+    const client = echoClient({ signal: controller.signal });
+    try {
+      await client.connect();
+      // Sanity: client is usable before abort.
+      await client.listTools();
+      controller.abort(new Error('post-handshake lifecycle abort'));
+      await expect(client.listTools()).rejects.toThrow(/not connected/);
+    } finally {
+      // close() after a lifecycle-driven close must still be a no-op.
+      await client.close();
+      await expect(client.close()).resolves.toBeUndefined();
+    }
+  });
+
+  it('handshake failure without a lifecycle signal still cleans up', async () => {
+    // Covers the catch path of connect() without a lifecycle listener to
+    // remove. Child exits immediately so the SDK's initialize rejects.
+    const client = makeClient({
+      command: process.execPath,
+      args: ['-e', 'process.exit(1)'],
+    });
+    await expect(client.connect()).rejects.toThrow();
+    await client.close();
+  });
+
+  it('lifecycle signal composes with per-call signal — per-call rejects without closing client', async () => {
+    const lifecycle = new AbortController();
+    const client = echoClient({ signal: lifecycle.signal });
+    try {
+      await client.connect();
+      const perCall = new AbortController();
+      perCall.abort(new Error('per-call wins'));
+      await expect(client.listTools(perCall.signal)).rejects.toThrow();
+      // Lifecycle signal never fired, so the client is still connected.
+      const { tools } = await client.listTools();
+      expect(tools.length).toBeGreaterThan(0);
     } finally {
       await client.close();
     }
