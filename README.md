@@ -889,11 +889,58 @@ await sse.connect();
 await sse.close();
 ```
 
-**Preview status — NOT wired into agent runs yet.** Card 5.2.3 adds
-`.mcp.json` discovery, 5.2.4 bridges discovered MCP tools into the
-agent's `Tool[]` registry, and 5.2.5 adds `McpServerStart` /
-`McpServerStop` lifecycle hooks. Until those land the surface here is
-exported but not consumed by `OpenRouterAgentRun`.
+#### Config file (preview)
+
+Phase 5.2.3 ships `loadMcpConfig()` — a pure async loader for
+`.mcp.json` discovery in two scopes:
+
+- **`'user'`** — `<os.homedir()>/.mcp.json` (NOT `process.env.HOME`).
+- **`'project'`** — walk up from `cwd` reading `<dir>/.mcp.json` at each
+  level, stopping at the first `.git` ancestor or after 10 directories.
+  Deeper-dir entries override shallower-dir entries by server name.
+
+Default scope order is `['user', 'project']` so project entries override
+user entries (full replacement, not deep merge). Caller supplies `cwd`
+explicitly; when omitted the project scope is silently skipped (user
+scope still works) — preserving the codebase's single-`process.cwd()`
+invariant.
+
+```jsonc
+// .mcp.json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "node",
+      "args": ["server.js"],
+      "env": { "FOO": "bar" },
+      // "transport": "stdio" — optional; inferred from `command`/`url`
+    },
+    "remote": {
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer …" },
+    },
+  },
+}
+```
+
+```ts
+import { loadMcpConfig } from 'openrouter-agent-coder';
+
+const servers = await loadMcpConfig({ cwd: process.cwd() });
+// → [{ transport: 'stdio', name: 'my-server', command: 'node', args: [...], env: {...}, source: '/abs/path/.mcp.json' }, ...]
+// Sorted by name. Each entry stamped with the absolute path of the file it came from.
+```
+
+Each entry includes a `source` field with the absolute path of the
+originating file — kept for debuggability when 5.2.4 surfaces "failed to
+spawn server X" errors. Schema violations (missing both `command` and
+`url`, having both, invalid URL, etc.) throw with the file path in the
+message.
+
+**Preview status — NOT wired into agent runs yet.** Card 5.2.4 bridges
+discovered MCP tools into the agent's `Tool[]` registry, and 5.2.5 adds
+`McpServerStart` / `McpServerStop` lifecycle hooks. Until those land the
+surface here is exported but not consumed by `OpenRouterAgentRun`.
 
 ## Tools shipped with the library
 
