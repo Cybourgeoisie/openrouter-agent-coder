@@ -30,6 +30,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Phase 5.2.3: MCP `.mcp.json` config discovery (preview). New
+  `loadMcpConfig()` in `src/mcp/config.ts` — pure async loader that
+  walks for `.mcp.json` in two scopes (`'user'` =
+  `<os.homedir()>/.mcp.json`, `'project'` = walk up from `cwd` to the
+  first `.git` ancestor capped at 10 directories) and returns a
+  deterministically-sorted flat `McpServerConfig[]`. Each entry is a
+  discriminated union (`transport: 'stdio' | 'http'`) inferred from
+  `command` vs `url` presence (or honoured explicitly when set), and
+  stamped with the absolute `source` path of the originating file for
+  debuggability. Default scope order is `['user', 'project']` — project
+  entries override user entries by NAME (full replacement, not deep
+  merge). `cwd` is optional; when omitted the project scope is silently
+  skipped (user scope still works) — preserves the single
+  `process.cwd()` invariant. Schema (Zod v4) rejects entries with both
+  `command` and `url`, neither, malformed URL, or an explicit
+  `transport` field that contradicts the field shape; errors include
+  the offending file path. **Not wired into `OpenRouterAgentRun` yet**
+  — that flips in Card 5.2.5 (lifecycle hooks) after the bridge in
+  5.2.4 lands.
 - Phase 5.2.2: MCP HTTP + SSE transport (preview). New
   `McpHttpClient` in `src/mcp/transport-http.ts` wraps
   `@modelcontextprotocol/sdk`'s `Client` driven by either

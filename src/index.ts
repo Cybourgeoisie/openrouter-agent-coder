@@ -100,6 +100,14 @@ export {
 } from './compaction.js';
 export { accountInfo, supportedModels } from './openrouter-api.js';
 export type { AccountInfo, ModelInfo } from './openrouter-api.js';
+export { loadMcpConfig } from './mcp/config.js';
+export type {
+  McpServerConfig,
+  McpStdioServerConfig,
+  McpHttpServerConfig,
+  McpConfigScope,
+  LoadMcpConfigOptions,
+} from './mcp/config.js';
 export type {
   AgentMessage,
   SystemMessage,
