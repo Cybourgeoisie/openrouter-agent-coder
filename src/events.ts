@@ -42,7 +42,27 @@ export type HookEvent =
   | 'SessionEnd'
   | 'Stop'
   | 'Setup'
-  | 'Notification';
+  | 'Notification'
+  | 'SubagentStart'
+  | 'SubagentEnd';
+
+/**
+ * Summary of a finished subagent run. Mirrors the fields of a `stream_complete`
+ * {@link AgentCoreEvent} (the same shape surfaced as a `ResultMessage` on the
+ * aggregated message stream). Carried on the {@link HookPayload} variant for
+ * `SubagentEnd` so subscribers can correlate cost/usage/duration with the
+ * subagent that produced them. `text` is the concatenation of every
+ * `text_delta` the subagent yielded — the same byte stream the parent's
+ * model sees inside the `spawn_subagent` tool_result.
+ */
+export interface SubagentResultSummary {
+  status: AgentCoreEventStatus;
+  usage?: TokenUsage | null;
+  costUsd?: number;
+  durationMs?: number;
+  reason?: string;
+  text: string;
+}
 
 /**
  * Discriminated union of hook payloads. The `event` field is the discriminator
@@ -94,6 +114,44 @@ export type HookPayload =
       level: 'info' | 'warn' | 'error';
       message: string;
       context?: unknown;
+    }
+  /**
+   * Fires on the parent run's `onHook` immediately BEFORE a subagent is
+   * driven by the built-in `spawn_subagent` tool (Phase 4.7). Inherited
+   * hooks (`SessionStart`, `PreToolUse`, …) still fire from inside the
+   * subagent — `SubagentStart`/`SubagentEnd` bracket those without
+   * replacing them. `depth` is the subagent's own chain index (root = 0,
+   * first subagent = 1, …). `toolNames` echoes the optional whitelist
+   * supplied to the spawn (undefined → subagent inherited the full parent
+   * pool). The matching `SubagentEnd` always fires — even on a
+   * depth-cap rejection (carries `status: 'error'`, `reason: 'max
+   * subagent depth …'`) or a runner throw.
+   */
+  | {
+      event: 'SubagentStart';
+      parentSessionId: string;
+      subagentSessionId: string;
+      depth: number;
+      prompt: string;
+      toolNames?: readonly string[];
+    }
+  /**
+   * Fires on the parent run's `onHook` after a subagent run completes,
+   * aborts, or rejects at the depth cap (Phase 4.7). The `result` envelope
+   * mirrors the subagent's terminal `stream_complete` event — same fields
+   * the {@link import('./messages.js').ResultMessage} carries — plus the
+   * concatenated assistant text the parent's model receives as the
+   * `tool_result`. `result.status` reflects the run's exit status (or
+   * `'error'` on a depth-cap rejection / runner throw, with `reason`
+   * populated). Always paired 1:1 with the preceding `SubagentStart` (same
+   * `subagentSessionId` / `depth`).
+   */
+  | {
+      event: 'SubagentEnd';
+      parentSessionId: string;
+      subagentSessionId: string;
+      depth: number;
+      result: SubagentResultSummary;
     };
 
 /**

@@ -10,6 +10,7 @@ import { askUserQuestionTool, type AskUserQuestionToolOptions } from './ask-user
 import { taskCreateTool, taskUpdateTool, type OnTasksChanged, type TaskListRef } from './tasks.js';
 import { editNotebookTool } from './edit-notebook.js';
 import { monitorTool } from './monitor.js';
+import { spawnSubagentTool, type SpawnSubagentToolOptions } from './spawn-subagent.js';
 import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
 
 export { readFileTool } from './read-file.js';
@@ -36,6 +37,15 @@ export type {
 } from './edit-notebook.js';
 export { monitorTool } from './monitor.js';
 export type { MonitorResult, MonitorLine, MonitorError } from './monitor.js';
+export { spawnSubagentTool, DEFAULT_MAX_SUBAGENT_DEPTH } from './spawn-subagent.js';
+export type {
+  SpawnSubagentToolOptions,
+  SpawnSubagentToolResult,
+  SubagentRunConfig,
+  SubagentRunResult,
+  SubagentRunner,
+  SubagentLifecycleEmitter,
+} from './spawn-subagent.js';
 export type {
   TaskState,
   Task,
@@ -73,6 +83,16 @@ export interface AllToolsOptions {
    * fresh empty list per call.
    */
   taskListRef?: TaskListRef;
+  /**
+   * Opt-in {@link spawnSubagentTool} configuration. When omitted, the
+   * `spawn_subagent` tool is **NOT** included in the default bundle —
+   * subagent spawning stays an explicit, host-wired feature (mirrors
+   * `OpenRouterAgentRun({ enableSubagents: true })`, which threads the
+   * options struct in for the caller). Supply this to add the tool;
+   * the factory needs the parent's `runSubagent` closure to drive a
+   * child `OpenRouterAgentRun`. See {@link SpawnSubagentToolOptions}.
+   */
+  spawnSubagent?: SpawnSubagentToolOptions;
 }
 
 /**
@@ -90,7 +110,7 @@ export function allTools(
   opts: AllToolsOptions = {},
 ): readonly Tool[] {
   const taskListRef = opts.taskListRef ?? { tasks: [] };
-  return [
+  const tools: Tool[] = [
     readFileTool(ctx),
     writeFileTool(ctx),
     editFileTool(ctx),
@@ -104,4 +124,8 @@ export function allTools(
     editNotebookTool(ctx),
     monitorTool(ctx),
   ];
+  if (opts.spawnSubagent !== undefined) {
+    tools.push(spawnSubagentTool(opts.spawnSubagent, ctx));
+  }
+  return tools;
 }

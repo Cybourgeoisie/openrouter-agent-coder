@@ -23,6 +23,7 @@ export type {
   HookEvent,
   HookPayload,
   PreToolUseAction,
+  SubagentResultSummary,
   TokenUsage,
 } from './events.js';
 export {
@@ -33,6 +34,8 @@ export {
   taskUpdateTool,
   editNotebookTool,
   monitorTool,
+  spawnSubagentTool,
+  DEFAULT_MAX_SUBAGENT_DEPTH,
 } from './tools/index.js';
 export type {
   ToolContext,
@@ -58,6 +61,12 @@ export type {
   MonitorResult,
   MonitorLine,
   MonitorError,
+  SpawnSubagentToolOptions,
+  SpawnSubagentToolResult,
+  SubagentRunConfig,
+  SubagentRunResult,
+  SubagentRunner,
+  SubagentLifecycleEmitter,
 } from './tools/index.js';
 export { tool, createSdkMcpServer } from './custom-tools.js';
 export type { CustomToolConfig, SdkMcpServer, CreateSdkMcpServerConfig } from './custom-tools.js';
