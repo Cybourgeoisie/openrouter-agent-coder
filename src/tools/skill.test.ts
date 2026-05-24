@@ -96,6 +96,13 @@ describe('buildSkillListing', () => {
     expect(listing).not.toContain('drop');
   });
 
+  it('returns empty when budget cannot fit even the highest-precedence entry', () => {
+    // budgetChars: 1 forces the drop loop to evict every entry. kept === 0
+    // branch returns '' so no `## Available Skills` header is emitted.
+    const skills: SkillInfo[] = [fakeSkill('a', 'user', 'whatever')];
+    expect(buildSkillListing(skills, 1)).toBe('');
+  });
+
   it('sorts by source precedence then alphabetically', () => {
     const skills: SkillInfo[] = [
       fakeSkill('z-user', 'user'),

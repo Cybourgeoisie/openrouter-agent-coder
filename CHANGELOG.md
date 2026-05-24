@@ -76,6 +76,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gate on top of the run-level `canUseTool` / `permissionMode` /
   `allowedTools` for the duration of the render (install/dispose hook via
   `ActiveSkillContext`). Denials from the outer gate still win.
+  - Inline-render narrowing semantics: on the inline path, the skill's
+    `allowed-tools` is the complete set of tools the model may invoke
+    while the skill renders. Any tool not matched by at least one of the
+    listed rules is denied with reason
+    `tool '<name>' not in skill '<skill>' allowed-tools`. The run-level
+    gate (`canUseTool` / `allowedTools` / `disallowedTools` /
+    `permissionMode`) still runs after the narrow check and can deny
+    further — run-level deny-wins is preserved.
 
   Each successful render fires the `Notification` hook
   (`level: 'info'`, `message: 'skill_loaded'`, `context: { name, source }`)

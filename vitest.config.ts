@@ -16,10 +16,15 @@ export default defineConfig({
         // inline shell paths) that are individually low-value to cover
         // 1:1. Per-file coverage for the new code is ≥90% across all four
         // metrics. Pre-5.7 bar was 99.6/98.65/98.8/99.93.
-        statements: 98.9,
-        branches: 96.0,
-        functions: 98.5,
-        lines: 99.5,
+        //
+        // 5.7 follow-up: inline-render `allowed-tools` narrowing fix
+        // collapsed the unreachable deny branch in agent.ts and added two
+        // cheap branch-completing tests (buildSkillListing kept===0,
+        // formatExitFailure empty-stdout). Lock the gain.
+        statements: 99.14,
+        branches: 96.37,
+        functions: 98.52,
+        lines: 99.69,
       },
     },
   },

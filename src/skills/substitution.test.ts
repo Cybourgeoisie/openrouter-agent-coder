@@ -163,6 +163,15 @@ describe('renderSkillBody — shell execution', () => {
     expect(out).toContain('terminated by SIGTERM');
   });
 
+  it('omits the stdout line of the failure report when stdout is empty', async () => {
+    // Empty stdout + populated stderr exercises the `if (stdout)` false branch
+    // in formatExitFailure — the report should carry the reason and stderr
+    // line only, with no leading empty-stdout line.
+    const ctx = baseCtx();
+    const out = await renderSkillBody('!`bash -c "echo BOOM 1>&2; exit 1"`', ctx);
+    expect(out).toBe('[shell exit code 1]\nstderr: BOOM');
+  });
+
   it('captures stderr when the command writes to it', async () => {
     const ctx = baseCtx();
     const out = await renderSkillBody('!`bash -c "echo OK; echo NOPE 1>&2; exit 3"`', ctx);

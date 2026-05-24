@@ -52,7 +52,7 @@ import type {
   TokenUsage,
 } from './events.js';
 import { permissionModeToCanUseTool, type PermissionMode } from './permission-modes.js';
-import { buildToolFilterCanUseTool } from './tool-filters.js';
+import { buildToolFilterCanUseTool, compileRule } from './tool-filters.js';
 import { composeInstructions, type SettingSource } from './context-discovery.js';
 import { aggregateMessages, type AgentMessage } from './messages.js';
 import { forkSession, type ForkSessionResult } from './session-fork.js';
@@ -1449,24 +1449,26 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         };
       };
       // Compose: when a skill is active AND it declares an allow-list, layer
-      // those rules ON TOP of the run-level canUseTool. The narrowed gate
-      // matches first; if it denies, we still consult the run-level gate
-      // (which may further narrow). Allow → run-level gate may still deny.
+      // those rules ON TOP of the run-level canUseTool with NARROWING
+      // semantics — the skill's `allowed-tools` is the complete set of tools
+      // the model may invoke while the skill renders. A tool call not matched
+      // by ANY rule in the list is denied here. If the skill list passes the
+      // call through (matched or no narrowing in play), the run-level gate
+      // still runs and can further deny (run-level deny-wins is preserved).
       const baseCanUseTool = this.opts.canUseTool;
       const composedCanUseTool: CanUseTool | undefined =
         baseCanUseTool || skillsForRun.length > 0
           ? async (toolName, input) => {
               if (activeSkill?.allowedToolsNarrowing) {
-                const skillGate = buildToolFilterCanUseTool({
-                  allowedTools: activeSkill.allowedToolsNarrowing,
+                const inList = activeSkill.allowedToolsNarrowing.some((rule) => {
+                  const compiled = compileRule(rule);
+                  return compiled.toolName === toolName && compiled.matches(input);
                 });
-                const decision = await skillGate(toolName, input);
-                if (decision.behavior === 'deny') {
-                  // A skill's narrowing only adds tools; the build above
-                  // defaults to allow-all when nothing matches. Reaching here
-                  // means the model called a tool the skill DOES list but
-                  // the scoped pattern rejected — surface it.
-                  return decision;
+                if (!inList) {
+                  return {
+                    behavior: 'deny',
+                    reason: `tool '${toolName}' not in skill '${activeSkill.name}' allowed-tools`,
+                  };
                 }
               }
               if (baseCanUseTool) return baseCanUseTool(toolName, input);
