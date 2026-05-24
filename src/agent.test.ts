@@ -305,7 +305,11 @@ describe('OpenRouterAgentRun defaults', () => {
       tools: customTools,
     });
     await collect(run);
-    expect(callModelMock.mock.calls[0][0].tools).toBe(customTools);
+    // Phase 5.5: the agent always builds a per-run mutable Tool[] (so
+    // tool_load can register tools mid-cycle), so reference identity with
+    // the input array is no longer preserved. The tools value is unchanged
+    // when no wrappers (canUseTool / onHook) apply.
+    expect(callModelMock.mock.calls[0][0].tools).toStrictEqual(customTools);
   });
 
   it('passes apiKey, baseUrl, appTitle through to the OR client constructor', async () => {

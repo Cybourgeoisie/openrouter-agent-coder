@@ -36,6 +36,16 @@ export {
   monitorTool,
   spawnSubagentTool,
   DEFAULT_MAX_SUBAGENT_DEPTH,
+  toolSearchTool,
+  toolLoadTool,
+  MAX_SCHEMA_PREVIEW_CHARS,
+  SCHEMA_PREVIEW_TRUNCATION_MARKER,
+  DEFAULT_SEARCH_LIMIT,
+  MAX_SEARCH_LIMIT,
+  scoreMatch,
+  tokenize,
+  searchCatalog,
+  buildSchemaPreview,
 } from './tools/index.js';
 export type {
   ToolContext,
@@ -67,6 +77,12 @@ export type {
   SubagentRunResult,
   SubagentRunner,
   SubagentLifecycleEmitter,
+  SearchableTool,
+  ToolSearchMatch,
+  ToolSearchToolResult,
+  ToolSearchToolOptions,
+  ToolLoadToolResult,
+  ToolLoadToolOptions,
 } from './tools/index.js';
 export { tool, createSdkMcpServer } from './custom-tools.js';
 export type { CustomToolConfig, SdkMcpServer, CreateSdkMcpServerConfig } from './custom-tools.js';

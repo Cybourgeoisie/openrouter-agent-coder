@@ -451,6 +451,31 @@ export interface OpenRouterAgentRunOptions {
    * everything" behaviour. Ignored when {@link mcpServers} is set.
    */
   autoDiscoverMcp?: boolean;
+  /**
+   * Phase 5.5: opt the built-in `tool_search` + `tool_load` tools into the
+   * default tool bundle. When `true`, the agent appends both tools to the
+   * bundle AND hides every MCP bridge tool from the model's tool list until
+   * the model explicitly calls `tool_load`. The model uses `tool_search` to
+   * discover tools (returns name / server / description / truncated
+   * schema_preview / score) and then `tool_load({ names: [...] })` to
+   * register one or more tools for the rest of the run. Each successful
+   * load fires a `Notification` hook (`info`, `tool_loaded`) so audit
+   * consumers can observe the working-set growth.
+   *
+   * The "hidden until loaded" gate is the whole point — it converts the
+   * MCP catalog from a context-budget tax (every schema sent on every turn)
+   * to an opt-in lookup. When MCP servers are configured but
+   * `enableToolSearch` is `false`, the prior Phase 5.2.4 behaviour is
+   * preserved (every bridge tool is unconditionally visible to the model).
+   *
+   * Defaults to `false`. Ignored when the caller supplies a custom `tools`
+   * array (callers wire their own `tool_search` / `tool_load` via the
+   * exported {@link toolSearchTool} / {@link toolLoadTool} factories if
+   * they need to). Loaded-tool state is per-run and does NOT propagate to
+   * spawned subagents — subagents see whatever tool pool their own
+   * constructor opts produce.
+   */
+  enableToolSearch?: boolean;
 }
 
 interface ResolvedOptions {
@@ -509,6 +534,8 @@ interface ResolvedOptions {
   mcpServers?: readonly McpServerConfig[];
   /** Phase 5.2.4: resolved discovery toggle (defaults to `false`). */
   autoDiscoverMcp: boolean;
+  /** Phase 5.5: resolved tool-search opt-in (defaults to `false`). */
+  enableToolSearch: boolean;
 }
 
 function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
@@ -592,6 +619,7 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     autoCompact: opts.autoCompact ?? true,
     ...(opts.mcpServers !== undefined && { mcpServers: opts.mcpServers }),
     autoDiscoverMcp: opts.autoDiscoverMcp ?? false,
+    enableToolSearch: opts.enableToolSearch ?? false,
   };
 }
 
@@ -1254,11 +1282,68 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         }
         return summary;
       };
+      // Phase 5.2.4: spawn MCP servers AFTER `Setup` fired (above) and BEFORE
+      // the first `callModel` — keeps the ctor sync, matches the Phase 4.7
+      // subagent-runner closure pattern. Per-server failures are logged +
+      // surfaced as `Notification`-hook events by the bridge; the run
+      // continues with whatever subset of servers handshook successfully.
+      // `close()` fires in the outer `finally` regardless of init outcome.
+      //
+      // Phase 5.5 reordering note: bridge init moved BEFORE baseTools so the
+      // `tool_search` / `tool_load` factories' `getCatalog()` closures and
+      // the `onLoad` callback can read live `this.#mcpBridge` state without
+      // a forward reference. Behaviour is unchanged when `enableToolSearch`
+      // is false (the prior post-baseTools init worked because nothing
+      // captured the bridge at base-tool factory time).
+      const mcpServersToSpawn = await this.resolveMcpServers();
+      if (mcpServersToSpawn.length > 0) {
+        this.#mcpBridge = new McpBridge({
+          servers: mcpServersToSpawn,
+          ...(logger && { logger }),
+          notify: (level, message, context) =>
+            safeFireHook('Notification', {
+              event: 'Notification',
+              level,
+              message,
+              context,
+            }) as Promise<unknown> as Promise<void>,
+          onLifecycle: async (event, payload) => {
+            await safeFireHook(event, payload);
+          },
+          signal,
+        });
+        await this.#mcpBridge.init();
+      }
+      const bridgeTools = this.#mcpBridge?.tools ?? [];
+
+      // Phase 5.5: shared state for the `tool_search` / `tool_load` pair.
+      // `loadedToolNames` is the per-run working-set; `toolsForRun` is the
+      // mutable array passed to `callModel`. When `tool_load` fires, we
+      // append the wrapped MCP tool to `toolsForRun` — the OR SDK iterates
+      // this array on each subsequent turn build, so newly-loaded tools
+      // become visible to the model without needing a fresh `callModel`
+      // (per-cycle granularity is preserved as a fallback: even if the SDK
+      // snapshots the array, the next cycle still picks the loaded set up
+      // because it reads from the same shared reference).
+      const loadedToolNames = new Set<string>();
+      const toolsForRun: Tool[] = [];
+
       // Order of wraps (innermost → outermost): ctx-bound execute, then
       // canUseTool gate, then hook wrapper. The hook wrapper is outermost so
       // PreToolUse fires before the canUseTool decision (audit always fires,
       // even on deny), and PostToolUse fires after the inner result/error is
       // resolved — including the synth-deny payload from a canUseTool denial.
+      const wrapTool = (t: Tool): Tool => {
+        let wrapped: Tool = t;
+        if (this.opts.canUseTool) {
+          wrapped = wrapToolWithPermission(wrapped, this.opts.canUseTool);
+        }
+        if (onHook) {
+          wrapped = wrapToolWithHooks(wrapped, safeFireHook, logger);
+        }
+        return wrapped;
+      };
+
       const baseTools: readonly Tool[] = this.hasCustomTools
         ? userTools
         : allTools(ctx, {
@@ -1286,42 +1371,42 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
                 },
               },
             }),
+            ...(this.opts.enableToolSearch && {
+              toolSearch: { getCatalog: () => this.#mcpBridge?.catalog ?? [] },
+              toolLoad: {
+                getCatalog: () => this.#mcpBridge?.catalog ?? [],
+                isLoaded: (name: string) => loadedToolNames.has(name),
+                onLoad: async (name: string, server: string) => {
+                  // The factory's `isLoaded` guard already short-circuits
+                  // already-loaded names before reaching onLoad, and the
+                  // `getCatalog` source is the same one the factory checks
+                  // for `notFound` — so an entry that passes both gates is
+                  // guaranteed to exist in `bridgeTools` (catalog and tools
+                  // are derived from the same bridge entries). The `find`
+                  // therefore never returns undefined in practice; the
+                  // non-null assertion documents that invariant.
+                  const found = bridgeTools.find((t) => t.function.name === name)!;
+                  loadedToolNames.add(name);
+                  toolsForRun.push(wrapTool(found));
+                  await safeFireHook('Notification', {
+                    event: 'Notification',
+                    level: 'info',
+                    message: 'tool_loaded',
+                    context: { name, server },
+                  });
+                },
+              },
+            }),
           });
-      // Phase 5.2.4: spawn MCP servers AFTER `Setup` fired (above) and BEFORE
-      // the first `callModel` — keeps the ctor sync, matches the Phase 4.7
-      // subagent-runner closure pattern. Per-server failures are logged +
-      // surfaced as `Notification`-hook events by the bridge; the run
-      // continues with whatever subset of servers handshook successfully.
-      // `close()` fires in the outer `finally` regardless of init outcome.
-      const mcpServersToSpawn = await this.resolveMcpServers();
-      if (mcpServersToSpawn.length > 0) {
-        this.#mcpBridge = new McpBridge({
-          servers: mcpServersToSpawn,
-          ...(logger && { logger }),
-          notify: (level, message, context) =>
-            safeFireHook('Notification', {
-              event: 'Notification',
-              level,
-              message,
-              context,
-            }) as Promise<unknown> as Promise<void>,
-          onLifecycle: async (event, payload) => {
-            await safeFireHook(event, payload);
-          },
-          signal,
-        });
-        await this.#mcpBridge.init();
-      }
-      const bridgeTools = this.#mcpBridge?.tools ?? [];
 
-      const combinedTools: readonly Tool[] =
-        bridgeTools.length > 0 ? [...baseTools, ...bridgeTools] : baseTools;
-      const permissionedTools = this.opts.canUseTool
-        ? combinedTools.map((t) => wrapToolWithPermission(t, this.opts.canUseTool!))
-        : combinedTools;
-      const toolsForRun = onHook
-        ? permissionedTools.map((t) => wrapToolWithHooks(t, safeFireHook, logger))
-        : permissionedTools;
+      // Phase 5.5: when tool-search is opted in, the bridge's MCP tools are
+      // HIDDEN from the model's initial tool pool. The model must call
+      // `tool_search` + `tool_load` to bring them in, which pushes the
+      // wrapped tool onto the shared `toolsForRun` array. When the opt-in
+      // is off, every bridge tool is visible up front (prior 5.2.4 behaviour).
+      const initialBridgeTools = this.opts.enableToolSearch ? [] : bridgeTools;
+      const initialPool: readonly Tool[] = [...baseTools, ...initialBridgeTools];
+      for (const t of initialPool) toolsForRun.push(wrapTool(t));
 
       signal.addEventListener('abort', onAbort, { once: true });
       abortListenerInstalled = true;

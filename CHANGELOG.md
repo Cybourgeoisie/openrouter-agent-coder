@@ -30,6 +30,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Phase 5.5: `tool_search` + `tool_load` dynamic MCP tool discovery
+  (Card #NN). New opt-in
+  `OpenRouterAgentRunOptions.enableToolSearch?: boolean` (default
+  `false`) hides the per-run MCP bridge's tools from the model's initial
+  tool pool and exposes two built-in tools instead:
+  - `tool_search({ query, limit? })` ranks `bridge.catalog` (name +
+    description, char-cap-200 `schema_preview` with `…` truncation
+    marker; substring weight 10/5, per-token weight 2/1; tie-break
+    ascending by name) and returns up to `DEFAULT_SEARCH_LIMIT` (10,
+    capped at `MAX_SEARCH_LIMIT` = 50) `{ name, server, description,
+schema_preview, score }` envelopes. Empty catalog / empty query
+    return `{ matches: [], note }` instead of throwing.
+  - `tool_load({ names })` registers one or more by-prefixed-name into
+    a per-run mutable `toolsForRun` array; results bucket into
+    `loaded` / `alreadyLoaded` / `notFound`. Each successful load
+    fires `Notification(level: 'info', message: 'tool_loaded',
+context: { name, server })` so audit consumers can observe the
+    working-set growth.
+  - New `McpBridge.catalog` getter exposes the raw MCP tool list
+    (`{ name, server, description?, inputSchema? }`) without forcing
+    the search index to reach through the Zod-meta wrapper
+    `mapMcpToolToTool` stores on each wrapped Tool.
+  - Loaded-tool state is per-run and does NOT propagate to spawned
+    subagents — subagents see whatever tool pool their own
+    constructor opts produce.
+  - When `enableToolSearch: false` (the default), prior Phase 5.2.4
+    behaviour is preserved: every bridge tool is unconditionally
+    visible to the model up front. Ignored when the caller supplies a
+    custom `tools` array.
+  - Permission gating (`permissionMode` / `allowedTools` /
+    `disallowedTools` / `canUseTool` from Phase 3.\*) still fires per
+    call on the dynamically-loaded tools.
 - Phase 5.3: Streaming input mode (Card #104).
   Adds the Claude-SDK-shaped multi-turn ergonomic on top of OR's
   between-turn `interruptedBy` state primitive — implementation is an
