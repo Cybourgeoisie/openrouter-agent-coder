@@ -64,7 +64,7 @@ Each is a self-contained implementation. Sequencing matters only within the suba
 | ~~4.4~~ | ~~Monitor tool (background-script watch)~~ ([#55](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/55)) | ~~10h~~ | ~~low~~              | ~~—~~      |
 | ~~4.5~~ | ~~Session forking~~ ([#56](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/56))                        | ~~8h~~  | ~~low~~              | ~~—~~      |
 | ~~4.6~~ | ~~File checkpointing~~ ([#57](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/57))                     | ~~12h~~ | ~~moderate~~         | ~~—~~      |
-| 4.7     | Subagent system — basic, sequential                                                                                   | 15h     | moderate             | —          |
+| ~~4.7~~ | ~~Subagent system — basic, sequential~~ ([#88](https://github.com/Cybourgeoisie/openrouter-agent-coder/pull/88))      | ~~15h~~ | ~~moderate~~         | ~~—~~      |
 | 4.8     | Subagent tool / model / effort overrides                                                                              | 5h      | moderate             | 4.7        |
 | 4.9     | Parallel subagent execution                                                                                           | 7h      | moderate             | 4.7        |
 

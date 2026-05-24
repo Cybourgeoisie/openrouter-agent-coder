@@ -35,6 +35,15 @@ export interface Fixture {
 
 export interface MockState {
   fixture: Fixture | null;
+  /**
+   * Optional FIFO of fixtures consumed one-per-`callModel` invocation. Pops
+   * one fixture each time the OR client's `callModel` is called. When the
+   * queue is empty (or undefined), falls back to {@link fixture} so the
+   * existing single-fixture tests stay byte-identical. Set this for tests
+   * that drive a parent run + one or more subagent runs through the same
+   * mock.
+   */
+  fixtureQueue?: Fixture[];
   ctorArgs: unknown[];
   callModelArgs: unknown[];
   /** Resolves on test-controlled signal — set before iterating the fixture. */
@@ -46,6 +55,7 @@ export interface MockState {
 export function createMockState(): MockState {
   return {
     fixture: null,
+    fixtureQueue: [],
     ctorArgs: [],
     callModelArgs: [],
     pausedGate: null,
@@ -102,7 +112,14 @@ export function createOpenRouterMockModule(state: MockState): Record<string, unk
       getResponse: () => Promise<FixtureResponse>;
     } {
       state.callModelArgs.push(args);
-      const fixture = state.fixture;
+      // Per-call FIFO takes precedence over the singleton fixture — tests
+      // that drive multiple `callModel` invocations (e.g. parent + subagent)
+      // enqueue one fixture per expected call. Single-fixture tests keep
+      // their existing `state.fixture` semantics.
+      const fixture =
+        state.fixtureQueue && state.fixtureQueue.length > 0
+          ? state.fixtureQueue.shift()!
+          : state.fixture;
       if (!fixture) throw new Error('mock-openrouter: no fixture loaded');
       const tools = args.tools ?? [];
       const findTool = (

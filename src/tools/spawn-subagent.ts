@@ -146,7 +146,7 @@ export function spawnSubagentTool(
   return tool({
     name: 'spawn_subagent',
     description:
-      'Delegate a focused subtask to a child agent with its own session and (optionally) a narrowed tool whitelist. The parent waits for the subagent to complete and receives the subagent\'s final assistant text plus status/cost as a single tool result. Use sparingly — only when the subtask has a clean, self-contained scope (research a question, refactor a file, run a verification pass). Returns `{ subagentSessionId, status, text, costUsd?, durationMs?, reason? }` on success or `{ error, subagentSessionId }` when the depth cap rejects or the runner throws.',
+      "Delegate a focused subtask to a child agent with its own session and (optionally) a narrowed tool whitelist. The parent waits for the subagent to complete and receives the subagent's final assistant text plus status/cost as a single tool result. Use sparingly — only when the subtask has a clean, self-contained scope (research a question, refactor a file, run a verification pass). Returns `{ subagentSessionId, status, text, costUsd?, durationMs?, reason? }` on success or `{ error, subagentSessionId }` when the depth cap rejects or the runner throws.",
     inputSchema: z.object({
       description: z
         .string()
@@ -212,8 +212,7 @@ export function spawnSubagentTool(
       // call abort() on it from outside), but it is documented for the
       //4.9 parallel-subagent phase that will need finer-grained control.
       const subagentInternalCtl = new AbortController();
-      const parentSignal =
-        (execCtx as { signal?: AbortSignal } | undefined)?.signal ?? ctx.signal;
+      const parentSignal = (execCtx as { signal?: AbortSignal } | undefined)?.signal ?? ctx.signal;
       const signal = parentSignal
         ? AbortSignal.any([parentSignal, subagentInternalCtl.signal])
         : subagentInternalCtl.signal;

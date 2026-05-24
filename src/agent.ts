@@ -798,8 +798,8 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
                 maxDepth: this.opts.maxSubagentDepth,
                 runSubagent,
                 onSubagentLifecycle: async (event, payload) => {
-              await safeFireHook(event, payload);
-            },
+                  await safeFireHook(event, payload);
+                },
               },
             }),
           });
