@@ -53,6 +53,14 @@ import {
 } from './tools/spawn-subagent.js';
 import { McpBridge } from './mcp/bridge.js';
 import { loadMcpConfig, type McpServerConfig } from './mcp/config.js';
+import {
+  StreamingInputSource,
+  commitPartialResponse,
+  isAsyncIterable,
+  setInterruptedFlag,
+  userInputToCallModelItem,
+  type UserInput,
+} from './streaming-input.js';
 
 const DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
 const DEFAULT_MAX_TURNS = 25;
@@ -130,8 +138,25 @@ export interface OpenRouterAgentRunOptions {
   apiKey: string;
   /** Stable session id used for OR's server-side session tracking and on-disk state. */
   sessionId: string;
-  /** The user prompt for this run. */
-  prompt: string;
+  /**
+   * The user prompt for this run.
+   *
+   * - `string` — single-shot single-turn behavior (back-compat with all prior
+   *   phases). The string is wrapped as the first user message; the run
+   *   terminates after the resulting `callModel` returns (or after any
+   *   subsequent imperative {@link OpenRouterAgentRun.pushUserMessage} calls
+   *   drain).
+   * - `AsyncIterable<UserInput>` — Phase 5.3 streaming-input mode. The first
+   *   yielded {@link UserInput} starts the first turn; subsequent yields
+   *   queue for the next turn. End-of-iteration (`{ done: true }`) closes the
+   *   run after the in-flight `callModel` finishes. See README "Streaming
+   *   input" subsection for the full semantics.
+   *
+   * Combine with {@link OpenRouterAgentRun.pushUserMessage} / `interrupt()`
+   * for mid-run control. Image / file attachments ride on `UserInput.content`
+   * as a `ReadonlyArray<unknown>` of OR-shaped content blocks.
+   */
+  prompt: string | AsyncIterable<UserInput>;
   /** System instructions. Defaults to {@link DEFAULT_INSTRUCTIONS}. */
   instructions?: string;
   /** Model alias or id. Defaults to `~anthropic/claude-sonnet-latest`. */
@@ -431,7 +456,7 @@ export interface OpenRouterAgentRunOptions {
 interface ResolvedOptions {
   apiKey: string;
   sessionId: string;
-  prompt: string;
+  prompt: string | AsyncIterable<UserInput>;
   instructions: string;
   model: string;
   cwd: string;
@@ -617,6 +642,27 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
    * the run has no MCP servers configured (or discovery yields none).
    */
   #mcpBridge?: McpBridge;
+  /**
+   * Phase 5.3: streaming-input source — wraps the constructor `prompt`
+   * (`string | AsyncIterable<UserInput>`) and the imperative
+   * {@link pushUserMessage} queue behind a single `next()` interface that the
+   * multi-turn restart loop drains. Constructed eagerly so
+   * {@link pushUserMessage} works from the moment the run object exists
+   * (callers commonly wire a UI listener that pushes before/during the
+   * `for await` consumer loop).
+   */
+  readonly #inputSource: StreamingInputSource;
+  /**
+   * Phase 5.3: resolves when the currently-in-flight `callModel` cycle's
+   * for-await stream loop completes (or rejects). Set at the top of each
+   * cycle and cleared in its finally block. {@link interrupt} awaits this
+   * promise so the host has a clean "stopped before next turn" handle.
+   *
+   * `undefined` outside a cycle (idle, between cycles, or after end-of-iter)
+   * — in which case `interrupt()` is a no-op beyond the idempotent state
+   * write that buffers the flag for the next cycle (if any).
+   */
+  #currentCycle: Promise<void> | undefined;
 
   constructor(options: OpenRouterAgentRunOptions) {
     this.opts = resolveOptions(options);
@@ -628,6 +674,87 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     this.stateAccessor = this.persistSession
       ? createFileStateAccessor(this.opts.logsRoot, this.opts.sessionId)
       : createMemoryStateAccessor();
+    // Validate the prompt shape eagerly so a caller passing the wrong type
+    // gets a synchronous error at construction (not a deferred crash inside
+    // the iterator). Accepted: `string` or any value with `Symbol.asyncIterator`.
+    if (typeof options.prompt !== 'string' && !isAsyncIterable<UserInput>(options.prompt)) {
+      throw new Error(
+        'prompt must be a string or an AsyncIterable<UserInput> (Phase 5.3 streaming input).',
+      );
+    }
+    this.#inputSource = new StreamingInputSource(this.opts.prompt);
+  }
+
+  /**
+   * Phase 5.3: imperatively queue a follow-up user message. Resolves
+   * immediately — the queue is just a buffer (unbounded), and the message is
+   * picked up between turns of the multi-turn restart loop after any
+   * already-pending input drains.
+   *
+   * Pull order each between-turn iteration:
+   * 1. Imperative queue (FIFO; this is where `pushUserMessage` lands).
+   * 2. Constructor-supplied `AsyncIterable<UserInput>` (if any). If both are
+   *    set, the queue is drained first; the iterable supplies fall-through
+   *    input.
+   *
+   * **Combined with `prompt: string`.** The constructor string is processed
+   * first as the run's initial turn; queued messages drive subsequent turns.
+   * After the queue empties (and no iterable is wired), the run terminates.
+   *
+   * **Combined with `prompt: AsyncIterable<UserInput>`.** Queue drains before
+   * the iterable is pulled, so pushed messages take precedence over the
+   * iterable's pacing. Pushing while a `for await (... of iter)` is awaiting
+   * does NOT preempt the in-flight pull — the value is buffered for the
+   * FOLLOWING pull.
+   *
+   * Returns a resolved Promise (the async signature is for symmetry / future
+   * back-pressure; today there is no waiting). Calling after the run
+   * terminates is harmless — the value lands in the buffer but is never
+   * consumed.
+   */
+  pushUserMessage(msg: UserInput | string): Promise<void> {
+    this.#inputSource.push(msg);
+    return Promise.resolve();
+  }
+
+  /**
+   * Phase 5.3: request a clean between-turn interruption of the in-flight
+   * `callModel`. Writes `state.interruptedBy = 'host-interrupt'` via the
+   * run's {@link StateAccessor}; the SDK's `checkForInterruption` polling
+   * observes the flag on its next iteration and exits the call with
+   * `status: 'interrupted'` and `partialResponse` populated (the in-flight
+   * assistant text is captured server-side under that field).
+   *
+   * The returned Promise resolves when the current `callModel` cycle has
+   * finished unwinding (or immediately when no cycle is in flight). The
+   * outer streaming-input loop then commits the partial assistant text into
+   * the conversation history (so the model has a faithful transcript) and
+   * pulls the next message from the queue / iterable. If no further input
+   * is available, the run ends cleanly with `stream_complete.status:
+   * 'success'` and `reason: 'host-interrupt'`.
+   *
+   * **Idempotent.** Calling before iteration starts buffers the flag — the
+   * first `callModel` will load state and observe the flag immediately,
+   * exiting after one short cycle. Calling after the run terminates is a
+   * harmless write that is never consumed.
+   *
+   * **Granularity.** The SDK only polls the interrupt flag between turns
+   * (and between SSE event batches), not inside a single token stream. A
+   * long single-response generation cannot be cut mid-token — interrupt
+   * lands at the next turn boundary. This matches the Claude SDK's coarser
+   * "between turns" behaviour for non-Anthropic backends.
+   */
+  async interrupt(): Promise<void> {
+    await setInterruptedFlag(this.stateAccessor, 'host-interrupt');
+    if (this.#currentCycle) {
+      try {
+        await this.#currentCycle;
+      } catch {
+        // A throw on the cycle promise is the consumer's problem to see via
+        // their `for await` — we don't surface it here. interrupt() succeeds
+        // as soon as the cycle has unwound, regardless of how.
+      }
+    }
   }
 
   /**
@@ -865,7 +992,6 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     const {
       apiKey,
       sessionId,
-      prompt,
       instructions: baseInstructions,
       model,
       cwd,
@@ -1001,7 +1127,6 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       };
       await safeFireHook('SessionStart', { event: 'SessionStart', sessionId, cwd, model });
 
-      const requestId = createRequestId();
       // Phase 5.1: the accessor is created in the constructor so {@link compact}
       // can reach the same in-memory cache (when `persistSession: false`) or
       // the same on-disk path (when persisted) without duplicating
@@ -1201,158 +1326,294 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       signal.addEventListener('abort', onAbort, { once: true });
       abortListenerInstalled = true;
 
-      if (persistSession) {
-        await logRequest(logsRoot, {
-          sessionId,
-          requestId,
-          prompt,
-          timestamp: new Date().toISOString(),
-        });
-      }
+      // Phase 5.3: multi-turn restart loop. Each iteration drains one
+      // {@link UserInput} from the run's {@link StreamingInputSource}
+      // (imperative queue first, then constructor `AsyncIterable`) and runs
+      // ONE `callModel` cycle whose events are forwarded into the outer
+      // event stream. Between cycles, any `partialResponse` left by a prior
+      // `interrupt()` is committed as an assistant message into the
+      // persisted history so the next cycle's model sees a faithful
+      // transcript. The loop ends when the source is exhausted, a stop
+      // condition (`max_turns` / `max_budget`) fires, the signal is
+      // aborted, or an error throws — only then is a single trailing
+      // `stream_complete` event yielded.
+      let processedAnyInput = false;
+      let interruptedReason: string | undefined;
+      // Tracked across cycles so the run-wide `max_budget` guard fires
+      // even when individual cycles stay under budget.
+      // (totalCostUsd is the run-wide accumulator already.)
 
-      const result = client.callModel({
-        model,
-        sessionId,
-        input: [{ role: 'user' as const, content: prompt }],
-        instructions,
-        tools: toolsForRun,
-        state,
-        stopWhen: [stepCountIs(maxTurns), maxCost(maxBudgetUsd)],
-        ...(this.opts.effort !== undefined && { reasoning: { effort: this.opts.effort } }),
-        onTurnEnd: async (_ctx, response) => {
-          if (persistSession) {
-            const generationId = createGenerationId();
-            await logGeneration(logsRoot, {
-              sessionId,
-              requestId,
-              generationId,
-              response,
-              timestamp: new Date().toISOString(),
+      while (true) {
+        // 1. Pull the next user input. Drains the imperative
+        //    pushUserMessage() queue first (FIFO), then the constructor
+        //    AsyncIterable<UserInput> if one was supplied. Done when both
+        //    are exhausted.
+        const inputResult = await this.#inputSource.next();
+        if (inputResult.done) break;
+        processedAnyInput = true;
+
+        // 2. Commit any partial assistant text from a prior interrupt as
+        //    a proper assistant message in the persisted history. Drops
+        //    in-flight tool calls (their results never arrived; the next
+        //    user push moves past them). No-op on the very first cycle —
+        //    the SDK has not had a chance to populate `partialResponse`
+        //    yet, and skipping the load avoids an unnecessary FS hit.
+        if (processedAnyInput && interruptedReason !== undefined) {
+          try {
+            await commitPartialResponse(this.stateAccessor);
+          } catch (err) {
+            logger?.('warn', 'Failed to commit partial response between turns', {
+              error: err,
             });
           }
-          totalCostUsd += response.usage?.cost ?? 0;
-        },
-      });
-      resultHandle = result;
-      // Late-aborted between callModel and stream attach.
-      if (signal.aborted) void result.cancel().catch(() => undefined);
-
-      for await (const event of result.getFullResponsesStream()) {
-        // Tool results emitted as part of an aborted run are still useful — they
-        // carry the cancellation observability for the consumer — so they are
-        // forwarded even after abort. Everything else (text deltas, turn
-        // start/end, tool_call announcements) is dropped post-abort.
-        if (isTurnStartEvent(event)) {
-          if (signal.aborted) continue;
-          const turnNumber = event.turnNumber;
-          if (turnNumber > maxTurnNumber) maxTurnNumber = turnNumber;
-          yield { type: 'turn_start', turnNumber };
-          continue;
+          // Once committed, clear the local marker — a subsequent
+          // interrupt within this loop will set it again.
+          interruptedReason = undefined;
         }
-        if (isTurnEndEvent(event)) {
-          if (signal.aborted) continue;
+
+        // 3. Per-cycle request id + per-cycle request log entry. Each
+        //    callModel is its own request from OR's perspective; using
+        //    one id per cycle keeps `logs/<session>/req_*/` directories
+        //    in 1:1 correspondence with the wire calls.
+        const cycleRequestId = createRequestId();
+        const cyclePromptForLog =
+          typeof inputResult.value.content === 'string'
+            ? inputResult.value.content
+            : JSON.stringify(inputResult.value.content);
+        if (persistSession) {
+          await logRequest(logsRoot, {
+            sessionId,
+            requestId: cycleRequestId,
+            prompt: cyclePromptForLog,
+            timestamp: new Date().toISOString(),
+          });
+        }
+
+        // 4. Fire the callModel for this cycle. The state accessor is
+        //    shared across cycles so the SDK's resume path picks up the
+        //    accumulated `messages` history automatically.
+        const result = client.callModel({
+          model,
+          sessionId,
+          input: [userInputToCallModelItem(inputResult.value)],
+          instructions,
+          tools: toolsForRun,
+          state,
+          stopWhen: [stepCountIs(maxTurns), maxCost(maxBudgetUsd)],
+          ...(this.opts.effort !== undefined && { reasoning: { effort: this.opts.effort } }),
+          onTurnEnd: async (_ctx, response) => {
+            if (persistSession) {
+              const generationId = createGenerationId();
+              await logGeneration(logsRoot, {
+                sessionId,
+                requestId: cycleRequestId,
+                generationId,
+                response,
+                timestamp: new Date().toISOString(),
+              });
+            }
+            totalCostUsd += response.usage?.cost ?? 0;
+          },
+        });
+        resultHandle = result;
+        // Late-aborted between callModel and stream attach.
+        if (signal.aborted) void result.cancel().catch(() => undefined);
+
+        // Expose a per-cycle promise that `interrupt()` can await so the
+        // host has a clean "stopped before next turn" handle. Resolved in
+        // the finally below regardless of how the for-await unwinds.
+        let resolveCycle: () => void = () => undefined;
+        this.#currentCycle = new Promise<void>((res) => {
+          resolveCycle = res;
+        });
+
+        // Track whether the SDK emitted a turn-end event during this
+        // cycle. When an interrupt fires mid-cycle, the SDK exits its
+        // own loop without yielding a turn-end; we synthesise one
+        // afterwards so the rich message stream (`run.messages()`)
+        // flushes the open `AssistantMessage` before the next cycle.
+        let lastTurnNumber = 0;
+        let turnEndEmitted = false;
+
+        try {
+          for await (const event of result.getFullResponsesStream()) {
+            // Tool results emitted as part of an aborted run are still useful — they
+            // carry the cancellation observability for the consumer — so they are
+            // forwarded even after abort. Everything else (text deltas, turn
+            // start/end, tool_call announcements) is dropped post-abort.
+            if (isTurnStartEvent(event)) {
+              if (signal.aborted) continue;
+              const turnNumber = event.turnNumber;
+              if (turnNumber > maxTurnNumber) maxTurnNumber = turnNumber;
+              lastTurnNumber = turnNumber;
+              turnEndEmitted = false;
+              yield { type: 'turn_start', turnNumber };
+              continue;
+            }
+            if (isTurnEndEvent(event)) {
+              if (signal.aborted) continue;
+              lastTurnNumber = event.turnNumber;
+              turnEndEmitted = true;
+              yield {
+                type: 'turn_end',
+                turnNumber: event.turnNumber,
+                usage: finalUsage,
+                costUsd: totalCostUsd,
+              };
+              continue;
+            }
+            if (isToolCallOutputEvent(event)) {
+              const out = event.output;
+              const isError = out.status === 'incomplete';
+              yield {
+                type: 'tool_result',
+                callId: out.callId,
+                output: out.output,
+                isError,
+              };
+              // After an abort, surface the tool result then stop iterating.
+              if (signal.aborted) break;
+              continue;
+            }
+            if ('type' in event && event.type === 'response.output_text.delta') {
+              if (signal.aborted) continue;
+              const delta = (event as { type: string; delta: string }).delta;
+              if (delta) {
+                yield { type: 'text_delta', content: delta };
+              }
+              continue;
+            }
+            if ('type' in event && event.type === 'response.output_item.done') {
+              if (signal.aborted) continue;
+              const item = (event as { type: string; item: { type: string } }).item;
+              if (item.type === 'function_call') {
+                const fnItem = item as {
+                  type: 'function_call';
+                  callId: string;
+                  name: string;
+                  arguments: string;
+                };
+                let input: unknown;
+                try {
+                  input = JSON.parse(fnItem.arguments);
+                } catch {
+                  input = fnItem.arguments;
+                }
+                yield {
+                  type: 'tool_call',
+                  callId: fnItem.callId,
+                  name: fnItem.name,
+                  input,
+                };
+              }
+              continue;
+            }
+          }
+        } finally {
+          resolveCycle();
+          this.#currentCycle = undefined;
+        }
+
+        if (signal.aborted) {
           yield {
-            type: 'turn_end',
-            turnNumber: event.turnNumber,
+            type: 'stream_complete',
+            status: 'error',
+            usage: finalUsage,
+            costUsd: totalCostUsd,
+            durationMs: Date.now() - startMs,
+            reason: ABORT_REASON,
+          };
+          sessionEndPayload = {
+            event: 'SessionEnd',
+            sessionId,
+            status: 'error',
             usage: finalUsage,
             costUsd: totalCostUsd,
           };
-          continue;
+          stopPayload = { event: 'Stop', status: 'error', reason: ABORT_REASON };
+          return;
         }
-        if (isToolCallOutputEvent(event)) {
-          const out = event.output;
-          const isError = out.status === 'incomplete';
-          yield {
-            type: 'tool_result',
-            callId: out.callId,
-            output: out.output,
-            isError,
-          };
-          // After an abort, surface the tool result then stop iterating.
-          if (signal.aborted) break;
-          continue;
+
+        const response = await result.getResponse();
+        finalUsage = response.usage ?? finalUsage;
+        const finalCost = response.usage?.cost ?? 0;
+        // Guard against double-counting: only adopt the final cost when
+        // no per-turn onTurnEnd callback fired for this cycle (e.g.
+        // single-shot no-tool-call cycle). totalCostUsd already
+        // accumulates across cycles, so we only top up when this cycle
+        // contributed nothing.
+        if (totalCostUsd === 0 && finalCost > 0) {
+          totalCostUsd = finalCost;
         }
-        if ('type' in event && event.type === 'response.output_text.delta') {
-          if (signal.aborted) continue;
-          const delta = (event as { type: string; delta: string }).delta;
-          if (delta) {
-            yield { type: 'text_delta', content: delta };
-          }
-          continue;
+
+        if (persistSession) {
+          const finalGenId = createGenerationId();
+          await logGeneration(logsRoot, {
+            sessionId,
+            requestId: cycleRequestId,
+            generationId: finalGenId,
+            response,
+            timestamp: new Date().toISOString(),
+          });
         }
-        if ('type' in event && event.type === 'response.output_item.done') {
-          if (signal.aborted) continue;
-          const item = (event as { type: string; item: { type: string } }).item;
-          if (item.type === 'function_call') {
-            const fnItem = item as {
-              type: 'function_call';
-              callId: string;
-              name: string;
-              arguments: string;
-            };
-            let input: unknown;
-            try {
-              input = JSON.parse(fnItem.arguments);
-            } catch {
-              input = fnItem.arguments;
-            }
+
+        // 5. Detect whether this cycle ended due to an interrupt. The
+        //    SDK persists `status: 'interrupted'` + `partialResponse`
+        //    into state when its checkForInterruption polling exits.
+        //    On interrupt we synth a turn_end (if not already emitted)
+        //    to flush messages(), record the reason, and loop back to
+        //    pull the next user input.
+        const stateAfter = await this.stateAccessor.load();
+        const stateStatus = (stateAfter as { status?: string } | null)?.status;
+        if (stateStatus === 'interrupted') {
+          const reason =
+            (stateAfter as { interruptedBy?: string } | null)?.interruptedBy ?? 'interrupted';
+          interruptedReason = reason;
+          if (!turnEndEmitted) {
             yield {
-              type: 'tool_call',
-              callId: fnItem.callId,
-              name: fnItem.name,
-              input,
+              type: 'turn_end',
+              turnNumber: lastTurnNumber,
+              usage: finalUsage,
+              costUsd: totalCostUsd,
             };
           }
+          // The next iteration's `commitPartialResponse` call will fold
+          // the captured assistant text into the conversation history
+          // before the next callModel runs.
           continue;
+        }
+
+        // 6. Apply the per-cycle stop-condition derivation. The
+        //    cost guard is run-wide (totalCostUsd accumulates across
+        //    cycles); the turn-count guard reflects only this cycle's
+        //    observed turns. Both `max_budget` and `max_turns`
+        //    terminate the outer loop — multi-turn streaming-input
+        //    sessions wanting unlimited turns should set generous
+        //    `maxTurns` / `maxBudgetUsd` ceilings.
+        const cycleStatus = deriveCompletionStatus({
+          totalCostUsd,
+          maxBudgetUsd,
+          maxTurnNumber,
+          maxTurns,
+        });
+        status = cycleStatus;
+        if (cycleStatus === 'max_budget' || cycleStatus === 'max_turns') {
+          break;
         }
       }
 
-      if (signal.aborted) {
-        yield {
-          type: 'stream_complete',
-          status: 'error',
-          usage: finalUsage,
-          costUsd: totalCostUsd,
-          durationMs: Date.now() - startMs,
-          reason: ABORT_REASON,
-        };
-        sessionEndPayload = {
-          event: 'SessionEnd',
-          sessionId,
-          status: 'error',
-          usage: finalUsage,
-          costUsd: totalCostUsd,
-        };
-        stopPayload = { event: 'Stop', status: 'error', reason: ABORT_REASON };
-        return;
+      // 7. Loop ended cleanly (input exhausted or stop condition fired).
+      //    Three completion paths converge here:
+      //    - no input ever drained (e.g. empty AsyncIterable) → status was
+      //      never written off its `'error'` default; treat as no-op success.
+      //    - last cycle ran to completion → status was set to `'success'` /
+      //      `'max_budget'` / `'max_turns'` inside the loop.
+      //    - every cycle ended via host-interrupt → status was never
+      //      written (interrupt skips the status assignment); treat as
+      //      success because the run did not throw.
+      if (status === 'error') {
+        status = 'success';
       }
-
-      const response = await result.getResponse();
-      finalUsage = response.usage ?? null;
-      const finalCost = response.usage?.cost ?? 0;
-      // Guard against double-counting: only adopt the final cost if no
-      // per-turn onTurnEnd callback fired (e.g. single-shot no-tool-call case).
-      if (totalCostUsd === 0 && finalCost > 0) {
-        totalCostUsd = finalCost;
-      }
-
-      if (persistSession) {
-        const finalGenId = createGenerationId();
-        await logGeneration(logsRoot, {
-          sessionId,
-          requestId,
-          generationId: finalGenId,
-          response,
-          timestamp: new Date().toISOString(),
-        });
-      }
-
-      status = deriveCompletionStatus({
-        totalCostUsd,
-        maxBudgetUsd,
-        maxTurnNumber,
-        maxTurns,
-      });
 
       // Stage the SessionEnd / Stop payloads BEFORE yielding so a consumer
       // that `break`s on `stream_complete` still gets the trailing hooks
@@ -1365,7 +1626,9 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         usage: finalUsage,
         costUsd: totalCostUsd,
       };
-      stopPayload = { event: 'Stop', status };
+      stopPayload = interruptedReason
+        ? { event: 'Stop', status, reason: interruptedReason }
+        : { event: 'Stop', status };
 
       yield {
         type: 'stream_complete',
@@ -1373,6 +1636,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         usage: finalUsage,
         costUsd: totalCostUsd,
         durationMs: Date.now() - startMs,
+        ...(interruptedReason !== undefined && { reason: interruptedReason }),
       };
     } catch (err) {
       if (signal.aborted) {
