@@ -24,6 +24,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Phase 4.9: parallel subagent execution via the new built-in
+  `spawn_subagents` (plural) tool. Bundled alongside the singular
+  `spawn_subagent` whenever `OpenRouterAgentRun({ enableSubagents: true })`
+  is set — no separate opt-in flag (the two tools share a `runSubagent`
+  closure and lifecycle emitter, so wiring them independently would
+  force two near-identical switches on the host). The new ctor option
+  `maxParallelSubagents` (default `4`) caps the number of subagents
+  in-flight at once for a single plural invocation; the array itself is
+  Zod-capped at `MAX_PARALLEL_BATCH_SIZE` (= 16) entries. Each spec in
+  the array accepts the same per-spec fields as `spawn_subagent`
+  (`description` plus optional `tools` / `instructions` / `max_turns` /
+  `max_budget_usd` / `model` / `permission_mode` / `allowed_tools` /
+  `disallowed_tools` / `effort`), so all Phase 4.8 overrides propagate
+  per-child. Concurrency is enforced by an inline promise pool (no
+  `p-limit` dep). No fail-fast — per-child failures isolate into
+  `{ status: 'success' | 'error' | 'aborted', subagentSessionId,
+output, error? }` envelopes; aggregate `costUsd` + token totals sum
+  the `'success'` envelopes only. Parent abort fans out into every
+  in-flight child via `AbortSignal.any([parentSignal,
+internalCtl.signal])`. Recursion-depth gate reuses the singular tool's
+  check; depth-N parent at the cap rejects each spec with the same
+  `'max subagent depth (N) exceeded'` envelope. `SubagentStart` /
+  `SubagentEnd` hooks fire once per child (no new event types — pairs
+  may interleave when children run in parallel, correlate on
+  `subagentSessionId`). Each child inherits the parent's `maxBudgetUsd`
+  independently by default; per-spec `max_budget_usd` overrides
+  per-child (aggregate cost may therefore exceed any single child's
+  cap, but no single child can exceed its own).
 - Phase 4.8: per-subagent tool / model / effort overrides on
   `spawn_subagent`. The Zod input schema gains five optional fields —
   `model?: string`, `permission_mode?: 'default' | 'acceptEdits' |

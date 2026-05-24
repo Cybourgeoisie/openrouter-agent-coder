@@ -22,6 +22,25 @@ import type { PermissionMode } from '../permission-modes.js';
 export const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
 
 /**
+ * Phase 4.9: default cap on the number of subagents that may be in-flight at
+ * once for a single `spawn_subagents` (plural) invocation. Tunable per-run
+ * via `OpenRouterAgentRunOptions.maxParallelSubagents`. The pool submits
+ * subagents in submission order; results are returned in submission order
+ * regardless of completion order.
+ */
+export const DEFAULT_MAX_PARALLEL_SUBAGENTS = 4;
+
+/**
+ * Phase 4.9: schema-level ceiling on the array length accepted by the
+ * `spawn_subagents` tool's input. Hard cap to prevent the model from
+ * accidentally fanning out an unbounded list; the concurrency pool
+ * ({@link DEFAULT_MAX_PARALLEL_SUBAGENTS}) caps in-flight subagents
+ * separately. Picked to be comfortably larger than the default pool size
+ * (4×) so a typical fan-out has headroom without inviting runaway batches.
+ */
+export const MAX_PARALLEL_BATCH_SIZE = 16;
+
+/**
  * Config the {@link SubagentRunner} closure receives from the
  * `spawn_subagent` tool's execute. Carries the prompt + optional restrictions
  * already parsed/validated from the model's tool input, plus the composite
@@ -183,6 +202,73 @@ export interface SpawnSubagentToolResult {
  * parent's `abort()` (or any external signal threaded through `ctx.signal`)
  * propagates straight into the child without an explicit hand-off.
  */
+/**
+ * Zod schema for a single subagent spec — shared between the singular
+ * `spawn_subagent` tool's input and each element of the plural
+ * `spawn_subagents` (Phase 4.9) input array. Keeping them as one source
+ * of truth means a per-subagent override added to one tool automatically
+ * propagates to the other.
+ */
+export const SPAWN_SUBAGENT_INPUT_SCHEMA = z.object({
+  description: z
+    .string()
+    .min(1)
+    .describe('Prompt handed to the subagent — describe the subtask plainly.'),
+  tools: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Optional whitelist of tool names the subagent may use (e.g. ['read_file', 'grep_files']). Unknown names are silently dropped. Omit to inherit the parent's full tool pool.",
+    ),
+  instructions: z
+    .string()
+    .optional()
+    .describe("System instructions override. Omit to inherit the parent's."),
+  max_turns: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Per-subagent turn cap. Omit to inherit the parent's `maxTurns`."),
+  max_budget_usd: z
+    .number()
+    .positive()
+    .optional()
+    .describe("Per-subagent cost cap in USD. Omit to inherit the parent's `maxBudgetUsd`."),
+  model: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Per-subagent model override (e.g. `'~anthropic/claude-sonnet-latest'`). Omit to inherit the parent's resolved `model`.",
+    ),
+  permission_mode: z
+    .enum(['default', 'acceptEdits', 'bypassPermissions', 'plan'])
+    .optional()
+    .describe("Per-subagent permission preset. Omit to inherit the parent's `permissionMode`."),
+  allowed_tools: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Per-subagent allow list using the same rule grammar as `OpenRouterAgentRun.allowedTools` (plain names or `Tool(pattern)`). REPLACES — does not compose with — the parent's allow list.",
+    ),
+  disallowed_tools: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Per-subagent deny list using the same rule grammar as `OpenRouterAgentRun.disallowedTools`. REPLACES — does not compose with — the parent's deny list.",
+    ),
+  effort: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Per-subagent effort override. Currently a no-op pass-through stored on the child run (full wiring lands in Phase 5.4).',
+    ),
+});
+
+type SpawnSubagentInput = z.infer<typeof SPAWN_SUBAGENT_INPUT_SCHEMA>;
+
 export function spawnSubagentTool(
   opts: SpawnSubagentToolOptions,
   ctx: ToolContext = DEFAULT_TOOL_CONTEXT,
@@ -193,63 +279,7 @@ export function spawnSubagentTool(
     name: 'spawn_subagent',
     description:
       "Delegate a focused subtask to a child agent with its own session and (optionally) a narrowed tool whitelist. The parent waits for the subagent to complete and receives the subagent's final assistant text plus status/cost as a single tool result. Use sparingly — only when the subtask has a clean, self-contained scope (research a question, refactor a file, run a verification pass). Returns `{ subagentSessionId, status, text, costUsd?, durationMs?, reason? }` on success or `{ error, subagentSessionId }` when the depth cap rejects or the runner throws.",
-    inputSchema: z.object({
-      description: z
-        .string()
-        .min(1)
-        .describe('Prompt handed to the subagent — describe the subtask plainly.'),
-      tools: z
-        .array(z.string())
-        .optional()
-        .describe(
-          "Optional whitelist of tool names the subagent may use (e.g. ['read_file', 'grep_files']). Unknown names are silently dropped. Omit to inherit the parent's full tool pool.",
-        ),
-      instructions: z
-        .string()
-        .optional()
-        .describe("System instructions override. Omit to inherit the parent's."),
-      max_turns: z
-        .number()
-        .int()
-        .positive()
-        .optional()
-        .describe("Per-subagent turn cap. Omit to inherit the parent's `maxTurns`."),
-      max_budget_usd: z
-        .number()
-        .positive()
-        .optional()
-        .describe("Per-subagent cost cap in USD. Omit to inherit the parent's `maxBudgetUsd`."),
-      model: z
-        .string()
-        .min(1)
-        .optional()
-        .describe(
-          "Per-subagent model override (e.g. `'~anthropic/claude-sonnet-latest'`). Omit to inherit the parent's resolved `model`.",
-        ),
-      permission_mode: z
-        .enum(['default', 'acceptEdits', 'bypassPermissions', 'plan'])
-        .optional()
-        .describe("Per-subagent permission preset. Omit to inherit the parent's `permissionMode`."),
-      allowed_tools: z
-        .array(z.string())
-        .optional()
-        .describe(
-          "Per-subagent allow list using the same rule grammar as `OpenRouterAgentRun.allowedTools` (plain names or `Tool(pattern)`). REPLACES — does not compose with — the parent's allow list.",
-        ),
-      disallowed_tools: z
-        .array(z.string())
-        .optional()
-        .describe(
-          "Per-subagent deny list using the same rule grammar as `OpenRouterAgentRun.disallowedTools`. REPLACES — does not compose with — the parent's deny list.",
-        ),
-      effort: z
-        .string()
-        .min(1)
-        .optional()
-        .describe(
-          'Per-subagent effort override. Currently a no-op pass-through stored on the child run (full wiring lands in Phase 5.4).',
-        ),
-    }),
+    inputSchema: SPAWN_SUBAGENT_INPUT_SCHEMA,
     execute: async (
       {
         description,
@@ -361,6 +391,338 @@ export function spawnSubagentTool(
       if (result.durationMs !== undefined) out.durationMs = result.durationMs;
       if (result.reason !== undefined) out.reason = result.reason;
       return out;
+    },
+  });
+}
+
+/**
+ * Options accepted by {@link spawnSubagentsTool} (Phase 4.9). Shape-mirrors
+ * {@link SpawnSubagentToolOptions} for the inheritance fields and adds a
+ * concurrency cap. The same `runSubagent` closure the singular factory uses
+ * is reused N times in a promise pool — no architectural divergence between
+ * the two tools.
+ */
+export interface SpawnSubagentsToolOptions {
+  /** Parent run's session id — threaded into the derived subagent session ids and hook payloads. */
+  parentSessionId: string;
+  /** Parent run's chain depth (root = 0). Defaults to `0`. */
+  currentDepth?: number;
+  /** Max allowed chain depth (see {@link DEFAULT_MAX_SUBAGENT_DEPTH}). */
+  maxDepth?: number;
+  /**
+   * Maximum number of subagents allowed in-flight at once for a single
+   * `spawn_subagents` call. Defaults to {@link DEFAULT_MAX_PARALLEL_SUBAGENTS}
+   * (=4). The pool submits in array order; results return in array order
+   * regardless of completion order.
+   */
+  maxParallel?: number;
+  /** Builds and drives a single subagent run (reused N times in the pool). */
+  runSubagent: SubagentRunner;
+  /** Optional hook emitter for per-child `SubagentStart` / `SubagentEnd` lifecycle events. */
+  onSubagentLifecycle?: SubagentLifecycleEmitter;
+}
+
+/**
+ * Per-child envelope returned in the {@link SpawnSubagentsToolResult.results}
+ * array. `status` is the parallel-tool classification — distinct from the
+ * subagent's own terminal {@link AgentCoreEventStatus}:
+ *
+ * - `'success'` — runner resolved with a non-abort terminal status. `output`
+ *   carries the {@link SubagentResultSummary}; `error` is omitted.
+ * - `'error'` — depth-cap rejection OR runner throw OR the subagent's own
+ *   `stream_complete` reported `status: 'error'` from a non-abort cause
+ *   (constructor throw, stream throw, etc.). `error` carries the reason;
+ *   `output` is the summary when one was produced, else `null`.
+ * - `'aborted'` — the composite parent/internal abort signal fired and the
+ *   subagent surfaced `reason: 'aborted'` (mapped to this status so the
+ *   parent model can distinguish cancellation from other failures). `output`
+ *   carries the abort summary; `error` carries `'aborted'`.
+ */
+export type SpawnSubagentResultEnvelope =
+  | {
+      status: 'success';
+      subagentSessionId: string;
+      output: SubagentResultSummary;
+    }
+  | {
+      status: 'error';
+      subagentSessionId: string;
+      output: SubagentResultSummary | null;
+      error: string;
+    }
+  | {
+      status: 'aborted';
+      subagentSessionId: string;
+      output: SubagentResultSummary | null;
+      error: string;
+    };
+
+/**
+ * Aggregated payload returned by the `spawn_subagents` tool's execute.
+ * `results` preserves submission order. `aggregatedUsage` sums cost +
+ * tokens across `status: 'success'` entries ONLY; failed / aborted entries
+ * are excluded (their cost is incomplete or undefined).
+ */
+export interface SpawnSubagentsToolResult {
+  results: SpawnSubagentResultEnvelope[];
+  aggregatedUsage: {
+    usd: number;
+    tokensIn: number;
+    tokensOut: number;
+    totalTokens: number;
+  };
+  durationMs: number;
+}
+
+/**
+ * Run promises through a fixed-size concurrency pool, preserving submission
+ * order in the output array. No fail-fast — every spec is awaited, even
+ * after one rejects. Used by {@link spawnSubagentsTool} so the model can
+ * fan-out N subagents without saturating the OR API.
+ *
+ * Implementation: workers compete for the next index off a shared cursor.
+ * Cheap, dependency-free, and ordering is preserved because each result is
+ * written to `out[index]` (not pushed in completion order).
+ */
+async function runPool<T, R>(
+  items: readonly T[],
+  cap: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  const concurrency = Math.max(1, Math.min(cap, items.length));
+  let cursor = 0;
+  const runOne = async (): Promise<void> => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      out[i] = await worker(items[i]!, i);
+    }
+  };
+  const workers: Promise<void>[] = [];
+  for (let w = 0; w < concurrency; w++) workers.push(runOne());
+  await Promise.all(workers);
+  return out;
+}
+
+/**
+ * Factory for the built-in `spawn_subagents` tool (Phase 4.9, plural).
+ * Mirrors {@link spawnSubagentTool} but accepts an array of subagent specs
+ * and runs them through a concurrency-capped promise pool. No fail-fast —
+ * a per-child failure isolates to that child's envelope, and the
+ * aggregate summary sums cost / tokens across SUCCESSFUL children only.
+ *
+ * Tool input shape (zod):
+ * - `subagents: Array<...>` — 1 to {@link MAX_PARALLEL_BATCH_SIZE} entries,
+ *   each matching {@link SPAWN_SUBAGENT_INPUT_SCHEMA} (the same per-spec
+ *   shape `spawn_subagent` accepts — `description` required, every other
+ *   field optional). Each spec is run as its own subagent; per-spec
+ *   overrides (`model` / `permission_mode` / `allowed_tools` /
+ *   `disallowed_tools` / `effort` from Phase 4.8) propagate independently.
+ *
+ * Concurrency: capped by the factory's `maxParallel` (default
+ * {@link DEFAULT_MAX_PARALLEL_SUBAGENTS} = 4). The pool submits in array
+ * order; results return in array order regardless of completion order.
+ *
+ * Per-child failure isolation: when one subagent throws, aborts, or hits
+ * a non-success terminal status, the others continue. Each envelope is
+ * `{ status: 'success' | 'error' | 'aborted', subagentSessionId, output,
+ * error? }`. Aggregated `costUsd` + token totals sum the `'success'`
+ * envelopes only.
+ *
+ * Parent abort cascade: identical to {@link spawnSubagentTool} — each
+ * child's signal is composed via `AbortSignal.any([parentSignal,
+ * subagentInternalCtl.signal])`, so a parent abort fans out into every
+ * in-flight child.
+ *
+ * Recursion-depth cap: same gate as the singular tool. A depth-N parent
+ * whose `childDepth >= maxDepth` rejects EACH spec with a per-child
+ * envelope (`status: 'error'`, `error: 'max subagent depth (N) exceeded'`)
+ * and STILL fires a matched `SubagentStart` / `SubagentEnd` pair per child
+ * so audit consumers see the rejection.
+ *
+ * Lifecycle hooks: `SubagentStart` / `SubagentEnd` fire once per child
+ * (no new event types for the plural case). Pairs may interleave when
+ * children run in parallel — consumers must correlate on
+ * `subagentSessionId`.
+ *
+ * Budget propagation: each child inherits the parent's `maxBudgetUsd`
+ * independently by default. Per-spec override via `max_budget_usd`.
+ * Aggregate cost may therefore exceed any single child's cap.
+ */
+export function spawnSubagentsTool(
+  opts: SpawnSubagentsToolOptions,
+  ctx: ToolContext = DEFAULT_TOOL_CONTEXT,
+) {
+  const maxDepth = opts.maxDepth ?? DEFAULT_MAX_SUBAGENT_DEPTH;
+  const parentDepth = opts.currentDepth ?? 0;
+  const maxParallel = opts.maxParallel ?? DEFAULT_MAX_PARALLEL_SUBAGENTS;
+  return tool({
+    name: 'spawn_subagents',
+    description:
+      'Delegate MULTIPLE focused subtasks to child agents in parallel. Each spec runs as its own subagent (same per-element schema as `spawn_subagent`). Results are returned in submission order regardless of completion order. Per-child failures isolate (the others keep running). Aggregate cost and token totals sum across successful children only. Use when several subtasks are independent and can run concurrently — for sequential delegation, prefer `spawn_subagent`. Returns `{ results, aggregatedUsage, durationMs }`.',
+    inputSchema: z.object({
+      subagents: z
+        .array(SPAWN_SUBAGENT_INPUT_SCHEMA)
+        .min(1)
+        .max(MAX_PARALLEL_BATCH_SIZE)
+        .describe(
+          `Array of subagent specs (1 to ${MAX_PARALLEL_BATCH_SIZE}). Each element accepts the same fields as the singular spawn_subagent tool — required \`description\` plus optional per-spec overrides (\`tools\` / \`instructions\` / \`max_turns\` / \`max_budget_usd\` / \`model\` / \`permission_mode\` / \`allowed_tools\` / \`disallowed_tools\` / \`effort\`). Concurrency is capped at the factory's \`maxParallel\` (default ${DEFAULT_MAX_PARALLEL_SUBAGENTS}); larger arrays queue.`,
+        ),
+    }),
+    execute: async ({ subagents }, execCtx): Promise<SpawnSubagentsToolResult> => {
+      const startMs = Date.now();
+      const parentSignal = (execCtx as { signal?: AbortSignal } | undefined)?.signal ?? ctx.signal;
+
+      const runOne = async (spec: SpawnSubagentInput): Promise<SpawnSubagentResultEnvelope> => {
+        const subagentSessionId = `${opts.parentSessionId}:sub:${randomUUID()}`;
+        const childDepth = parentDepth + 1;
+
+        // Depth-cap rejection — surface a matched Start/End pair (audit
+        // parity with singular tool) and an `error` envelope. Runner is
+        // never invoked on this path.
+        if (childDepth >= maxDepth) {
+          const reason = `max subagent depth (${maxDepth}) exceeded`;
+          await opts.onSubagentLifecycle?.('SubagentStart', {
+            event: 'SubagentStart',
+            parentSessionId: opts.parentSessionId,
+            subagentSessionId,
+            depth: childDepth,
+            prompt: spec.description,
+            ...(spec.tools !== undefined && { toolNames: spec.tools }),
+          });
+          const errResult: SubagentResultSummary = { status: 'error', reason, text: '' };
+          await opts.onSubagentLifecycle?.('SubagentEnd', {
+            event: 'SubagentEnd',
+            parentSessionId: opts.parentSessionId,
+            subagentSessionId,
+            depth: childDepth,
+            result: errResult,
+          });
+          return {
+            status: 'error',
+            subagentSessionId,
+            output: null,
+            error: reason,
+          };
+        }
+
+        const subagentInternalCtl = new AbortController();
+        const signal = parentSignal
+          ? AbortSignal.any([parentSignal, subagentInternalCtl.signal])
+          : subagentInternalCtl.signal;
+
+        await opts.onSubagentLifecycle?.('SubagentStart', {
+          event: 'SubagentStart',
+          parentSessionId: opts.parentSessionId,
+          subagentSessionId,
+          depth: childDepth,
+          prompt: spec.description,
+          ...(spec.tools !== undefined && { toolNames: spec.tools }),
+        });
+
+        let summary: SubagentRunResult;
+        try {
+          summary = await opts.runSubagent({
+            sessionId: subagentSessionId,
+            prompt: spec.description,
+            ...(spec.instructions !== undefined && { instructions: spec.instructions }),
+            ...(spec.max_turns !== undefined && { maxTurns: spec.max_turns }),
+            ...(spec.max_budget_usd !== undefined && { maxBudgetUsd: spec.max_budget_usd }),
+            ...(spec.tools !== undefined && { toolNames: spec.tools }),
+            ...(spec.model !== undefined && { model: spec.model }),
+            ...(spec.permission_mode !== undefined && { permissionMode: spec.permission_mode }),
+            ...(spec.allowed_tools !== undefined && { allowedTools: spec.allowed_tools }),
+            ...(spec.disallowed_tools !== undefined && {
+              disallowedTools: spec.disallowed_tools,
+            }),
+            ...(spec.effort !== undefined && { effort: spec.effort }),
+            signal,
+            depth: childDepth,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const errResult: SubagentResultSummary = {
+            status: 'error',
+            reason: message,
+            text: '',
+          };
+          await opts.onSubagentLifecycle?.('SubagentEnd', {
+            event: 'SubagentEnd',
+            parentSessionId: opts.parentSessionId,
+            subagentSessionId,
+            depth: childDepth,
+            result: errResult,
+          });
+          return {
+            status: 'error',
+            subagentSessionId,
+            output: null,
+            error: message,
+          };
+        }
+
+        await opts.onSubagentLifecycle?.('SubagentEnd', {
+          event: 'SubagentEnd',
+          parentSessionId: opts.parentSessionId,
+          subagentSessionId,
+          depth: childDepth,
+          result: summary,
+        });
+
+        // Classification: a child run that observed the composite abort
+        // signal surfaces `status: 'error'` with `reason: 'aborted'` from
+        // its terminal stream_complete. Map that to the envelope's
+        // `'aborted'` so the parent model sees cancellation distinct from
+        // other failures.
+        if (summary.status === 'error' && summary.reason === 'aborted') {
+          return {
+            status: 'aborted',
+            subagentSessionId,
+            output: summary,
+            error: 'aborted',
+          };
+        }
+        if (summary.status === 'error') {
+          return {
+            status: 'error',
+            subagentSessionId,
+            output: summary,
+            error: summary.reason ?? 'subagent errored',
+          };
+        }
+        return {
+          status: 'success',
+          subagentSessionId,
+          output: summary,
+        };
+      };
+
+      const results = await runPool(subagents, maxParallel, runOne);
+
+      // Sum cost + token usage across success envelopes only — partial /
+      // failed children carry incomplete or undefined usage and must not
+      // contaminate the aggregate.
+      let usd = 0;
+      let tokensIn = 0;
+      let tokensOut = 0;
+      let totalTokens = 0;
+      for (const r of results) {
+        if (r.status !== 'success') continue;
+        if (r.output.costUsd !== undefined) usd += r.output.costUsd;
+        const u = r.output.usage;
+        if (u) {
+          tokensIn += u.inputTokens;
+          tokensOut += u.outputTokens;
+          totalTokens += u.totalTokens;
+        }
+      }
+
+      return {
+        results,
+        aggregatedUsage: { usd, tokensIn, tokensOut, totalTokens },
+        durationMs: Date.now() - startMs,
+      };
     },
   });
 }

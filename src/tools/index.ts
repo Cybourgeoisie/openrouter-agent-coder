@@ -10,7 +10,12 @@ import { askUserQuestionTool, type AskUserQuestionToolOptions } from './ask-user
 import { taskCreateTool, taskUpdateTool, type OnTasksChanged, type TaskListRef } from './tasks.js';
 import { editNotebookTool } from './edit-notebook.js';
 import { monitorTool } from './monitor.js';
-import { spawnSubagentTool, type SpawnSubagentToolOptions } from './spawn-subagent.js';
+import {
+  spawnSubagentTool,
+  spawnSubagentsTool,
+  type SpawnSubagentToolOptions,
+  type SpawnSubagentsToolOptions,
+} from './spawn-subagent.js';
 import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
 
 export { readFileTool } from './read-file.js';
@@ -37,10 +42,20 @@ export type {
 } from './edit-notebook.js';
 export { monitorTool } from './monitor.js';
 export type { MonitorResult, MonitorLine, MonitorError } from './monitor.js';
-export { spawnSubagentTool, DEFAULT_MAX_SUBAGENT_DEPTH } from './spawn-subagent.js';
+export {
+  spawnSubagentTool,
+  spawnSubagentsTool,
+  DEFAULT_MAX_SUBAGENT_DEPTH,
+  DEFAULT_MAX_PARALLEL_SUBAGENTS,
+  MAX_PARALLEL_BATCH_SIZE,
+  SPAWN_SUBAGENT_INPUT_SCHEMA,
+} from './spawn-subagent.js';
 export type {
   SpawnSubagentToolOptions,
   SpawnSubagentToolResult,
+  SpawnSubagentsToolOptions,
+  SpawnSubagentsToolResult,
+  SpawnSubagentResultEnvelope,
   SubagentRunConfig,
   SubagentRunResult,
   SubagentRunner,
@@ -93,6 +108,17 @@ export interface AllToolsOptions {
    * child `OpenRouterAgentRun`. See {@link SpawnSubagentToolOptions}.
    */
   spawnSubagent?: SpawnSubagentToolOptions;
+  /**
+   * Phase 4.9: opt-in {@link spawnSubagentsTool} (plural) configuration.
+   * When omitted, the `spawn_subagents` tool is **NOT** included in the
+   * default bundle. `agent.ts` enables both `spawn_subagent` (singular)
+   * and `spawn_subagents` (plural) together under the single
+   * `OpenRouterAgentRun({ enableSubagents: true })` switch (the two tools
+   * share a `runSubagent` closure and lifecycle emitter — wiring them
+   * separately would force two near-identical opt-in flags on the host).
+   * See {@link SpawnSubagentsToolOptions}.
+   */
+  spawnSubagents?: SpawnSubagentsToolOptions;
 }
 
 /**
@@ -126,6 +152,9 @@ export function allTools(
   ];
   if (opts.spawnSubagent !== undefined) {
     tools.push(spawnSubagentTool(opts.spawnSubagent, ctx));
+  }
+  if (opts.spawnSubagents !== undefined) {
+    tools.push(spawnSubagentsTool(opts.spawnSubagents, ctx));
   }
   return tools;
 }

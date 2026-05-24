@@ -66,7 +66,7 @@ Each is a self-contained implementation. Sequencing matters only within the suba
 | ~~4.6~~ | ~~File checkpointing~~ ([#57](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/57))                     | ~~12h~~ | ~~moderate~~         | ~~—~~      |
 | ~~4.7~~ | ~~Subagent system — basic, sequential~~ ([#88](https://github.com/Cybourgeoisie/openrouter-agent-coder/pull/88))      | ~~15h~~ | ~~moderate~~         | ~~—~~      |
 | ~~4.8~~ | ~~Subagent tool / model / effort overrides~~ ([#89](https://github.com/Cybourgeoisie/openrouter-agent-coder/pull/89)) | ~~5h~~  | ~~moderate~~         | ~~4.7~~    |
-| 4.9     | Parallel subagent execution                                                                                           | 7h      | moderate             | 4.7        |
+| ~~4.9~~ | ~~Parallel subagent execution~~ ([✅ #90](https://github.com/Cybourgeoisie/openrouter-agent-coder/pull/90))           | ~~7h~~  | ~~moderate~~         | ~~4.7~~    |
 
 **Phase 4 total:** ~70h (estimate; 4.7 is the largest single card and most likely to slip).
 
