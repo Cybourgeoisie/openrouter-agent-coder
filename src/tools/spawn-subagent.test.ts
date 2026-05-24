@@ -17,6 +17,11 @@ interface SpawnInput {
   instructions?: string;
   max_turns?: number;
   max_budget_usd?: number;
+  model?: string;
+  permission_mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
+  allowed_tools?: string[];
+  disallowed_tools?: string[];
+  effort?: string;
 }
 
 type ExecuteFn = (input: SpawnInput, ctx?: unknown) => Promise<SpawnSubagentToolResult>;
@@ -377,5 +382,128 @@ describe('spawn_subagent tool — schema validation surface', () => {
     const { execute } = makeTool({ runSubagent: runner });
     const result = await execute({ description: 'minimal' });
     expect(result.status).toBe('success');
+  });
+});
+
+describe('spawn_subagent tool — Phase 4.8 per-subagent overrides', () => {
+  it('forwards `model` override (snake_case input → camelCase config) to the runner', async () => {
+    const runner = makeRunnerOk();
+    const { execute } = makeTool({ runSubagent: runner });
+    await execute({ description: 'x', model: 'openai/gpt-5-codex' });
+    const config = (runner as unknown as { mock: { calls: SubagentRunConfig[][] } }).mock
+      .calls[0][0];
+    expect(config.model).toBe('openai/gpt-5-codex');
+  });
+
+  it('forwards `permission_mode` override (snake_case → camelCase `permissionMode`) to the runner', async () => {
+    const runner = makeRunnerOk();
+    const { execute } = makeTool({ runSubagent: runner });
+    await execute({ description: 'x', permission_mode: 'plan' });
+    const config = (runner as unknown as { mock: { calls: SubagentRunConfig[][] } }).mock
+      .calls[0][0];
+    expect(config.permissionMode).toBe('plan');
+  });
+
+  it('forwards `allowed_tools` override as `allowedTools` (rule grammar passes through verbatim)', async () => {
+    const runner = makeRunnerOk();
+    const { execute } = makeTool({ runSubagent: runner });
+    await execute({
+      description: 'x',
+      allowed_tools: ['read_file', 'Bash(echo *)'],
+    });
+    const config = (runner as unknown as { mock: { calls: SubagentRunConfig[][] } }).mock
+      .calls[0][0];
+    expect(config.allowedTools).toEqual(['read_file', 'Bash(echo *)']);
+  });
+
+  it('forwards `disallowed_tools` override as `disallowedTools` (rule grammar passes through verbatim)', async () => {
+    const runner = makeRunnerOk();
+    const { execute } = makeTool({ runSubagent: runner });
+    await execute({
+      description: 'x',
+      disallowed_tools: ['Bash(rm *)'],
+    });
+    const config = (runner as unknown as { mock: { calls: SubagentRunConfig[][] } }).mock
+      .calls[0][0];
+    expect(config.disallowedTools).toEqual(['Bash(rm *)']);
+  });
+
+  it('composes 4.7 `tools` narrowing with 4.8 `allowed_tools` (both layers reach the runner)', async () => {
+    const runner = makeRunnerOk();
+    const { execute } = makeTool({ runSubagent: runner });
+    await execute({
+      description: 'x',
+      tools: ['run_command'],
+      allowed_tools: ['run_command(echo *)'],
+    });
+    const config = (runner as unknown as { mock: { calls: SubagentRunConfig[][] } }).mock
+      .calls[0][0];
+    // toolNames narrows the pool to run_command only; allowedTools layers
+    // the scoped echo-only rule on top — both arrive intact at the runner so
+    // the agent-side wiring can compose them at child-construction time.
+    expect(config.toolNames).toEqual(['run_command']);
+    expect(config.allowedTools).toEqual(['run_command(echo *)']);
+  });
+
+  it('forwards `effort` pass-through (currently no-op, stored on config for Phase 5.4 wiring)', async () => {
+    const runner = makeRunnerOk();
+    const { execute } = makeTool({ runSubagent: runner });
+    await execute({ description: 'x', effort: 'high' });
+    const config = (runner as unknown as { mock: { calls: SubagentRunConfig[][] } }).mock
+      .calls[0][0];
+    expect(config.effort).toBe('high');
+  });
+
+  it('omits override fields from the runner config when the spawn call omits them', async () => {
+    const runner = makeRunnerOk();
+    const { execute } = makeTool({ runSubagent: runner });
+    await execute({ description: 'x' });
+    const config = (runner as unknown as { mock: { calls: SubagentRunConfig[][] } }).mock
+      .calls[0][0];
+    expect(config.model).toBeUndefined();
+    expect(config.permissionMode).toBeUndefined();
+    expect(config.allowedTools).toBeUndefined();
+    expect(config.disallowedTools).toBeUndefined();
+    expect(config.effort).toBeUndefined();
+  });
+
+  it('overrides do not mutate the factory options object (parent state is preserved)', async () => {
+    // Snapshot the SpawnSubagentToolOptions before spawn → verify each spawn
+    // call leaves the factory-time opts untouched. This guards the invariant
+    // "overrides apply to the child run's ctor args only" — the parent's
+    // SpawnSubagentToolOptions instance must not pick up the override values.
+    const runner = makeRunnerOk();
+    const factoryOpts: SpawnSubagentToolOptions = {
+      parentSessionId: 'parent-session',
+      runSubagent: runner,
+    };
+    const snapshot = JSON.parse(
+      JSON.stringify({ ...factoryOpts, runSubagent: undefined }),
+    ) as Record<string, unknown>;
+    const t = spawnSubagentTool(factoryOpts, { cwd: '.' });
+    const execute = t.function.execute as ExecuteFn;
+    await execute({
+      description: 'x',
+      permission_mode: 'plan',
+      allowed_tools: ['read_file'],
+      disallowed_tools: ['Bash(rm *)'],
+      model: 'openai/gpt-5',
+      effort: 'high',
+    });
+    expect(JSON.parse(JSON.stringify({ ...factoryOpts, runSubagent: undefined }))).toEqual(
+      snapshot,
+    );
+  });
+
+  it('zod schema rejects an invalid `permission_mode` value at parse time', async () => {
+    const { tool } = makeTool({ runSubagent: makeRunnerOk() });
+    // The factory exposes the Zod schema as `function.inputSchema` per the
+    // OR SDK's tool-types contract; parse the raw input directly to assert
+    // the schema-level rejection.
+    const schema = (tool.function as unknown as { inputSchema: { parse: (i: unknown) => unknown } })
+      .inputSchema;
+    expect(() =>
+      schema.parse({ description: 'x', permission_mode: 'definitely-not-a-mode' }),
+    ).toThrow();
   });
 });
