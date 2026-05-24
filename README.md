@@ -937,10 +937,87 @@ spawn server X" errors. Schema violations (missing both `command` and
 `url`, having both, invalid URL, etc.) throw with the file path in the
 message.
 
-**Preview status — NOT wired into agent runs yet.** Card 5.2.4 bridges
-discovered MCP tools into the agent's `Tool[]` registry, and 5.2.5 adds
-`McpServerStart` / `McpServerStop` lifecycle hooks. Until those land the
-surface here is exported but not consumed by `OpenRouterAgentRun`.
+**Preview status.** Card 5.2.4 bridges discovered MCP tools into the
+agent's `Tool[]` registry (see ["MCP tool bridge"](#mcp-tool-bridge-preview)
+below), and 5.2.5 will add `McpServerStart` / `McpServerStop` lifecycle hooks.
+
+### MCP tool bridge (preview)
+
+Phase 5.2.4 wires MCP-server tools into `OpenRouterAgentRun`. Two new
+constructor options control the integration:
+
+| Option            | Type                         | Default | Behaviour                                                                                                                                                                                                       |
+| ----------------- | ---------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mcpServers`      | `readonly McpServerConfig[]` | —       | Explicit server list. Use the discriminated union returned by `loadMcpConfig()` or build entries by hand. Overrides `autoDiscoverMcp` when set (even to an empty array — `[]` opts out of discovery entirely).  |
+| `autoDiscoverMcp` | `boolean`                    | `false` | When `mcpServers` is undefined, set to `true` to run `loadMcpConfig({ cwd })` at iter start and spawn whatever it returns. Defaults to `false` so a library consumer never auto-spawns user processes silently. |
+
+Tool naming. Each server's tools surface in the run's tool array under
+the prefixed name `<serverName>__<toolName>` — two underscores. Two
+servers exposing the same `toolName` therefore land on distinct prefixed
+names (`linear__list_issues` and `github__list_issues` coexist with no
+collision).
+
+Lifecycle. The bridge spawns lazily at the top of `iterate()` — after
+the `Setup` hook fires, before the first `callModel` — and tears down
+in the generator's `finally` block (success / abort / mid-stream throw
+all reach the same cleanup path). Lifecycle is **per-run**: no pooling
+across runs that share a `sessionId`. Connections close when the run
+ends.
+
+Init failure policy. If one server fails its handshake (`spawn ENOENT`,
+HTTP 401, `tools/list` rejection, etc.) the bridge logs at `warn` level,
+fires a `Notification` hook with `message: 'mcp_server_failed'` carrying
+`{ name, transport, source, error }`, and continues with the remaining
+servers. The run still produces output from its built-in tools + the
+surviving MCP servers.
+
+Schema mapping. MCP tools advertise `inputSchema` as a JSON Schema
+object. The bridge stores that schema verbatim on a Zod
+`z.unknown().meta(...)` so the OR SDK's `convertZodToJsonSchema`
+emits the original JSON Schema to the model unchanged — no Zod
+conversion, no validation in the wrapper. The MCP server validates its
+own inputs at the JSON-RPC boundary.
+
+Permissions. MCP tools flow through every existing gate. `canUseTool`
+sees the prefixed name (`canUseTool('srv__danger', input)`).
+`disallowedTools: ['srv__danger']` matches verbatim — the rule grammar
+was extended in 5.2.4 to accept any name containing `__`. Scoped
+patterns (`Bash(npm *)` syntax) are **not** supported for MCP tools (the
+bridge has no per-server arg-key registry); use a plain prefixed name
+or write a `canUseTool` callback.
+
+Per-tool-call cancellation. The OR SDK's `ToolExecuteContext` carries an
+optional `signal` — the bridge composes it with the bridge's lifecycle
+signal so a per-call abort cancels just that one MCP request without
+tearing the client down.
+
+Example — explicit list:
+
+```ts
+import { OpenRouterAgentRun, loadMcpConfig } from 'openrouter-agent-coder';
+
+const servers = await loadMcpConfig({ cwd: process.cwd() });
+const run = new OpenRouterAgentRun({
+  apiKey: process.env.OPENROUTER_API_KEY!,
+  sessionId: 'demo',
+  prompt: 'Summarise my open Linear issues.',
+  mcpServers: servers, // explicit — autoDiscoverMcp is ignored
+});
+for await (const ev of run) {
+  /* … */
+}
+```
+
+Example — opt-in discovery:
+
+```ts
+const run = new OpenRouterAgentRun({
+  apiKey: process.env.OPENROUTER_API_KEY!,
+  sessionId: 'demo',
+  prompt: 'Summarise my open Linear issues.',
+  autoDiscoverMcp: true, // walk ./.mcp.json + ~/.mcp.json at iter start
+});
+```
 
 ## Tools shipped with the library
 
