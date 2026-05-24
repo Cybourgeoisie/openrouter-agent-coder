@@ -45,7 +45,9 @@ export type HookEvent =
   | 'Notification'
   | 'SubagentStart'
   | 'SubagentEnd'
-  | 'PreCompact';
+  | 'PreCompact'
+  | 'McpServerStart'
+  | 'McpServerStop';
 
 /**
  * Summary of a finished subagent run. Mirrors the fields of a `stream_complete`
@@ -173,6 +175,52 @@ export type HookPayload =
       messages: unknown;
       keepRecentTurns: number;
       reason: 'auto' | 'manual';
+    }
+  /**
+   * Phase 5.2.5: fires once per MCP server immediately AFTER its JSON-RPC
+   * `initialize` handshake succeeds and the bridge has finished listing the
+   * server's tools/resources/prompts. Init failures DO NOT fire this event —
+   * they fire the existing `Notification` hook with
+   * `message: 'mcp_server_failed'` instead, so `McpServerStart` is a strong
+   * signal that the server is live and its capabilities are known.
+   *
+   * `capabilities.tools` / `capabilities.resources` / `capabilities.prompts`
+   * are the counts returned by the corresponding `list*` calls at init time —
+   * NOT the raw arrays, to keep the payload cheap to log and serialize. A
+   * server that does not advertise a given capability (e.g. tools-only) is
+   * reported as `0` for the omitted lists.
+   *
+   * Audit-only — the hook's return value is ignored and a thrown error is
+   * logged + swallowed (the run continues).
+   */
+  | {
+      event: 'McpServerStart';
+      serverName: string;
+      transport: 'stdio' | 'streamableHttp' | 'sse';
+      capabilities: { tools: number; resources: number; prompts: number };
+    }
+  /**
+   * Phase 5.2.5: fires once per MCP server when the bridge tears it down at
+   * the end of an agent run. Only servers whose handshake previously
+   * succeeded (i.e. whose {@link McpServerStart} fired) emit this event —
+   * init failures do not fire either side of the bracket.
+   *
+   * `durationMs` is `Date.now() - startedAt` captured at successful init —
+   * millisecond precision is sufficient for observability without pulling
+   * in `performance.now()`. `reason` distinguishes:
+   *
+   * - `'closed'` — normal teardown at the end of a successful run.
+   * - `'error'` — the underlying `client.close()` threw.
+   * - `'aborted'` — the bridge's run-level `signal` is `aborted` at close
+   *   time (the run was cancelled mid-stream, taking the bridge down with it).
+   *
+   * Audit-only — same swallow-on-throw convention as the rest of the hooks.
+   */
+  | {
+      event: 'McpServerStop';
+      serverName: string;
+      durationMs: number;
+      reason: 'closed' | 'error' | 'aborted';
     };
 
 /**

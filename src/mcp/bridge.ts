@@ -31,6 +31,7 @@ import { tool as sdkTool, type Tool } from '@openrouter/agent';
 
 import type { McpServerConfig } from './config.js';
 import type { LoggerFn } from './spec.js';
+import type { HookEvent, HookPayload } from '../events.js';
 import { McpStdioClient } from './transport-stdio.js';
 import { McpHttpClient } from './transport-http.js';
 
@@ -52,6 +53,19 @@ export interface McpBridgeClient {
       inputSchema: Record<string, unknown>;
     }>;
   }>;
+  /**
+   * Phase 5.2.5: optional — used by the bridge to populate the
+   * `capabilities.resources` count on the `McpServerStart` hook payload.
+   * Missing method (or a rejected call) is treated as `0` so servers that
+   * don't advertise a `resources` capability do not block init.
+   */
+  listResources?(signal?: AbortSignal): Promise<{ resources: ReadonlyArray<unknown> }>;
+  /**
+   * Phase 5.2.5: optional — used by the bridge to populate the
+   * `capabilities.prompts` count on the `McpServerStart` hook payload.
+   * Missing method (or a rejected call) is treated as `0`.
+   */
+  listPrompts?(signal?: AbortSignal): Promise<{ prompts: ReadonlyArray<unknown> }>;
   callTool(
     name: string,
     args?: Record<string, unknown>,
@@ -87,6 +101,19 @@ export interface McpBridgeOptions {
     message: string,
     context?: unknown,
   ) => Promise<void> | void;
+  /**
+   * Phase 5.2.5: lifecycle-emitter for the `McpServerStart` and
+   * `McpServerStop` hook events. The agent wires this to its
+   * `safeFireHook` so subscribers observe MCP server lifecycle through the
+   * same channel as every other hook event. Audit-only — return value
+   * ignored, throws swallowed inside `safeFireHook`. Omitted by callers
+   * who don't care about the events; the bridge itself never branches on
+   * the presence of this callback for anything other than the fire.
+   */
+  onLifecycle?: (
+    event: Extract<HookEvent, 'McpServerStart' | 'McpServerStop'>,
+    payload: Extract<HookPayload, { event: 'McpServerStart' | 'McpServerStop' }>,
+  ) => void | Promise<void>;
   /** Run-level abort signal. Composes with per-call signals. */
   signal?: AbortSignal;
   /** Test seam — defaults to {@link defaultClientFactory}. */
@@ -100,12 +127,22 @@ export interface McpBridgeOptions {
  */
 interface BridgeEntry {
   serverName: string;
+  /**
+   * Transport variant as it appears on the {@link HookPayload}
+   * `McpServerStart`/`McpServerStop` events. The `'sse'` value is reserved
+   * for future use — the {@link defaultClientFactory} always picks
+   * `'streamableHttp'` for an `http` config, but a custom factory may swap
+   * the SDK transport for the deprecated SSE one.
+   */
+  transport: 'stdio' | 'streamableHttp' | 'sse';
   client: McpBridgeClient;
   tools: ReadonlyArray<{
     name: string;
     description?: string;
     inputSchema: Record<string, unknown>;
   }>;
+  /** Phase 5.2.5: captured at successful init for the `durationMs` field on `McpServerStop`. */
+  startedAt: number;
 }
 
 /**
@@ -196,7 +233,51 @@ export class McpBridge {
         try {
           await client.connect(this.opts.signal);
           const { tools } = await client.listTools(this.opts.signal);
-          return { serverName: server.name, client, tools };
+          // Phase 5.2.5: fetch resource + prompt counts for the
+          // `McpServerStart` capabilities payload. A server that does not
+          // advertise the corresponding capability typically rejects with a
+          // JSON-RPC `-32601` (Method not found); allSettled + 0 fallback
+          // keeps the hook payload populated without forcing the server to
+          // implement every list method.
+          const [resourcesSettled, promptsSettled] = await Promise.allSettled([
+            client.listResources?.(this.opts.signal) ?? Promise.resolve({ resources: [] }),
+            client.listPrompts?.(this.opts.signal) ?? Promise.resolve({ prompts: [] }),
+          ]);
+          const resourcesCount =
+            resourcesSettled.status === 'fulfilled'
+              ? (resourcesSettled.value.resources?.length ?? 0)
+              : 0;
+          const promptsCount =
+            promptsSettled.status === 'fulfilled' ? (promptsSettled.value.prompts?.length ?? 0) : 0;
+          const transport: BridgeEntry['transport'] =
+            server.transport === 'stdio' ? 'stdio' : 'streamableHttp';
+          const startedAt = Date.now();
+          const entry: BridgeEntry = {
+            serverName: server.name,
+            transport,
+            client,
+            tools,
+            startedAt,
+          };
+          // Audit-only — return value ignored. The agent's wired
+          // `safeFireHook` already swallows throws, but mirror the `notify`
+          // pattern below: a throwing custom-wired emitter must not tip a
+          // successful handshake into the failure path.
+          try {
+            await this.opts.onLifecycle?.('McpServerStart', {
+              event: 'McpServerStart',
+              serverName: server.name,
+              transport,
+              capabilities: {
+                tools: tools.length,
+                resources: resourcesCount,
+                prompts: promptsCount,
+              },
+            });
+          } catch {
+            /* lifecycle hook throws are observability-only; do not derail init */
+          }
+          return entry;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.opts.logger?.('warn', `[mcp:bridge] server ${server.name} failed: ${message}`, {
@@ -256,16 +337,37 @@ export class McpBridge {
     const entries = this.entries;
     this.entries = [];
     this.wrappedTools = [];
+    // Phase 5.2.5: snapshot the run-level signal's aborted state ONCE before
+    // tearing servers down. If the bridge is being torn down because the
+    // outer run was aborted, every `McpServerStop` should report
+    // `reason: 'aborted'` even when the per-server close itself succeeds
+    // (the run abort is the proximate cause of the teardown, not a per-
+    // server error). Per-server close throws still surface as `'error'`.
+    const aborted = this.opts.signal?.aborted === true;
     await Promise.all(
       entries.map(async (entry) => {
+        let reason: 'closed' | 'error' | 'aborted' = aborted ? 'aborted' : 'closed';
         try {
           await entry.client.close();
         } catch (err) {
+          reason = 'error';
           this.opts.logger?.(
             'debug',
             `[mcp:bridge] close() of ${entry.serverName} threw — swallowing`,
             { error: err instanceof Error ? err.message : String(err) },
           );
+        }
+        const durationMs = Date.now() - entry.startedAt;
+        // Audit-only — same swallow-on-throw semantics as McpServerStart.
+        try {
+          await this.opts.onLifecycle?.('McpServerStop', {
+            event: 'McpServerStop',
+            serverName: entry.serverName,
+            durationMs,
+            reason,
+          });
+        } catch {
+          /* lifecycle hook throws are observability-only; do not derail close */
         }
       }),
     );
