@@ -157,23 +157,23 @@ This repo's `AgentCoreEvent` → callboard's `AgentEvent`:
 
 Callboard passes `options: Record<string, unknown>` shaped like the Claude SDK Options. Per the codex-adapter plan, map what makes sense:
 
-| Callboard option                   | OpenRouter equivalent                                                                               |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `cwd`                              | Resolve all tool path inputs against this (today tools assume CWD; need core-level base path)       |
-| `model`                            | `callModel({ model })` — default to `OR_MODEL`                                                      |
-| `maxTurns`                         | `stopWhen: [stepCountIs(maxTurns)]`                                                                 |
-| `maxBudgetUsd`                     | `stopWhen: [maxCost(maxBudgetUsd)]`                                                                 |
-| `systemPrompt` (string)            | `callModel({ instructions })` — replaces hardcoded prompt at `agent.ts:92`                          |
-| `systemPrompt` (preset+append)     | Concat into `instructions`; ignore preset (Claude-specific)                                         |
-| `resume: sessionId`                | Pass through to `OpenRouterAgentCore` constructor — already supported via `OR_SESSION_ID` mechanism |
-| `env`                              | Apply to spawned child processes in `run_command`; merge into OR client `env` if it accepts one     |
-| `abortController`                  | `core.abort()` when aborted — needs new `AbortSignal` plumbing in core                              |
-| `canUseTool`                       | See §5                                                                                              |
-| `allowedTools` / `disallowedTools` | Tool filter at registration time                                                                    |
-| `mcpServers`                       | Adapter's responsibility — translate to OR tools via `buildToolServer`                              |
-| `effort`                           | Drop (OR doesn't expose; revisit if added)                                                          |
-| `plugins` / `settingSources`       | Drop (Claude-specific)                                                                              |
-| `permissionMode`                   | Map to a permission-policy strategy applied via `canUseTool`                                        |
+| Callboard option                   | OpenRouter equivalent                                                                                                                                                                   |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cwd`                              | Resolve all tool path inputs against this (today tools assume CWD; need core-level base path)                                                                                           |
+| `model`                            | `callModel({ model })` — default to `OR_MODEL`                                                                                                                                          |
+| `maxTurns`                         | `stopWhen: [stepCountIs(maxTurns)]`                                                                                                                                                     |
+| `maxBudgetUsd`                     | `stopWhen: [maxCost(maxBudgetUsd)]`                                                                                                                                                     |
+| `systemPrompt` (string)            | `callModel({ instructions })` — replaces hardcoded prompt at `agent.ts:92`                                                                                                              |
+| `systemPrompt` (preset+append)     | Concat into `instructions`; ignore preset (Claude-specific)                                                                                                                             |
+| `resume: sessionId`                | Pass through to `OpenRouterAgentCore` constructor — already supported via `OR_SESSION_ID` mechanism                                                                                     |
+| `env`                              | Apply to spawned child processes in `run_command`; merge into OR client `env` if it accepts one                                                                                         |
+| `abortController`                  | `core.abort()` when aborted — needs new `AbortSignal` plumbing in core                                                                                                                  |
+| `canUseTool`                       | See §5                                                                                                                                                                                  |
+| `allowedTools` / `disallowedTools` | Tool filter at registration time                                                                                                                                                        |
+| `mcpServers`                       | Adapter's responsibility — translate to OR tools via `buildToolServer`                                                                                                                  |
+| `effort`                           | Drop (OR doesn't expose; revisit if added)                                                                                                                                              |
+| `plugins` / `settingSources`       | Library-level plugin discovery via Card 5.8 (post-5.S4) — pass-through if/when callboard needs it. _Was "Drop (Claude-specific)" under pre-2026-05-24 Bucket D framing — see Card 3.0._ |
+| `permissionMode`                   | Map to a permission-policy strategy applied via `canUseTool`                                                                                                                            |
 
 The two non-trivial pieces: `cwd` (all file tools need a base-path arg, not implicit `process.cwd()`) and `abortController` (the core needs an `AbortSignal` it can honor between turns).
 
@@ -384,7 +384,7 @@ Lands separately, in callboard, whenever the integration becomes a priority. Not
 
 ## Overlap With `claude-agent-sdk-parity.md`
 
-The existing parity doc lists 26 missing features. The subset that callboard _needs_ (and this plan addresses) is a smaller list — most parity-doc P2 items (Skills, slash commands, plugins, NotebookEdit, ToolSearch, Monitor) are not callboard requirements.
+The existing parity doc lists 26 missing features. The subset that callboard _needs_ (and this plan addresses) is a smaller list — most parity-doc P2 items (Skills, slash commands, plugins, NotebookEdit, ToolSearch, Monitor) are not callboard requirements. _(Skills / slash commands / plugins were reclassified in-scope for the library on 2026-05-24 — Cards 5.6 / 5.7 / 5.8, see Card 3.0. They remain non-callboard-requirements; the reclassification is about library coverage, not adapter scope.)_
 
 | Parity-doc item                     | Required for callboard?                             | Covered here   |
 | ----------------------------------- | --------------------------------------------------- | -------------- |

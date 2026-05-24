@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Reclassified Skills system / Slash commands / Plugins from
+  out-of-scope (originally Bucket D — host responsibility) to in-scope.
+  Library now aims to be a Claude Code + Agent SDK replacement, not just
+  the SDK layer. Implementation: Cards 5.6 (slash commands), 5.7
+  (skills), 5.8 (plugins), gated on spike 5.S4 (architecture
+  investigation). See Card 3.0 / PR #95.
 - `compileGlobToRegex` in `src/utils/glob.ts` now treats `**/` as
   zero-or-more path segments (previously one-or-more), aligning with the
   standard gitignore / minimatch / bash-globstar semantic. Because the
