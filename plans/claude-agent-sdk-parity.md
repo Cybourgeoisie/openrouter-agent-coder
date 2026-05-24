@@ -1,15 +1,15 @@
 # Claude Agent SDK vs OpenRouter Agent Coder — Parity Analysis
 
 > Comparison of the [Claude Code Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) (TypeScript) against the openrouter-agent-coder feature set.
-> Originally generated 2026-05-21. **Last reviewed against this codebase: 2026-05-23** (after Phase 3.1 + 3.2 + 3.3 + 3.4 + 3.5 + 3.6 + 3.7 + 3.8 + 3.9 + 3.10 + 3.11 + 3.12 + 4.1 + 4.2 + 4.3 + 4.4 + 4.5 + 4.6 + 4.7 + 4.8 + 4.9 landed — see [`claude-sdk-parity-roadmap.md`](./claude-sdk-parity-roadmap.md)).
+> Originally generated 2026-05-21. **Last reviewed against this codebase: 2026-05-24** (all 12 Phase 3 cards + all 9 Phase 4 cards landed; Phase 5 spikes 5.S1 + 5.S2 complete, 5.S3 still Ready; see [`claude-sdk-parity-roadmap.md`](./claude-sdk-parity-roadmap.md)).
 
 ## Summary
 
 | Status             | Count  |
 | ------------------ | ------ |
 | Full parity        | 30     |
-| Partial parity     | 5      |
-| Missing            | 11     |
+| Partial parity     | 6      |
+| Missing            | 10     |
 | **Total features** | **46** |
 
 Net change vs the original 2026-05-21 snapshot: **+22 Full** (`canUseTool`, new `Interrupt/abort` row, `Allowed/disallowed tools` after Phase 3.2, `Plan mode` after Phase 3.3, `CLAUDE.md / project context` after Phase 3.4, `Session lifecycle hooks` and `Notification hook` after Phase 3.6, `PreToolUse`/`PostToolUse` block-and-modify after Phase 3.7, `Streaming output` (rich message stream) after Phase 3.8, `Bash / run command` after Phase 3.9, `Grep (content search)` after Phase 3.10, `Glob (file search)` after Phase 3.11, `persistSession: false` after Phase 3.12, `AskUserQuestion` after Phase 4.1, `TaskCreate / TaskUpdate` after Phase 4.2, `NotebookEdit` after Phase 4.3, `Monitor (background script)` after Phase 4.4, `Session forking` after Phase 4.5, `File checkpointing` after Phase 4.6, `Subagent spawning` after Phase 4.7, `Subagent tool restrictions` after Phase 4.8, `Parallel subagents` after Phase 4.9), **+1 Partial** (constructor-injected tools — `Subagent hooks` after Phase 4.7 stays Partial pending `SubagentStop` matcher patterns; `Subagent tool restrictions` graduated Partial → Full after Phase 4.8). Most "Missing" rows softened to "Partial" because their building blocks landed in Phase 1; the remaining gap is the ergonomic / discovery layer on top.
@@ -136,9 +136,9 @@ Items shipped in Phase 1 are crossed through with a back-pointer; the **layer-on
 
 7. ~~**Subagent system.** Agent tool for spawning focused subtasks with isolated context, restricted tools, optional model overrides.~~ _Basic-sequential shipped in Phase 4.7 — [✅ #58] `src/tools/spawn-subagent.ts` exposes `spawn_subagent`, wired via `OpenRouterAgentRun({ enableSubagents: true })`. Per-subagent model / effort overrides are Phase 4.8; parallel execution is Phase 4.9._
 
-8. **Session forking.** Branch a session from existing history to explore alternatives.
+8. ~~**Session forking.** Branch a session from existing history to explore alternatives.~~ _Shipped in Phase 4.5 — [✅ #56] `forkSession()` + `OpenRouterAgentRun.fork()` copy `state.json` into a new session directory and stamp `parentSessionId` for lineage._
 
-9. **Streaming input mode.** AsyncGenerator-based input for mid-session messages, interruptions, image attachments. (Interrupt-only is already covered via `signal` / `abort()`.)
+9. **Streaming input mode.** AsyncGenerator-based input for mid-session messages, interruptions, image attachments. (Interrupt-only is already covered via `signal` / `abort()`.) _Spike 5.S2 complete — verdict: No (workaround exists). `callModel` is single-prompt-per-invocation and OR's wire is SSE one-way, but the SDK's `interruptedBy` state primitive enables an interrupt-then-restart path that can be hidden under a Claude-SDK-shaped `AsyncIterable<UserMessage>` + `interrupt()` facade. Card 5.3 build estimate refined to 16–24h ([spike](./spikes/5.S2-streaming-input.md))._
 
 10. ~~**Rich message stream.** Typed message objects (SystemMessage, AssistantMessage, UserMessage, ResultMessage) instead of raw stream events. (Partial overlap with the "Streaming output" matrix row.)~~ _Shipped in Phase 3.8 — `run.messages()` returns an `AsyncIterable<AgentMessage>` that aggregates the underlying event stream into typed `SystemMessage` / `AssistantMessage` / `UserMessage` / `ResultMessage` blocks. Existing `for await (... of run)` event stream is unchanged._
 
@@ -146,11 +146,11 @@ Items shipped in Phase 1 are crossed through with a back-pointer; the **layer-on
 
 12. ~~**Custom-tools ergonomics.** `tool()` helper / `createSdkMcpServer` / Zod-schema convenience.~~ _Shipped in Phase 3.5 — `tool({ name, description, inputSchema, execute })` (Zod-typed input) and `createSdkMcpServer({ name, version, tools })` (in-process value bag) are exported from the library. Real MCP transports remain Phase 5.2._
 
-13. **Effort / reasoning level.** `effort` option to trade cost vs depth.
+13. **Effort / reasoning level.** `effort` option to trade cost vs depth. _Field-surface stub shipped in Phase 4.8 (per-subagent `effort` override accepted-but-not-consumed); real OR-call wiring gated on spike 5.S3 (still Ready) → Card 5.4 build (~5h if upstream supports)._
 
-14. **File checkpointing.** Track file changes and rewind to checkpoints.
+14. ~~**File checkpointing.** Track file changes and rewind to checkpoints.~~ _Shipped in Phase 4.6 — [✅ #57] `createCheckpoint()` / `listCheckpoints()` / `restoreCheckpoint()` with auto-checkpoint on `write_file` + `edit_file` via `checkpoint: true` ctor option. Per-session cap of 100; hard-link fast path; atomic two-phase restore._
 
-15. **Remaining session lifecycle hooks.** `Stop` (before exit), `Setup` (on first call), `Notification` (forward status externally). _`SessionStart` / `SessionEnd` shipped in Phase 1.7 via `onHook`._
+15. ~~**Remaining session lifecycle hooks.** `Stop` (before exit), `Setup` (on first call), `Notification` (forward status externally). `SessionStart` / `SessionEnd` shipped in Phase 1.7 via `onHook`.~~ _Shipped in Phase 3.6 — [✅ #45] `onHook` now fires `Setup` → `SessionStart` → … → `SessionEnd` → `Stop` on every run; `Setup` / `Stop` bracket abort and constructor-throw paths. `Notification` is caller-emitted via `ctx.notify(level, message, context?)` or direct `onHook`._
 
 16. ~~**Block-and-modify hook capability.**~~ _Shipped in Phase 3.7 — `PreToolUse` may return `{ action: 'block' | 'modify' | 'continue' }`. Backward-compatible (void still works). See parity matrix row above for precedence semantics._
 
@@ -160,11 +160,11 @@ Items shipped in Phase 1 are crossed through with a back-pointer; the **layer-on
 
 ### P2 — Nice to Have
 
-19. **Monitor tool.** Watch background processes and react to output lines as events.
+19. ~~**Monitor tool.** Watch background processes and react to output lines as events.~~ _Shipped in Phase 4.4 — [✅ #55] `monitor` tool spawns `/bin/sh -c command` and streams stdout+stderr through `readline.createInterface` into a `{ stream, text }` buffer with optional `pattern` filter. Caps via `max_lines` (default 1k, ceiling 10k) and `max_duration_ms` (default 60s, ceiling 600s); forced stops SIGTERM with 250ms SIGKILL grace._
 
-20. **NotebookEdit tool.** Edit Jupyter notebook cells.
+20. ~~**NotebookEdit tool.** Edit Jupyter notebook cells.~~ _Shipped in Phase 4.3 — [✅ #54] `edit_notebook` supports `replace_source` / `insert` / `delete` / `change_type` operations against `.ipynb` files. Normalizes `source` to `string[]` on write (canonical Jupyter shape)._
 
-21. **ToolSearch.** Dynamic tool loading from large MCP tool sets to save context.
+21. **ToolSearch.** Dynamic tool loading from large MCP tool sets to save context. _Gated on Card 5.2 (MCP server support) — depends on having an MCP tool set worth searching across._
 
 22. ~~**TaskCreate / TaskUpdate.** Built-in task tracking for multi-step work.~~ _Shipped in Phase 4.2 — [✅ #53] `src/tools/tasks.ts` exposes `task_create` / `task_update`, wired via `OpenRouterAgentRun({ onTasksChanged })`. Both tools share a per-run in-memory list and emit the full latest list through the `Notification` hook (`message: 'tasks_changed'`)._
 
@@ -176,7 +176,7 @@ Items shipped in Phase 1 are crossed through with a back-pointer; the **layer-on
 
 26. ~~**Plan mode.**~~ _Shipped in Phase 3.3 via `permissionMode: 'plan'`._
 
-27. **In-memory sessions.** `persistSession: false` for stateless/ephemeral usage.
+27. ~~**In-memory sessions.** `persistSession: false` for stateless/ephemeral usage.~~ _Shipped in Phase 3.12 — [✅ #51] `persistSession: false` constructor option swaps `FileStateAccessor` for an in-memory accessor and skips every write under `logsRoot` (`session.json` / `request.json` / `response.json` / `state.json`)._
 
 ---
 
