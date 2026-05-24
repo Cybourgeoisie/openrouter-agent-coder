@@ -526,6 +526,10 @@ describe('OpenRouterAgentRun — interrupt + restart', () => {
     const cycle1Ready = new Promise<void>((res) => {
       releaseCycle1 = res;
     });
+    let signalCycle1Blocked: () => void = () => undefined;
+    const cycle1Blocked = new Promise<void>((res) => {
+      signalCycle1Blocked = res;
+    });
 
     let i = 0;
     callModelMock.mockImplementation((request: { sessionId: string }) => {
@@ -535,6 +539,7 @@ describe('OpenRouterAgentRun — interrupt + restart', () => {
           async *getFullResponsesStream(): AsyncGenerator<unknown> {
             yield { type: 'turn.start', turnNumber: 0 };
             yield { type: 'response.output_text.delta', delta: 'streaming' };
+            signalCycle1Blocked();
             await cycle1Ready;
             // After release, write interrupted state and return.
             memoryStates.set(request.sessionId, {
@@ -579,16 +584,19 @@ describe('OpenRouterAgentRun — interrupt + restart', () => {
     // Start consuming the run; first cycle is now in-flight (will block).
     const eventsP = collect(run);
 
-    // Give the loop a tick to enter the cycle 1 for-await.
-    await new Promise((res) => setTimeout(res, 5));
+    // Deterministic: wait until cycle 1's generator has reached `await cycle1Ready`.
+    await cycle1Blocked;
 
     // interrupt() should not resolve until cycle 1 unwinds.
     let interruptResolved = false;
     const interruptP = run.interrupt().then(() => {
       interruptResolved = true;
     });
-    // Tick to confirm interrupt is still pending.
-    await new Promise((res) => setTimeout(res, 5));
+    // Flush microtasks + pending I/O callbacks. Since cycle 1 is genuinely
+    // blocked on `cycle1Ready` (only released below), interrupt() — which
+    // awaits the cycle's completion — cannot resolve while we drain here.
+    await new Promise((res) => setImmediate(res));
+    await new Promise((res) => setImmediate(res));
     expect(interruptResolved).toBe(false);
 
     // Release cycle 1 → it writes interrupted state and returns.
