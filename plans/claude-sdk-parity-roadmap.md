@@ -2,7 +2,7 @@
 
 > Forward-looking implementation plan for closing the remaining 36 non-Full parity gaps identified in [`claude-agent-sdk-parity.md`](./claude-agent-sdk-parity.md). Continues the phase sequence established by [`callboard-compatibility.md`](./callboard-compatibility.md): Phase 0 (tooling), Phase 1 (library refactor + coverage), Phase 2 (callboard adapter, deferred). **This plan defines Phase 3, Phase 4, and the Phase 5 spike list.**
 
-Status: **Phase 0 + 1 complete; this roadmap carded 2026-05-22.** Phase 2 (callboard adapter) still deferred to the callboard repo. Phase 3 is the next active phase.
+Status: **Phases 0 + 1 + 3 + 4 complete as of 2026-05-24.** Phase 2 (callboard adapter) still deferred to the callboard repo. **Phase 5 is the active phase**: spike 5.S1 (message history) complete, 5.S2 (streaming input) complete with workaround design, 5.S3 (effort param) still Ready; the gated build cards (5.1–5.5) are not yet carded on the project board.
 
 ---
 
@@ -138,7 +138,7 @@ Grep-clean in non-test `src/`:
 - No `console.*` calls.
 - No `process.exit` / `process.stdin` / `readline` usage.
 - `bin` field absent from `package.json`.
-- `process.cwd` usage: 1 occurrence (`src/agent.ts:154`). Cards adding a new tool may need to negotiate this; in general, prefer `ctx.cwd` over `process.cwd()`.
+- `process.cwd` usage: exactly 1 occurrence (currently `src/agent.ts:411` — line drifts as `agent.ts` grows; greppable as `process\.cwd\(`). Cards adding a new tool may need to negotiate this; in general, prefer `ctx.cwd` over `process.cwd()`.
 - `git diff main -- src/ ':!**/*.test.ts' ':!src/__tests__/**'` shows exactly the production changes declared in the PR body.
 
 ### Coverage gate
@@ -187,7 +187,7 @@ Every user-facing card must include a documentation update in the same PR:
 1. **README.md** — update constructor-options table, event-type table, tool table, or examples as needed.
 2. **`plans/claude-agent-sdk-parity.md`** — update the matrix row for the feature being landed (`None`/`Partial` → `Full`, or refine description).
 3. **This roadmap (`claude-sdk-parity-roadmap.md`)** — strike through the card row with PR number, matching the convention used in `callboard-compatibility.md` Phase 1.11–1.15 subsection.
-4. **`CHANGELOG.md`** — _none exists yet. Recommend introducing one as part of Phase 3.5 (the `tool()` helper card) since that's the first net-new public-API surface._
+4. **`CHANGELOG.md`** — append an `[Unreleased].Added` (or `.Changed` / `.Fixed`) entry per card. Convention established in Phase 3 and maintained through Phase 4.9.
 
 ---
 
