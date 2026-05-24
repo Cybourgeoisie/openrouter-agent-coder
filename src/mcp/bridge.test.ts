@@ -641,3 +641,249 @@ describe('McpBridge', () => {
     expect(connectCount.value).toBe(1);
   });
 });
+
+// ---------- Phase 5.2.5: lifecycle hooks (McpServerStart / McpServerStop) ----------
+
+describe('McpBridge lifecycle hooks', () => {
+  it('fires McpServerStart per server after successful init with capabilities counts', async () => {
+    const aClient: McpBridgeClient = {
+      ...createStubClient({ tools: [{ name: 't1', inputSchema: { type: 'object' } }] }),
+      async listResources() {
+        return { resources: [{ uri: 'mem://x' }, { uri: 'mem://y' }] };
+      },
+      async listPrompts() {
+        return { prompts: [{ name: 'p' }] };
+      },
+    };
+    const onLifecycle = vi.fn();
+    const bridge = new McpBridge({
+      servers: [stdio('a')],
+      clientFactory: () => aClient,
+      onLifecycle,
+    });
+    await bridge.init();
+    expect(onLifecycle).toHaveBeenCalledTimes(1);
+    expect(onLifecycle).toHaveBeenCalledWith('McpServerStart', {
+      event: 'McpServerStart',
+      serverName: 'a',
+      transport: 'stdio',
+      capabilities: { tools: 1, resources: 2, prompts: 1 },
+    });
+  });
+
+  it('McpServerStart uses transport:"streamableHttp" for http config', async () => {
+    const client = createStubClient({ tools: [] });
+    const onLifecycle = vi.fn();
+    const bridge = new McpBridge({
+      servers: [
+        {
+          transport: 'http',
+          name: 'h',
+          url: 'https://example.test/mcp',
+          source: '/tmp/.mcp.json',
+        },
+      ],
+      clientFactory: () => client,
+      onLifecycle,
+    });
+    await bridge.init();
+    expect(onLifecycle).toHaveBeenCalledWith(
+      'McpServerStart',
+      expect.objectContaining({ transport: 'streamableHttp' }),
+    );
+  });
+
+  it('McpServerStart treats missing listResources/listPrompts as 0', async () => {
+    const client = createStubClient({
+      tools: [{ name: 'only', inputSchema: { type: 'object' } }],
+    });
+    const onLifecycle = vi.fn();
+    const bridge = new McpBridge({
+      servers: [stdio('s')],
+      clientFactory: () => client,
+      onLifecycle,
+    });
+    await bridge.init();
+    expect(onLifecycle).toHaveBeenCalledWith(
+      'McpServerStart',
+      expect.objectContaining({ capabilities: { tools: 1, resources: 0, prompts: 0 } }),
+    );
+  });
+
+  it('McpServerStart treats list*() results with undefined arrays as 0', async () => {
+    const client: McpBridgeClient = {
+      ...createStubClient({ tools: [{ name: 't', inputSchema: { type: 'object' } }] }),
+      // Force the `resources?.length ?? 0` / `prompts?.length ?? 0` fallback
+      // branches by returning a result with the array field missing.
+      async listResources() {
+        return { resources: undefined as unknown as ReadonlyArray<unknown> };
+      },
+      async listPrompts() {
+        return { prompts: undefined as unknown as ReadonlyArray<unknown> };
+      },
+    };
+    const onLifecycle = vi.fn();
+    const bridge = new McpBridge({
+      servers: [stdio('s')],
+      clientFactory: () => client,
+      onLifecycle,
+    });
+    await bridge.init();
+    expect(onLifecycle).toHaveBeenCalledWith(
+      'McpServerStart',
+      expect.objectContaining({ capabilities: { tools: 1, resources: 0, prompts: 0 } }),
+    );
+  });
+
+  it('McpServerStart treats rejected listResources/listPrompts as 0 (Method not found tolerance)', async () => {
+    const client: McpBridgeClient = {
+      ...createStubClient({ tools: [{ name: 't', inputSchema: { type: 'object' } }] }),
+      async listResources() {
+        throw new Error('Method not found');
+      },
+      async listPrompts() {
+        throw new Error('Method not found');
+      },
+    };
+    const onLifecycle = vi.fn();
+    const bridge = new McpBridge({
+      servers: [stdio('s')],
+      clientFactory: () => client,
+      onLifecycle,
+    });
+    await bridge.init();
+    expect(onLifecycle).toHaveBeenCalledWith(
+      'McpServerStart',
+      expect.objectContaining({ capabilities: { tools: 1, resources: 0, prompts: 0 } }),
+    );
+  });
+
+  it('McpServerStart does NOT fire when a server fails its handshake (notify warn fires instead)', async () => {
+    const onLifecycle = vi.fn();
+    const notify = vi.fn();
+    const bad = createStubClient({ tools: [], connectError: 'spawn ENOENT' });
+    const bridge = new McpBridge({
+      servers: [stdio('bad')],
+      clientFactory: () => bad,
+      onLifecycle,
+      notify,
+    });
+    await bridge.init();
+    expect(onLifecycle).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith('warn', 'mcp_server_failed', expect.any(Object));
+  });
+
+  it('fires McpServerStop with reason:"closed" on normal teardown + positive durationMs', async () => {
+    const onLifecycle = vi.fn();
+    const a = createStubClient({ tools: [{ name: 't', inputSchema: { type: 'object' } }] });
+    const bridge = new McpBridge({
+      servers: [stdio('a')],
+      clientFactory: () => a,
+      onLifecycle,
+    });
+    await bridge.init();
+    // Force at least 1ms to pass so durationMs is >= 0 reliably.
+    await new Promise((r) => setTimeout(r, 2));
+    await bridge.close();
+    const stopCalls = onLifecycle.mock.calls.filter((c: unknown[]) => c[0] === 'McpServerStop');
+    expect(stopCalls).toHaveLength(1);
+    const payload = stopCalls[0][1] as { reason: string; durationMs: number; serverName: string };
+    expect(payload.serverName).toBe('a');
+    expect(payload.reason).toBe('closed');
+    expect(payload.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('fires McpServerStop with reason:"error" when close() throws', async () => {
+    const onLifecycle = vi.fn();
+    const flaky: McpBridgeClient = {
+      async connect() {},
+      async close() {
+        throw new Error('teardown boom');
+      },
+      async listTools() {
+        return { tools: [{ name: 'x', inputSchema: { type: 'object' } }] };
+      },
+      async callTool() {
+        return { content: [] };
+      },
+    };
+    const bridge = new McpBridge({
+      servers: [stdio('flaky')],
+      clientFactory: () => flaky,
+      onLifecycle,
+    });
+    await bridge.init();
+    await bridge.close();
+    const stopCall = onLifecycle.mock.calls.find((c: unknown[]) => c[0] === 'McpServerStop');
+    expect(stopCall).toBeDefined();
+    expect((stopCall as unknown[])[1]).toMatchObject({ reason: 'error', serverName: 'flaky' });
+  });
+
+  it('fires McpServerStop with reason:"aborted" when the run-level signal is aborted at close time', async () => {
+    const onLifecycle = vi.fn();
+    const controller = new AbortController();
+    const a = createStubClient({ tools: [{ name: 't', inputSchema: { type: 'object' } }] });
+    const bridge = new McpBridge({
+      servers: [stdio('a')],
+      clientFactory: () => a,
+      onLifecycle,
+      signal: controller.signal,
+    });
+    await bridge.init();
+    controller.abort();
+    await bridge.close();
+    const stopCall = onLifecycle.mock.calls.find((c: unknown[]) => c[0] === 'McpServerStop');
+    expect(stopCall).toBeDefined();
+    expect((stopCall as unknown[])[1]).toMatchObject({ reason: 'aborted', serverName: 'a' });
+  });
+
+  it('does NOT fire McpServerStop for servers that failed init (symmetric with no-start)', async () => {
+    const onLifecycle = vi.fn();
+    const bad = createStubClient({ tools: [], connectError: 'fail' });
+    const bridge = new McpBridge({
+      servers: [stdio('bad')],
+      clientFactory: () => bad,
+      onLifecycle,
+    });
+    await bridge.init();
+    await bridge.close();
+    const stopCalls = onLifecycle.mock.calls.filter((c: unknown[]) => c[0] === 'McpServerStop');
+    expect(stopCalls).toHaveLength(0);
+  });
+
+  it('onLifecycle throw during start does not derail the bridge (init still succeeds, server still live)', async () => {
+    const onLifecycle = vi.fn(() => Promise.reject(new Error('hook boom')));
+    const a = createStubClient({ tools: [{ name: 't', inputSchema: { type: 'object' } }] });
+    const bridge = new McpBridge({
+      servers: [stdio('a')],
+      clientFactory: () => a,
+      onLifecycle,
+    });
+    await expect(bridge.init()).resolves.toBeUndefined();
+    expect(bridge.serverNames).toEqual(['a']);
+    // The handshake completed even though the lifecycle emitter threw.
+    expect(bridge.tools).toHaveLength(1);
+  });
+
+  it('onLifecycle throw during stop does not derail close()', async () => {
+    let startCount = 0;
+    const onLifecycle = vi.fn(() => {
+      startCount += 1;
+      return Promise.reject(new Error('hook boom'));
+    });
+    const closeCount = { value: 0 };
+    const a = createStubClient({
+      tools: [{ name: 't', inputSchema: { type: 'object' } }],
+      closeCount,
+    });
+    const bridge = new McpBridge({
+      servers: [stdio('a')],
+      clientFactory: () => a,
+      onLifecycle,
+    });
+    await bridge.init();
+    await expect(bridge.close()).resolves.toBeUndefined();
+    expect(closeCount.value).toBe(1);
+    expect(startCount).toBeGreaterThanOrEqual(2); // start + stop both invoked
+  });
+});

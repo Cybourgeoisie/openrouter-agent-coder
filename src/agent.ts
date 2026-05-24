@@ -1180,6 +1180,9 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
               message,
               context,
             }) as Promise<unknown> as Promise<void>,
+          onLifecycle: async (event, payload) => {
+            await safeFireHook(event, payload);
+          },
           signal,
         });
         await this.#mcpBridge.init();

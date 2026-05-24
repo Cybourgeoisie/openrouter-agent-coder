@@ -30,6 +30,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Phase 5.2.5: MCP server integration (Model Context Protocol).
+  Consummates the 5.2.\* series — adds two new lifecycle hook events
+  (`McpServerStart` / `McpServerStop`) and the full integration test
+  suite that exercises the bridge against a real subprocess MCP server
+  fixture. `McpServerStart` fires once per server immediately after a
+  successful JSON-RPC `initialize` handshake, carrying
+  `{ serverName, transport, capabilities: { tools, resources, prompts } }`
+  (capability counts only, not the raw arrays — kept cheap to log).
+  `McpServerStop` fires once per server at bridge teardown with
+  `{ serverName, durationMs, reason: 'closed' | 'error' | 'aborted' }`.
+  Failed-init servers fire neither event — they continue to surface
+  through `Notification`/`mcp_server_failed` as before. Both events are
+  audit-only (return value ignored, thrown handlers logged + swallowed).
+  README now ships a public-API-stable MCP section consolidating
+  constructor options (`mcpServers` / `autoDiscoverMcp`), `.mcp.json`
+  shape, tool-name prefixing (`MCP_TOOL_NAME_SEPARATOR`), transport
+  differences (stdio vs streamable HTTP vs deprecated SSE), and the
+  three hook events. Parity-matrix row "MCP server support" graduates
+  None → Full; "Custom tools" graduates Partial → Full.
 - Phase 5.2.4: MCP tool bridge (preview). New `McpBridge` class in
   `src/mcp/bridge.ts` — per-run pool that spawns every configured MCP
   server (stdio via 5.2.1 / streamable HTTP via 5.2.2), completes each
