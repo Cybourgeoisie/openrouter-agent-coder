@@ -6,9 +6,18 @@ import {
   isTurnEndEvent,
   isToolCallOutputEvent,
   type Tool,
+  type StateAccessor,
+  type ConversationState,
 } from '@openrouter/agent';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import {
+  COMPACTION_PROMPT,
+  DEFAULT_KEEP_RECENT_TURNS,
+  estimateMessagesCharLength,
+  partitionMessages,
+  resolveCompactionThresholdChars,
+} from './compaction.js';
 import { allTools } from './tools/index.js';
 import { createServerToolsHooks } from './tools/server-tools.js';
 import { type ToolContext } from './tools/context.js';
@@ -359,6 +368,32 @@ export interface OpenRouterAgentRunOptions {
    * See {@link EffortLevel} for the enum semantics and per-provider mapping.
    */
   effort?: EffortLevel;
+  /**
+   * Phase 5.1: character-count threshold that triggers an auto-compaction
+   * pass once the persisted `ConversationState.messages` array crosses it.
+   * Defaults to `getModelContextWindow(model) * 4 * 0.8` — i.e. ~80% of the
+   * model's token-budget converted to a conservative chars-per-token
+   * estimate. Pass an explicit number to override the default for the run
+   * (interpreted as a raw character count, not a token count). Honoured only
+   * when {@link autoCompact} is not `false`.
+   */
+  compactionThreshold?: number;
+  /**
+   * Phase 5.1: number of trailing messages (NOT strict turns — see
+   * {@link partitionMessages} JSDoc for the granularity note) preserved
+   * verbatim during compaction. Everything older is condensed into a single
+   * `developer`-role summary message. Defaults to
+   * {@link DEFAULT_KEEP_RECENT_TURNS} = 5.
+   */
+  keepRecentTurns?: number;
+  /**
+   * Phase 5.1: when `false`, suppresses the post-`stream_complete`
+   * threshold check that automatically fires compaction between runs that
+   * share a `sessionId`. The manual {@link OpenRouterAgentRun.compact}
+   * method still works regardless of this setting — `autoCompact: false`
+   * gates ONLY the implicit trigger. Defaults to `true`.
+   */
+  autoCompact?: boolean;
 }
 
 interface ResolvedOptions {
@@ -407,6 +442,12 @@ interface ResolvedOptions {
    * subagents when their spec omits an override.
    */
   effort?: EffortLevel;
+  /** Phase 5.1: explicit caller-supplied threshold (chars). `undefined` → derived from {@link model}. */
+  compactionThreshold?: number;
+  /** Phase 5.1: resolved trailing-message count to preserve verbatim. */
+  keepRecentTurns: number;
+  /** Phase 5.1: resolved auto-trigger toggle. */
+  autoCompact: boolean;
 }
 
 function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
@@ -483,6 +524,11 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     ...(opts.allowedTools !== undefined && { allowedTools: opts.allowedTools }),
     ...(opts.disallowedTools !== undefined && { disallowedTools: opts.disallowedTools }),
     ...(opts.effort !== undefined && { effort: opts.effort }),
+    ...(opts.compactionThreshold !== undefined && {
+      compactionThreshold: opts.compactionThreshold,
+    }),
+    keepRecentTurns: opts.keepRecentTurns ?? DEFAULT_KEEP_RECENT_TURNS,
+    autoCompact: opts.autoCompact ?? true,
   };
 }
 
@@ -510,6 +556,14 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
    * struct on the instance).
    */
   private readonly persistSession: boolean;
+  /**
+   * Phase 5.1: state accessor created once at construction so the public
+   * {@link compact} method can read/write the persisted
+   * {@link ConversationState} without depending on whether {@link iterate}
+   * has been driven yet. File-backed when `persistSession !== false`,
+   * otherwise an in-memory mirror sharing the same load/save contract.
+   */
+  private readonly stateAccessor: StateAccessor;
   private consumed = false;
 
   constructor(options: OpenRouterAgentRunOptions) {
@@ -519,6 +573,136 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     this.compositeSignal = options.signal
       ? AbortSignal.any([this.internalAbortController.signal, options.signal])
       : this.internalAbortController.signal;
+    this.stateAccessor = this.persistSession
+      ? createFileStateAccessor(this.opts.logsRoot, this.opts.sessionId)
+      : createMemoryStateAccessor();
+  }
+
+  /**
+   * Build a fresh OpenRouter client with the run's apiKey / baseUrl /
+   * appTitle. Used by both the main {@link iterate} loop and the public
+   * {@link compact} method — compaction needs its own short-lived client
+   * because it may be called outside an active iteration.
+   */
+  private createOpenRouterClient(): OpenRouter {
+    return new OpenRouter({
+      apiKey: this.opts.apiKey,
+      ...(this.opts.baseUrl && { serverURL: this.opts.baseUrl }),
+      appTitle: this.opts.appTitle,
+      hooks: createServerToolsHooks(),
+    } as ConstructorParameters<typeof OpenRouter>[0]);
+  }
+
+  /**
+   * Invoke the run's `onHook` handler with the given event/payload, returning
+   * the handler's raw return value (or `undefined` when no handler is set or
+   * the handler throws). Throws are logged via {@link AgentLogger} and
+   * swallowed — never re-raised — so a handler cannot break the run. Used
+   * by both {@link iterate} (via a thin local closure that forwards into
+   * here) and {@link compact} (directly).
+   */
+  private async safeFireHook(event: HookEvent, payload: HookPayload): Promise<unknown> {
+    const { onHook, logger } = this.opts;
+    if (!onHook) return undefined;
+    try {
+      return await onHook(event, payload);
+    } catch (err) {
+      logger?.('error', 'Hook threw', { event, error: err });
+      return undefined;
+    }
+  }
+
+  /**
+   * Phase 5.1: condense the older portion of this run's persisted message
+   * history into a single `developer`-role summary message, replacing the
+   * prefix on disk. Loads {@link ConversationState} via the run's
+   * {@link StateAccessor}, fires the {@link HookEvent} `PreCompact` audit
+   * hook with the slice about to be summarized, spawns an isolated
+   * single-shot `callModel` (session id `<sessionId>:compact:<uuid>`, no
+   * tools) to produce the summary text, then writes back a new
+   * `ConversationState` where:
+   *
+   * - `messages` is `[summary, ...lastKeepRecentTurns]`
+   * - `previousResponseId` is cleared (the server cannot splice a stale
+   *   response chain onto a rewritten message array; see spike 5.S1 §2d).
+   * - In-flight bookkeeping fields (`pendingToolCalls`,
+   *   `unsentToolResults`, `partialResponse`) are cleared.
+   *
+   * No-ops (resolved promise, no hook fired, no state mutation) when the
+   * accessor has no saved state, when `messages` is empty, or when the
+   * history is shorter than {@link OpenRouterAgentRunOptions.keepRecentTurns}.
+   *
+   * **Contract — mid-run safety.** Designed to be called between runs that
+   * share a `sessionId`, NOT mid-`for await`. The run iterator is
+   * single-shot and the SDK manages the in-memory `ConversationState` while
+   * a stream is active; calling `compact()` while {@link iterate} is still
+   * yielding will race with the SDK's own `state.save()` calls and may
+   * corrupt the persisted JSON. Auto-compaction (`autoCompact: true`) sites
+   * the trigger AFTER the run's terminal `stream_complete` event for
+   * exactly this reason — the SDK has finished writing by then.
+   *
+   * Audit-only failures (PreCompact hook throw) are swallowed via the
+   * existing {@link safeFireHook} convention. A failed summarizer call
+   * leaves the original state untouched and re-throws so the caller can
+   * decide how to recover.
+   */
+  async compact(reason: 'auto' | 'manual' = 'manual'): Promise<void> {
+    const state = await this.stateAccessor.load();
+    if (!state) return;
+    const rawMessages = (state as { messages?: unknown }).messages;
+    if (!Array.isArray(rawMessages) || rawMessages.length === 0) return;
+    const { summarize, keep } = partitionMessages(rawMessages, this.opts.keepRecentTurns);
+    if (summarize.length === 0) return;
+
+    await this.safeFireHook('PreCompact', {
+      event: 'PreCompact',
+      messages: summarize,
+      keepRecentTurns: this.opts.keepRecentTurns,
+      reason,
+    });
+
+    const client = this.createOpenRouterClient();
+    const compactSessionId = `${this.opts.sessionId}:compact:${randomUUID()}`;
+    const result = client.callModel({
+      model: this.opts.model,
+      sessionId: compactSessionId,
+      input: JSON.stringify(summarize),
+      instructions: COMPACTION_PROMPT,
+    } as Parameters<typeof client.callModel>[0]);
+
+    let summaryText = '';
+    for await (const event of result.getFullResponsesStream()) {
+      if (
+        typeof event === 'object' &&
+        event !== null &&
+        'type' in event &&
+        (event as { type: unknown }).type === 'response.output_text.delta'
+      ) {
+        const delta = (event as { delta?: unknown }).delta;
+        if (typeof delta === 'string') summaryText += delta;
+      }
+    }
+
+    const summaryMessage = {
+      type: 'message' as const,
+      role: 'developer' as const,
+      content: `[Compacted prior context]\n${summaryText}`,
+    };
+
+    const nextState: ConversationState = {
+      ...state,
+      messages: [summaryMessage, ...keep] as ConversationState['messages'],
+      updatedAt: Date.now(),
+    };
+    // The SDK uses `undefined` to mean "absent" for these optional fields;
+    // deleting them keeps the on-disk JSON tidy and lets a re-load via the
+    // accessor yield the same shape the SDK would build from scratch.
+    delete (nextState as { previousResponseId?: unknown }).previousResponseId;
+    delete (nextState as { pendingToolCalls?: unknown }).pendingToolCalls;
+    delete (nextState as { unsentToolResults?: unknown }).unsentToolResults;
+    delete (nextState as { partialResponse?: unknown }).partialResponse;
+
+    await this.stateAccessor.save(nextState);
   }
 
   /**
@@ -637,21 +821,13 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     // thrown-error paths so subscribers can distinguish clean from dirty exit.
     let stopPayload: Extract<HookPayload, { event: 'Stop' }> = { event: 'Stop', status: 'error' };
 
-    // Returns whatever the handler returned (or `undefined` if the handler
-    // throws or `onHook` is unset). Callers that don't care about the return
-    // value (every event except `PreToolUse`) can ignore it; PreToolUse
-    // narrows the result via {@link parsePreToolUseAction}. A throw is logged
-    // and swallowed as `undefined` — equivalent to a `continue` — never a
-    // synthesised deny (Phase 3.7 invariant).
-    const safeFireHook = async (event: HookEvent, payload: HookPayload): Promise<unknown> => {
-      if (!onHook) return undefined;
-      try {
-        return await onHook(event, payload);
-      } catch (err) {
-        logger?.('error', 'Hook threw', { event, error: err });
-        return undefined;
-      }
-    };
+    // Thin forwarder around the class-level safeFireHook so the existing
+    // closures in this generator (subagent lifecycle emitters,
+    // wrapToolWithHooks plumbing, etc.) keep their original call signature.
+    // The class-level method exists so {@link compact} can fire PreCompact
+    // outside this generator without duplicating the try/catch.
+    const safeFireHook = (event: HookEvent, payload: HookPayload): Promise<unknown> =>
+      this.safeFireHook(event, payload);
 
     // Setup fires once per OpenRouterAgentRun instance, before any other hook
     // (including SessionStart). It precedes the pre-abort short-circuit and
@@ -700,12 +876,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
 
       let client: OpenRouter;
       try {
-        client = new OpenRouter({
-          apiKey,
-          ...(baseUrl && { serverURL: baseUrl }),
-          appTitle,
-          hooks: createServerToolsHooks(),
-        } as ConstructorParameters<typeof OpenRouter>[0]);
+        client = this.createOpenRouterClient();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         yield { type: 'error', message, cause: err };
@@ -738,9 +909,12 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       await safeFireHook('SessionStart', { event: 'SessionStart', sessionId, cwd, model });
 
       const requestId = createRequestId();
-      const state = persistSession
-        ? createFileStateAccessor(logsRoot, sessionId)
-        : createMemoryStateAccessor();
+      // Phase 5.1: the accessor is created in the constructor so {@link compact}
+      // can reach the same in-memory cache (when `persistSession: false`) or
+      // the same on-disk path (when persisted) without duplicating
+      // construction. Captured here only to satisfy the local `state` name
+      // the SDK passes through.
+      const state = this.stateAccessor;
       // Note: server-side tools (datetime/web_search/web_fetch) are injected
       // via OR SDK hooks and execute on OpenRouter's servers — they bypass this
       // wrapper, so canUseTool only ever sees client tools.
@@ -1065,6 +1239,29 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         costUsd: totalCostUsd,
         durationMs: Date.now() - startMs,
       };
+
+      // Phase 5.1: post-stream auto-compaction check. Runs only on the happy
+      // path (status === 'success' covers max_turns/max_budget exits via the
+      // 'success' arm too — those still produced a useful turn worth
+      // condensing). Errors from the summarizer call are caught here so the
+      // SessionEnd / Stop hook bracket below still fires.
+      if (this.opts.autoCompact && status === 'success') {
+        try {
+          const persistedState = await this.stateAccessor.load();
+          const messages = (persistedState as { messages?: unknown } | null)?.messages;
+          const chars = estimateMessagesCharLength(messages);
+          const thresholdChars = resolveCompactionThresholdChars(
+            this.opts.compactionThreshold,
+            this.opts.model,
+          );
+          if (chars >= thresholdChars) {
+            await this.compact('auto');
+          }
+        } catch (err) {
+          logger?.('error', 'Auto-compaction failed', { error: err });
+        }
+      }
+
       sessionEndPayload = {
         event: 'SessionEnd',
         sessionId,
