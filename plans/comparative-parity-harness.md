@@ -2,7 +2,7 @@
 
 > A follow-on phase to [`claude-sdk-parity-roadmap.md`](./claude-sdk-parity-roadmap.md). Replaces doc-claimed parity with **executable parity proofs**: run the same scenario through both the Claude Agent SDK and `openrouter-agent-coder`, and assert equivalent behavior. Two operating modes — a deterministic emulator for exact-match comparison (cheap, runs every PR) and a real-API mode for canary validation (paid, runs nightly/on-demand).
 
-Status: **Planning — not carded.** This document specifies the design; ticket breakdown is deferred until Phases 3 and 4 land enough surface to make the scenario set concrete.
+Status: **Carded 2026-05-24 — all 13 issues in Backlog.** Issues #120–#132 cover Cards 6.S1 / 6.1 / 6.2 / 6.3 / 6.4 / 6.5a / 6.5b / 6.5c / 6.6 / 6.7 / 6.8 / 6.9 / 6.10. Promote 6.S1 (#120) to Ready once Phase 5 build cards (5.2.5, 5.3, 5.5, 5.6, 5.7, 5.8) close — the parity surface needs to stop moving before scenarios get authored against it. Issue cross-references in card bodies use real GH numbers.
 
 ---
 
@@ -172,12 +172,14 @@ Both runs use **independent emulator script cursors** (so neither SDK's behavior
 
 ### Base-URL override mechanics
 
-Both SDKs already support this:
+Both SDKs already support this, but **asymmetrically**:
 
-- **`@openrouter/agent`** — the openrouter-agent-coder library plumbs `baseUrl` through to the OR client constructor's `serverURL` parameter (`src/agent.ts:398`). Already tested at `src/agent.test.ts:325`.
-- **Claude Agent SDK / `@anthropic-ai/sdk`** — the underlying Anthropic SDK accepts a `baseURL` constructor option, and respects the `ANTHROPIC_BASE_URL` environment variable. The Agent SDK either exposes this directly or accepts a pre-configured `Anthropic` client instance. (To be confirmed during the 6.3 scaffolding spike — if neither path works cleanly, fall back to `ANTHROPIC_BASE_URL` env injection per-test-process.)
+- **`@openrouter/agent`** — the openrouter-agent-coder library plumbs `baseUrl` through to the OR client constructor's `serverURL` parameter (`src/agent.ts:398`). Already tested at `src/agent.test.ts:325`. Passed via **ctor config**.
+- **`@anthropic-ai/claude-agent-sdk`** — respects `ANTHROPIC_BASE_URL`; the agent SDK forwards env config to its underlying Anthropic client. Passed via **env injection per test process**. (6.S1 confirms the agent-SDK wrapper doesn't swallow it and pins the agent-SDK version that exhibits this behavior.)
 
-The emulator binds to a random ephemeral port per test process (parallel safety), and the harness writes the bound URL into both SDK configs before kicking off the run.
+Document the asymmetry but don't try to unify it — the wire formats differ anyway, so a shared abstraction would leak. The asymmetry has a real test-isolation consequence: `ANTHROPIC_BASE_URL` must be set **before** any import that constructs the agent SDK's client. 6.S1 picks the hosting pattern (in-process emulator with vitest worker env vs. subprocess emulator with `spawn` env vs. per-file isolation) so 6.3 inherits that choice rather than re-relitigating it.
+
+The emulator binds to a random ephemeral port per test process (parallel safety), and the harness writes the bound URL into both SDK configs (OR via ctor, Anthropic via env) before kicking off the run.
 
 ### The comparator
 
@@ -252,7 +254,8 @@ Initial target: 8–12 scripts. The full set won't be defined until 6.5, but the
 
 **Budget guardrails:**
 
-- Live-mode runs declare a `maxCostUsd` per scenario (default $0.10).
+- Live-mode runs declare a `maxCostUsd` per scenario (default **$0.50**, per-scenario override for known-pricier flows).
+- PR smoke subset budget cap: **~$0.25/PR** across its 3–4 scenarios.
 - The harness aborts a run that exceeds the budget and reports it as a flaky-scenario warning, not a hard fail.
 - Nightly aggregate spend tracked in the workflow output for review.
 
@@ -260,29 +263,35 @@ Initial target: 8–12 scripts. The full set won't be defined until 6.5, but the
 
 ## Implementation phasing within Phase 6
 
-| Card | Title                                              | Est. | Depends on        |
-| ---- | -------------------------------------------------- | ---- | ----------------- |
-| 6.1  | Emulator skeleton + Anthropic Messages wire format | 12h  | —                 |
-| 6.2  | Emulator: OpenAI/OR chat-completions wire format   | 10h  | 6.1               |
-| 6.3  | Dual-mode harness scaffolding + base-URL plumbing  | 8h   | 6.1, 6.2          |
-| 6.4  | Comparator: exact + tolerant modes                 | 10h  | 6.3               |
-| 6.5  | Canonical scenario set (8–12 scripts)              | 15h  | 6.4               |
-| 6.6  | Failure-injection scenarios                        | 8h   | 6.5               |
-| 6.7  | CI wiring + budget guardrails                      | 5h   | 6.5               |
-| 6.8  | Drift-detection workflow + nightly run             | 4h   | 6.7               |
-| 6.9  | Scenario-additions backfill for Phase 3 / 4 / 5    | 10h  | 6.8, prior phases |
+| Card | Title                                                              | Est.   | Depends on          |
+| ---- | ------------------------------------------------------------------ | ------ | ------------------- |
+| 6.S1 | SPIKE — verify env-var baseURL + pick emulator hosting pattern     | 1–2h   | —                   |
+| 6.1  | Emulator skeleton + Anthropic Messages wire format                 | 10–12h | 6.S1                |
+| 6.2  | Emulator: OpenAI/OR chat-completions wire format                   | 8–10h  | 6.1                 |
+| 6.3  | Dual-mode harness scaffolding + base-URL plumbing                  | 6–8h   | 6.1, 6.2            |
+| 6.4  | Comparator: exact + tolerant modes                                 | 8–10h  | 6.3                 |
+| 6.5a | Scenario authoring helper + happy-path scenarios (#1–#4)           | 6–8h   | 6.4                 |
+| 6.5b | Scenarios #5–#8 (plan-mode, cancel, tool error, hook block)        | 5–7h   | 6.5a                |
+| 6.5c | Scenarios #9–#12 (stop-reason variants, malformed args, 429 retry) | 5–7h   | 6.5a                |
+| 6.6  | Failure-injection scenarios                                        | 6–8h   | 6.5a                |
+| 6.7  | CI wiring + budget guardrails                                      | 4–5h   | 6.5a                |
+| 6.8  | Drift-detection workflow + nightly run                             | 3–4h   | 6.7                 |
+| 6.9  | Scenario-additions rolling card (Phase 3/4/5 backfill + ongoing)   | n/a    | 6.8, prior phases   |
+| 6.10 | _(Deferred, if-needed)_ Live→script recorder                       | 6–8h   | 6.5a if 6.5 painful |
 
-**Phase 6 total:** ~80h, ~2 weeks full-time.
+**Phase 6 total:** ~62–84h, ~1.5–2 weeks full-time (revised from original ~80h after spike de-risking and 6.5 split).
 
-**Phasing dependency:** Phase 6 is gated on **Phase 3 substantially complete** (≥80%) and **Phase 4 ≥50%**. The scenario set is only valuable once enough of the parity surface is implemented to be worth testing. Starting earlier risks scenarios that have to be rewritten as the surface settles.
+**Phasing dependency:** Phase 6 is gated on **Phase 5 substantially complete** — Phases 3 and 4 are both 100% done, but Phase 5 still has the surface that scenarios would assert against (MCP bridge, streaming input, skills, slash commands, plugins). Starting earlier risks scenarios that have to be rewritten as the surface settles. Card the Phase 6 issues only after Phase 5's build cards close.
 
 **Order of operations within the phase:**
 
-1. 6.1 → 6.2 sequential (the wire formats share infrastructure but the second pass tells you what to refactor in the first).
-2. 6.3 → 6.4 sequential (the comparator can't be specified until the harness produces transcripts).
-3. 6.5 builds on 6.4 (scenarios need the comparator to assert against).
-4. 6.6 / 6.7 / 6.8 can interleave once 6.5 is started.
-5. 6.9 is a rolling card — every new card in Phase 3/4/5 that lands after 6.5 should add a scenario in the same PR.
+1. **6.S1** runs first — small spike to pin the agent-SDK version and pick the emulator-hosting pattern that 6.1/6.3 inherit. (Could fold into 6.1 as task 0; kept standalone to match the Phase 5 spike pattern and keep the answer findable in project history.)
+2. **6.1 → 6.2** sequential (the wire formats share infrastructure but the second pass tells you what to refactor in the first).
+3. **6.3 → 6.4** sequential (the comparator can't be specified until the harness produces transcripts).
+4. **6.5a** lands first scenario + authoring helper. **6.5b**, **6.5c**, and **6.6** are parallel-eligible once 6.5a sets the authoring pattern — each is a self-contained set of fixture files with no shared production touches. Under a one-card-in-flight rule they run serial; under parallel-pull they're independent.
+5. **6.7 → 6.8** sequential (CI wiring then drift detection).
+6. **6.9** is a rolling card — every new card in Phase 3/4/5/later post-6.5 should add a scenario in the same PR. The PR template gains a "Scenario added" checkbox alongside the existing CHANGELOG checkbox.
+7. **6.10** stays in Backlog tagged `if-needed`; only pulled if 6.5 turns out painful to author by hand.
 
 ---
 
@@ -302,14 +311,19 @@ Initial target: 8–12 scripts. The full set won't be defined until 6.5, but the
 
 ---
 
-## Open questions (to resolve during ticketing)
+## Open questions
 
-1. **In-process vs subprocess emulator?** A subprocess gives us a true HTTP path including the kernel's TCP stack, which catches more transport edge cases. An in-process fastify (or similar) is faster and easier to debug. Recommendation: start in-process (cheaper to iterate), promote to subprocess only if a missed bug class justifies it.
-2. **Script storage format — JSON vs TypeScript?** JSON wins on portability and recordability; TS wins on type safety and IDE support. Recommendation: JSON for the canonical set (matches existing `src/__tests__/integration/fixtures/`), with a TS helper for authoring.
-3. **Should the emulator support recording from live runs?** I.e., point it at the real provider, capture the request/response, write a script. This would dramatically lower the cost of adding scenarios. Recommendation: yes, as a deferred 6.10 if 6.5 turns out painful to author by hand. Mirrors the existing `scripts/record-fixture.ts` pattern.
-4. **LLM-judge as last-resort comparator for final-text?** Adds a third LLM call per live-mode scenario; meaningful spend. Recommendation: avoid by default; only allow when a scenario can prove no predicate-based assertion is feasible.
-5. **Does the Claude Agent SDK accept a pre-built `Anthropic` client?** Determines whether 6.3 is "thread a `baseURL` config option" or "monkey-patch `ANTHROPIC_BASE_URL`." Spike during 6.3 kickoff.
-6. **Where does this live in the codebase?** Proposed: `src/__tests__/comparative/` for the harness + scenarios, `src/__tests__/comparative/emulator/` for the emulator. Keeps it adjacent to the existing integration tests, separate enough that the build doesn't pull it in.
+### Resolved
+
+- **Q5 — Does the Claude Agent SDK accept a pre-built `Anthropic` client / how do we override the base URL?** **Resolved:** `@anthropic-ai/claude-agent-sdk` respects the `ANTHROPIC_BASE_URL` environment variable (the agent SDK forwards env config to its underlying Anthropic client). 6.3 plumbs via env injection per test process. 6.S1 verifies the agent-SDK wrapper doesn't swallow it and pins the version.
+- **Q1 — In-process vs subprocess emulator?** **Deferred to 6.S1**, where the choice is made and pinned for 6.1/6.3 to inherit. Original recommendation (start in-process) stands as the default unless 6.S1 finds an env-isolation reason to spawn.
+
+### Still open (carded or deferred)
+
+2. **Script storage format — JSON vs TypeScript?** JSON wins on portability and recordability; TS wins on type safety and IDE support. Recommendation: JSON for the canonical set (matches existing `src/__tests__/integration/fixtures/`), with a TS helper for authoring. Folded into 6.5a.
+3. **Should the emulator support recording from live runs?** I.e., point it at the real provider, capture the request/response, write a script. Mirrors the existing `scripts/record-fixture.ts` pattern. Carded as **6.10** in Backlog with `if-needed` label; pulled only if 6.5 turns out painful to author by hand.
+4. **LLM-judge as last-resort comparator for final-text?** Adds a third LLM call per live-mode scenario; meaningful spend. Recommendation: avoid by default; only allow when a scenario can prove no predicate-based assertion is feasible. Re-evaluate during 6.5b/c if a scenario actually can't be asserted with predicates.
+5. **Where does this live in the codebase?** Proposed: `src/__tests__/comparative/` for the harness + scenarios, `src/__tests__/comparative/emulator/` for the emulator. Keeps it adjacent to the existing integration tests, separate enough that the build doesn't pull it in. Locked in at 6.1.
 
 ---
 
