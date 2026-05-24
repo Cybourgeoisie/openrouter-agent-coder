@@ -77,4 +77,84 @@ describe('edit_file tool', () => {
       execute({ path: join(TMP, 'nope.txt'), old_string: 'a', new_string: 'b' }),
     ).rejects.toThrow();
   });
+
+  it('auto-checkpoints before editing when ctx.checkpoint is true', async () => {
+    const { listCheckpoints, restoreCheckpoint } = await import('../checkpoints.js');
+    const sessionId = 'edit-cp';
+    const logsRoot = join(TMP, 'logs');
+    const filePath = join(TMP, 'snap.txt');
+    await writeFile(filePath, 'aaa BBB ccc', 'utf-8');
+
+    const ctxTool = editFileTool({
+      cwd: '.',
+      sessionId,
+      logsRoot,
+      checkpoint: true,
+      persistSession: true,
+    });
+    const exec = ctxTool.function.execute as (i: unknown) => Promise<unknown>;
+    await exec({ path: filePath, old_string: 'BBB', new_string: 'ZZZ' });
+    expect(await readFile(filePath, 'utf-8')).toBe('aaa ZZZ ccc');
+
+    const list = await listCheckpoints(sessionId, logsRoot);
+    expect(list).toHaveLength(1);
+    await restoreCheckpoint(list[0]!.checkpointId, sessionId, logsRoot);
+    expect(await readFile(filePath, 'utf-8')).toBe('aaa BBB ccc');
+  });
+
+  it('logs a warn and skips checkpoint when persistSession is false', async () => {
+    const { vi } = await import('vitest');
+    const { listCheckpoints } = await import('../checkpoints.js');
+    const sessionId = 'edit-eph';
+    const logsRoot = join(TMP, 'logs');
+    const filePath = join(TMP, 'eph.txt');
+    await writeFile(filePath, 'a b c', 'utf-8');
+
+    const logger = vi.fn();
+    const ctxTool = editFileTool({
+      cwd: '.',
+      sessionId,
+      logsRoot,
+      checkpoint: true,
+      persistSession: false,
+      logger,
+    });
+    const exec = ctxTool.function.execute as (i: unknown) => Promise<unknown>;
+    await exec({ path: filePath, old_string: 'b', new_string: 'Z' });
+
+    expect(await readFile(filePath, 'utf-8')).toBe('a Z c');
+    expect(await listCheckpoints(sessionId, logsRoot)).toEqual([]);
+    const warns = logger.mock.calls.filter((c) => c[0] === 'warn');
+    expect(warns.some((c) => /persistSession is false/.test(c[1] ?? ''))).toBe(true);
+  });
+
+  it('silently skips checkpoint when checkpoint:true but sessionId/logsRoot absent', async () => {
+    const filePath = join(TMP, 'no-ctx.txt');
+    await writeFile(filePath, 'one two three', 'utf-8');
+    const ctxTool = editFileTool({ cwd: '.', checkpoint: true });
+    const exec = ctxTool.function.execute as (i: unknown) => Promise<unknown>;
+    await exec({ path: filePath, old_string: 'two', new_string: 'TWO' });
+    expect(await readFile(filePath, 'utf-8')).toBe('one TWO three');
+  });
+
+  it('does NOT snapshot when edit_file fails validation (old_string not found)', async () => {
+    const { listCheckpoints } = await import('../checkpoints.js');
+    const sessionId = 'edit-cp-fail';
+    const logsRoot = join(TMP, 'logs');
+    const filePath = join(TMP, 'novalidate.txt');
+    await writeFile(filePath, 'hello world', 'utf-8');
+
+    const ctxTool = editFileTool({
+      cwd: '.',
+      sessionId,
+      logsRoot,
+      checkpoint: true,
+      persistSession: true,
+    });
+    const exec = ctxTool.function.execute as (i: unknown) => Promise<unknown>;
+    await expect(exec({ path: filePath, old_string: 'nope', new_string: 'x' })).rejects.toThrow();
+
+    // Validation happens before checkpointing, so no snapshot was written.
+    expect(await listCheckpoints(sessionId, logsRoot)).toHaveLength(0);
+  });
 });

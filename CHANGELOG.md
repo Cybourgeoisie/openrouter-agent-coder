@@ -24,6 +24,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Phase 4.6: file checkpointing. New `createCheckpoint(sessionId,
+logsRoot, files[], { logger? })`, `listCheckpoints(sessionId, logsRoot)`,
+  and `restoreCheckpoint(checkpointId, sessionId, logsRoot)` helpers
+  (exported from the library root) plus an auto-checkpoint hook on the
+  built-in `write_file` and `edit_file` tools. Snapshots land at
+  `<logsRoot>/<sessionId>/checkpoints/<checkpointId>/` and consist of
+  `manifest.json` plus one `<encoded-path>.snapshot` companion per file —
+  path encoding replaces every `/` (including the leading `/` of absolute
+  paths) with the sentinel token `__SLASH__`, so each snapshot fits in a
+  single basename and round-trips losslessly through the exported
+  `encodePath` / `decodePath` helpers. Files absent at checkpoint time
+  are recorded as tombstones (`existed: false`, no `.snapshot` file);
+  restoring a tombstone unlinks the live path if it currently exists.
+  `restoreCheckpoint` is atomic across the whole manifest — every file
+  is first staged into `<checkpointDir>/.restore-tmp/`, then `fs.rename`d
+  into place once every staged file is ready; tombstones are unlinked
+  last (after all renames succeed). Per-session cap
+  `MAX_CHECKPOINTS_PER_SESSION = 100` evicts the oldest checkpoint(s)
+  (by `timestamp`, ascending) on overflow and logs each eviction at
+  `'warn'`. Create-time fast-path: when the target file's `mtimeMs` +
+  `size` match its most-recent prior snapshot in the same session, the
+  new snapshot is created via `fs.link` (hard-link) instead of copying
+  bytes — falls through to `copyFile` on `EXDEV` / unsupported FS.
+  ([#57](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/57))
+- Phase 4.6: `checkpoint?: boolean` constructor option on
+  `OpenRouterAgentRun` (default `false`). When `true`, the built-in
+  `write_file` and `edit_file` tools snapshot their target path under
+  `<logsRoot>/<sessionId>/checkpoints/` before mutating it. Per-call
+  override field `checkpoint` on those tools' input schemas wins over
+  the constructor default. When the run is constructed with
+  `persistSession: false`, requested checkpoints become a NO-OP — the
+  library logs `'warn'` with the message `'checkpoint requested but
+persistSession is false'` and the underlying write proceeds normally.
+  Ignored when the caller supplies a custom `tools` array (the option
+  threads through the built-in tool bundle only). Both tools also gained
+  a per-call `checkpoint?: boolean` field on their Zod input schemas.
+  ([#57](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/57))
+- Phase 4.6: new public exports from the library root: `createCheckpoint`,
+  `listCheckpoints`, `restoreCheckpoint`, `encodePath`, `decodePath`,
+  `MAX_CHECKPOINTS_PER_SESSION`, plus types `Checkpoint`,
+  `CheckpointFile`, `RestoreCheckpointResult`, `CheckpointLogger`.
+  `ToolContext` gained five optional fields (`sessionId`, `logsRoot`,
+  `checkpoint`, `persistSession`, `logger`) threaded in by `agent.ts` so
+  the checkpointing tools can find the session directory and emit warn
+  logs; tools that don't need them ignore the new fields.
+  ([#57](https://github.com/Cybourgeoisie/openrouter-agent-coder/issues/57))
 - Phase 4.5: session forking. New `forkSession({ sessionId, newSessionId?,
 logsRoot })` standalone helper plus an `OpenRouterAgentRun.fork({
 newSessionId? })` instance wrapper that reuses the run's resolved

@@ -262,6 +262,23 @@ export interface OpenRouterAgentRunOptions {
    */
   persistSession?: boolean;
   /**
+   * Phase 4.6: when `true`, the built-in `write_file` and `edit_file` tools
+   * snapshot their target path into the session's `checkpoints/` directory
+   * **before** mutating it. Per-tool-call `checkpoint` field on those tools'
+   * input schemas overrides this default. Defaults to `false` — no
+   * auto-checkpointing.
+   *
+   * When the run is constructed with `persistSession: false`, requested
+   * checkpoints become a NO-OP (in-memory sessions have no disk path to
+   * persist snapshots to). The library emits a `'warn'`-level log via
+   * {@link logger} when a checkpoint is requested but skipped, and the
+   * underlying write proceeds normally.
+   *
+   * Ignored when the caller supplies a custom `tools` array — checkpointing
+   * is a built-in-tools-only convenience.
+   */
+  checkpoint?: boolean;
+  /**
    * Set when this run continues a session that was forked from another
    * (Phase 4.5). Threaded into the `session.json` that {@link logSessionStart}
    * writes, and surfaced on the `session_started` event payload so consumers
@@ -297,6 +314,7 @@ interface ResolvedOptions {
   logger?: AgentLogger;
   settingSources: readonly SettingSource[];
   persistSession: boolean;
+  checkpoint: boolean;
   parentSessionId?: string;
 }
 
@@ -364,6 +382,7 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     logger: opts.logger,
     settingSources: opts.settingSources ?? [],
     persistSession: opts.persistSession ?? true,
+    checkpoint: opts.checkpoint ?? false,
     parentSessionId: opts.parentSessionId,
   };
 }
@@ -630,7 +649,15 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       // both built-in and custom tools receive it via the SDK ToolExecuteContext
       // they get at call time), not here at factory time. Built-in tool
       // factories close over this ctx for cwd/signal only.
-      const ctx: ToolContext = { cwd, signal };
+      const ctx: ToolContext = {
+        cwd,
+        signal,
+        sessionId,
+        logsRoot,
+        checkpoint: this.opts.checkpoint,
+        persistSession,
+        ...(logger && { logger }),
+      };
       // Order of wraps (innermost → outermost): ctx-bound execute, then
       // canUseTool gate, then hook wrapper. The hook wrapper is outermost so
       // PreToolUse fires before the canUseTool decision (audit always fires,
