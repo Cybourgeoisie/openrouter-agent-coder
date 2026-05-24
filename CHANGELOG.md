@@ -30,6 +30,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Phase 5.4: `OpenRouterAgentRunOptions.effort` is live (was an
+  accepted-but-not-consumed stub since 4.8). Type tightened from `string`
+  to the new exported `EffortLevel` alias
+  (`'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none'`); the
+  per-subagent `effort` override on `spawn_subagent` and
+  `spawn_subagents` is the same enum (Zod now rejects unknown values at
+  parse time). When set, the value is forwarded into the OR `callModel`
+  request body as `reasoning: { effort }`; when omitted, no `reasoning`
+  field is sent — preserving each model's default behavior. The
+  per-subagent inheritance plumbed in 4.8 still applies: parent's
+  `effort` falls through to the child when the spawn spec omits it,
+  child spec replaces it when set. OR normalizes the level and maps it
+  to each provider's native param (OpenAI `reasoning_effort`, Anthropic
+  `thinking.budget_tokens`, Gemini `thinkingLevel`, Qwen
+  `thinking_budget`, xAI `reasoning_effort`), falling back to the
+  nearest supported level for models that lack the requested one; ignored
+  by non-reasoning models. See PR for issue #96 / spike 5.S3.
 - Phase 4.9: parallel subagent execution via the new built-in
   `spawn_subagents` (plural) tool. Bundled alongside the singular
   `spawn_subagent` whenever `OpenRouterAgentRun({ enableSubagents: true })`

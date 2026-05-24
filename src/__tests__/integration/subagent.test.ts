@@ -38,6 +38,7 @@ interface SpawnArgs {
   instructions?: string;
   max_turns?: number;
   max_budget_usd?: number;
+  effort?: 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
 }
 
 function parentFixtureCallingSubagent(spawnArgs: SpawnArgs): Fixture {
@@ -877,5 +878,30 @@ describe('integration: spawn_subagent via OpenRouterAgentRun', () => {
       .map((h) => (h.payload.event === 'SubagentStart' ? h.payload.depth : -1))
       .sort();
     expect(depths).toEqual([1, 2]);
+  });
+
+  it('Phase 5.4: per-spec `effort` rides the same inheritance rails as the rest of 4.8 — distinct on parent vs. child callModel request', async () => {
+    // Parent runs with `effort: 'high'`, spawns a subagent that overrides
+    // with `effort: 'low'`. Two callModel invocations expected; their
+    // `reasoning.effort` must reflect each run's own value distinctly.
+    const spawnArgs = { description: 'low-effort child', effort: 'low' as const };
+    state.fixtureQueue = [parentFixtureCallingSubagent(spawnArgs), childFixtureSimpleText()];
+
+    const parent = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: PARENT_SESSION,
+      prompt: 'parent high, child low',
+      enableSubagents: true,
+      persistSession: false,
+      effort: 'high',
+    });
+
+    for await (const _ of parent) void _;
+
+    expect(state.callModelArgs).toHaveLength(2);
+    const parentArgs = state.callModelArgs[0] as { reasoning?: { effort?: string } };
+    const childArgs = state.callModelArgs[1] as { reasoning?: { effort?: string } };
+    expect(parentArgs.reasoning).toEqual({ effort: 'high' });
+    expect(childArgs.reasoning).toEqual({ effort: 'low' });
   });
 });

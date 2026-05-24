@@ -10,6 +10,15 @@ import type {
   TokenUsage,
 } from '../events.js';
 import type { PermissionMode } from '../permission-modes.js';
+import type { EffortLevel } from '../agent.js';
+
+/**
+ * Phase 5.4: tuple of accepted effort enum values. Defined here so the Zod
+ * schemas on both `spawn_subagent` and `spawn_subagents` share a single source
+ * of truth for the OR `reasoning.effort` enum. Mirrors the values in the
+ * {@link EffortLevel} type alias on `OpenRouterAgentRunOptions`.
+ */
+export const EFFORT_VALUES = ['xhigh', 'high', 'medium', 'low', 'minimal', 'none'] as const;
 
 /**
  * Default cap on the subagent chain depth (root counts as `0`). With the
@@ -65,11 +74,11 @@ export interface SubagentRunConfig {
   allowedTools?: readonly string[];
   disallowedTools?: readonly string[];
   /**
-   * Pass-through to {@link OpenRouterAgentRunOptions.effort}. Currently a
-   * no-op — the field is stored on the child run's opts but not consumed by
-   * the OR call (`effort` wiring lands in Phase 5.4).
+   * Pass-through to {@link OpenRouterAgentRunOptions.effort}. Phase 5.4
+   * wired this through to the child's `callModel` call as
+   * `reasoning: { effort }`.
    */
-  effort?: string;
+  effort?: EffortLevel;
   /** Composite abort signal that fires when either the parent or the subagent itself aborts. */
   signal: AbortSignal;
   /** Chain depth of the new subagent (root = 0, first subagent = 1, …). */
@@ -172,8 +181,9 @@ export interface SpawnSubagentToolResult {
  * - `disallowed_tools?: string[]` — per-subagent deny list using the
  *   Phase 3.2 rule grammar (Phase 4.8). Also REPLACES rather than
  *   COMPOSES.
- * - `effort?: string` — per-subagent effort override (Phase 4.8).
- *   Currently stored-but-no-op (consumed in Phase 5.4).
+ * - `effort?: EffortLevel` — per-subagent reasoning-depth override
+ *   (Phase 4.8 plumbed it through inheritance; Phase 5.4 wires it into the
+ *   child's `callModel` request as `reasoning: { effort }`).
  *
  * Composition layers (innermost → outermost):
  * 1. `tools` (Phase 4.7) narrows the inherited tool *pool* by name.
@@ -259,11 +269,10 @@ export const SPAWN_SUBAGENT_INPUT_SCHEMA = z.object({
       "Per-subagent deny list using the same rule grammar as `OpenRouterAgentRun.disallowedTools`. REPLACES — does not compose with — the parent's deny list.",
     ),
   effort: z
-    .string()
-    .min(1)
+    .enum(EFFORT_VALUES)
     .optional()
     .describe(
-      'Per-subagent effort override. Currently a no-op pass-through stored on the child run (full wiring lands in Phase 5.4).',
+      "Per-subagent reasoning-depth override. OR maps the level to each provider's native param (OpenAI reasoning_effort, Anthropic thinking budget, Gemini thinkingLevel, Qwen thinking_budget, xAI reasoning_effort) and falls back to the nearest supported level when a model lacks the requested one. Omit to inherit the parent's `effort` (or leave unset if the parent also omitted it). Ignored by non-reasoning models.",
     ),
 });
 

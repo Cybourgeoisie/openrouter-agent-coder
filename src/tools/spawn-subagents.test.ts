@@ -23,7 +23,7 @@ interface SpawnSpec {
   permission_mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
   allowed_tools?: string[];
   disallowed_tools?: string[];
-  effort?: string;
+  effort?: 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
 }
 
 interface PluralInput {
@@ -549,6 +549,20 @@ describe('spawn_subagents tool — schema validation', () => {
     const schema = (t.function as unknown as { inputSchema: { parse: (i: unknown) => unknown } })
       .inputSchema;
     expect(() => schema.parse({ subagents: [{ description: 'x' }] })).not.toThrow();
+  });
+
+  it('Phase 5.4: zod rejects an unknown per-spec `effort` value at parse time', () => {
+    const t = spawnSubagentsTool(
+      {
+        parentSessionId: 'p',
+        runSubagent: async () => ({ status: 'success', text: '' }),
+      },
+      { cwd: '.' },
+    );
+    const schema = (t.function as unknown as { inputSchema: { parse: (i: unknown) => unknown } })
+      .inputSchema;
+    expect(() => schema.parse({ subagents: [{ description: 'x', effort: 'ultra' }] })).toThrow();
+    expect(() => schema.parse({ subagents: [{ description: 'x', effort: 'high' }] })).not.toThrow();
   });
 });
 
