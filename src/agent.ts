@@ -36,6 +36,11 @@ import { buildToolFilterCanUseTool } from './tool-filters.js';
 import { composeInstructions, type SettingSource } from './context-discovery.js';
 import { aggregateMessages, type AgentMessage } from './messages.js';
 import { forkSession, type ForkSessionResult } from './session-fork.js';
+import {
+  DEFAULT_MAX_SUBAGENT_DEPTH,
+  type SubagentRunner,
+  type SubagentRunResult,
+} from './tools/spawn-subagent.js';
 
 const DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
 const DEFAULT_MAX_TURNS = 25;
@@ -291,6 +296,38 @@ export interface OpenRouterAgentRunOptions {
    * `parentSessionId: <source>`.
    */
   parentSessionId?: string;
+  /**
+   * Phase 4.7: opt the built-in `spawn_subagent` tool into the default tool
+   * bundle. When `true`, the agent appends `spawn_subagent` to the bundle
+   * and wires an internal `SubagentRunner` that constructs child
+   * {@link OpenRouterAgentRun}s with the parent's `apiKey` / `baseUrl` /
+   * `appTitle` / `logsRoot` / `logger` / `onHook` / `model` / `cwd` /
+   * `persistSession` inherited. Each child gets a fresh session id
+   * (`<parentSessionId>:sub:<uuid>`) and `currentSubagentDepth =
+   * parent + 1`.
+   *
+   * Defaults to `false` — subagent spawning stays an explicit, opt-in
+   * feature (NOT in the default bundle). Ignored when the caller supplies
+   * a custom `tools` array (callers wire their own `spawn_subagent` via
+   * {@link spawnSubagentTool} if they need it).
+   */
+  enableSubagents?: boolean;
+  /**
+   * Maximum chain depth for subagent recursion (root counts as `0`).
+   * Default {@link DEFAULT_MAX_SUBAGENT_DEPTH} = 3 — `spawn_subagent` is
+   * allowed from depths `0`, `1`, `2` and rejects from depth `3`,
+   * yielding a chain of at most three levels (parent → sub → sub-sub →
+   * reject 4th). Threaded into every spawned subagent so the cap is
+   * uniform across the whole chain.
+   */
+  maxSubagentDepth?: number;
+  /**
+   * Phase 4.7: this run's own position in the subagent chain (root = `0`,
+   * first subagent = `1`, …). Set internally by the `spawn_subagent` tool
+   * when constructing a child run — external callers should leave this
+   * undefined (the default `0`).
+   */
+  currentSubagentDepth?: number;
 }
 
 interface ResolvedOptions {
@@ -316,6 +353,9 @@ interface ResolvedOptions {
   persistSession: boolean;
   checkpoint: boolean;
   parentSessionId?: string;
+  enableSubagents: boolean;
+  maxSubagentDepth: number;
+  currentSubagentDepth: number;
 }
 
 function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
@@ -384,6 +424,9 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     persistSession: opts.persistSession ?? true,
     checkpoint: opts.checkpoint ?? false,
     parentSessionId: opts.parentSessionId,
+    enableSubagents: opts.enableSubagents ?? false,
+    maxSubagentDepth: opts.maxSubagentDepth ?? DEFAULT_MAX_SUBAGENT_DEPTH,
+    currentSubagentDepth: opts.currentSubagentDepth ?? 0,
   };
 }
 
@@ -658,6 +701,85 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         persistSession,
         ...(logger && { logger }),
       };
+      // Subagent runner closure (Phase 4.7). Inherits the parent's
+      // `apiKey` / `baseUrl` / `appTitle` / `logsRoot` / `logger` / `onHook`
+      // / `model` / `cwd` / `persistSession` and constructs a child
+      // OpenRouterAgentRun with a fresh session id, the spawn-supplied
+      // prompt + optional overrides, and the composite abort signal the
+      // factory built. Builds the child's tool pool itself (with
+      // `spawn_subagent` at the next depth for further recursion) and
+      // passes it via the `tools` arg — the child run sees
+      // `hasCustomTools=true` and skips its own default-bundle path.
+      const runSubagent: SubagentRunner = async (config) => {
+        const childCtx: ToolContext = {
+          cwd,
+          signal: config.signal,
+          sessionId: config.sessionId,
+          logsRoot,
+          checkpoint: this.opts.checkpoint,
+          persistSession,
+          ...(logger && { logger }),
+        };
+        const childTaskListRef: TaskListRef = { tasks: [] };
+        const childAllTools = allTools(childCtx, {
+          ...(onAskUserQuestion && { onAskUserQuestion }),
+          ...(onTasksChanged && { onTasksChanged }),
+          taskListRef: childTaskListRef,
+          spawnSubagent: {
+            parentSessionId: config.sessionId,
+            currentDepth: config.depth,
+            maxDepth: this.opts.maxSubagentDepth,
+            runSubagent,
+            onSubagentLifecycle: async (event, payload) => {
+              await safeFireHook(event, payload);
+            },
+          },
+        });
+        const toolNames = config.toolNames;
+        const childTools =
+          toolNames !== undefined
+            ? childAllTools.filter((t) => toolNames.includes(t.function.name))
+            : childAllTools;
+        const child = new OpenRouterAgentRun({
+          apiKey,
+          sessionId: config.sessionId,
+          prompt: config.prompt,
+          instructions: config.instructions ?? baseInstructions,
+          model,
+          cwd,
+          maxTurns: config.maxTurns ?? maxTurns,
+          maxBudgetUsd: config.maxBudgetUsd ?? maxBudgetUsd,
+          appTitle,
+          logsRoot,
+          persistSession,
+          tools: childTools,
+          signal: config.signal,
+          ...(baseUrl && { baseUrl }),
+          ...(logger && { logger }),
+          ...(onHook && { onHook }),
+        });
+        let text = '';
+        let summary: SubagentRunResult = {
+          status: 'error',
+          text: '',
+          reason: 'subagent produced no stream_complete event',
+        };
+        for await (const ev of child) {
+          if (ev.type === 'text_delta') {
+            text += ev.content;
+          } else if (ev.type === 'stream_complete') {
+            summary = {
+              status: ev.status,
+              text,
+              ...(ev.usage !== undefined && { usage: ev.usage }),
+              ...(ev.costUsd !== undefined && { costUsd: ev.costUsd }),
+              ...(ev.durationMs !== undefined && { durationMs: ev.durationMs }),
+              ...(ev.reason !== undefined && { reason: ev.reason }),
+            };
+          }
+        }
+        return summary;
+      };
       // Order of wraps (innermost → outermost): ctx-bound execute, then
       // canUseTool gate, then hook wrapper. The hook wrapper is outermost so
       // PreToolUse fires before the canUseTool decision (audit always fires,
@@ -669,6 +791,17 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
             onAskUserQuestion,
             onTasksChanged,
             taskListRef: this.taskListRef,
+            ...(this.opts.enableSubagents && {
+              spawnSubagent: {
+                parentSessionId: sessionId,
+                currentDepth: this.opts.currentSubagentDepth,
+                maxDepth: this.opts.maxSubagentDepth,
+                runSubagent,
+                onSubagentLifecycle: async (event, payload) => {
+                  await safeFireHook(event, payload);
+                },
+              },
+            }),
           });
       const permissionedTools = this.opts.canUseTool
         ? baseTools.map((t) => wrapToolWithPermission(t, this.opts.canUseTool!))
