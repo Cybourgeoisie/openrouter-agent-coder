@@ -838,4 +838,42 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
     expect(complete.status).toBe('success');
   });
+
+  it('Phase 5.4: forwards `effort` into the callModel request as `reasoning: { effort }`', async () => {
+    state.fixture = loadFixture('single-turn-no-usage');
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'effort flows through',
+      tools: [echoTool()] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+      effort: 'high',
+    });
+    await collect(run);
+
+    expect(state.callModelArgs).toHaveLength(1);
+    const callArgs = state.callModelArgs[0] as { reasoning?: { effort?: string } };
+    expect(callArgs.reasoning).toEqual({ effort: 'high' });
+  });
+
+  it('Phase 5.4: omitted `effort` → callModel request has NO `reasoning` field (negative assertion)', async () => {
+    state.fixture = loadFixture('single-turn-no-usage');
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'effort omitted',
+      tools: [echoTool()] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+    });
+    await collect(run);
+
+    expect(state.callModelArgs).toHaveLength(1);
+    const callArgs = state.callModelArgs[0] as Record<string, unknown>;
+    // Hard negative — the field must not be present at all, not just be
+    // `{ effort: undefined }` (per Phase 5.4 invariant: no
+    // `{ reasoning: { effort: undefined } }` payloads).
+    expect('reasoning' in callArgs).toBe(false);
+  });
 });

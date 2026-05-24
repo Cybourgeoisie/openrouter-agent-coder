@@ -68,6 +68,16 @@ export type CanUseToolResult =
   | { behavior: 'allow'; updatedInput?: unknown }
   | { behavior: 'deny'; reason: string };
 
+/**
+ * Phase 5.4: normalized reasoning-depth knob accepted by OpenRouter's
+ * `reasoning.effort` field. OR maps the requested level to each provider's
+ * native parameter (OpenAI `reasoning_effort`, Anthropic `thinking.budget_tokens`,
+ * Gemini `thinkingConfig.thinkingLevel`, Qwen `thinking_budget`, xAI
+ * `reasoning_effort`) and substitutes the nearest supported level when a model
+ * lacks the requested one. Ignored by non-reasoning models.
+ */
+export type EffortLevel = 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+
 export type CanUseTool = (
   toolName: string,
   input: unknown,
@@ -343,18 +353,12 @@ export interface OpenRouterAgentRunOptions {
    */
   maxParallelSubagents?: number;
   /**
-   * Phase 4.8 stub (pending Phase 5.4): per-run effort / reasoning-depth
-   * override. **Currently accepted-but-not-consumed** — the value is stored
-   * on the resolved options struct so the field surface is stable for the
-   * `spawn_subagent` per-subagent `effort` override, but the OR `callModel`
-   * call does not yet forward it. Real wiring lands in Phase 5.4 (gated on
-   * spike 5.S3 — whether OR's API accepts an effort parameter at all).
-   *
-   * Until then, setting this is a no-op. Behavior may change once 5.4 lands;
-   * callers that care about a stable downstream effect should wait for that
-   * phase.
+   * Phase 5.4: per-run reasoning-depth override. Forwarded into the OR
+   * `callModel` call as `reasoning: { effort }` ONLY when set — omitted runs
+   * never send a `reasoning` payload, preserving each model's default behavior.
+   * See {@link EffortLevel} for the enum semantics and per-provider mapping.
    */
-  effort?: string;
+  effort?: EffortLevel;
 }
 
 interface ResolvedOptions {
@@ -397,11 +401,12 @@ interface ResolvedOptions {
   /** Phase 4.8: same as {@link permissionMode}, but for `disallowedTools`. */
   disallowedTools?: readonly string[];
   /**
-   * Phase 4.8 stub: stored-but-not-consumed effort override. Forwarded onto
-   * spawned subagents as the inheritance source until Phase 5.4 wires it
-   * into the OR `callModel` call.
+   * Phase 5.4: resolved per-run effort override. Forwarded into the OR
+   * `callModel` call as `reasoning: { effort }` ONLY when defined (omitted →
+   * no `reasoning` field in the request body), and inherited by spawned
+   * subagents when their spec omits an override.
    */
-  effort?: string;
+  effort?: EffortLevel;
 }
 
 function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
@@ -917,6 +922,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         tools: toolsForRun,
         state,
         stopWhen: [stepCountIs(maxTurns), maxCost(maxBudgetUsd)],
+        ...(this.opts.effort !== undefined && { reasoning: { effort: this.opts.effort } }),
         onTurnEnd: async (_ctx, response) => {
           if (persistSession) {
             const generationId = createGenerationId();

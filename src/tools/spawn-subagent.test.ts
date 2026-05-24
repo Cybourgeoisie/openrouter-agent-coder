@@ -21,7 +21,7 @@ interface SpawnInput {
   permission_mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
   allowed_tools?: string[];
   disallowed_tools?: string[];
-  effort?: string;
+  effort?: 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
 }
 
 type ExecuteFn = (input: SpawnInput, ctx?: unknown) => Promise<SpawnSubagentToolResult>;
@@ -445,7 +445,7 @@ describe('spawn_subagent tool — Phase 4.8 per-subagent overrides', () => {
     expect(config.allowedTools).toEqual(['run_command(echo *)']);
   });
 
-  it('forwards `effort` pass-through (currently no-op, stored on config for Phase 5.4 wiring)', async () => {
+  it('forwards `effort` pass-through to the runner config (Phase 5.4 wires this into the child callModel)', async () => {
     const runner = makeRunnerOk();
     const { execute } = makeTool({ runSubagent: runner });
     await execute({ description: 'x', effort: 'high' });
@@ -505,5 +505,16 @@ describe('spawn_subagent tool — Phase 4.8 per-subagent overrides', () => {
     expect(() =>
       schema.parse({ description: 'x', permission_mode: 'definitely-not-a-mode' }),
     ).toThrow();
+  });
+
+  it('Phase 5.4: zod schema rejects an unknown `effort` value at parse time', async () => {
+    const { tool } = makeTool({ runSubagent: makeRunnerOk() });
+    const schema = (tool.function as unknown as { inputSchema: { parse: (i: unknown) => unknown } })
+      .inputSchema;
+    expect(() => schema.parse({ description: 'x', effort: 'ultra' })).toThrow();
+    // Every documented enum value parses cleanly.
+    for (const v of ['xhigh', 'high', 'medium', 'low', 'minimal', 'none'] as const) {
+      expect(() => schema.parse({ description: 'x', effort: v })).not.toThrow();
+    }
   });
 });
