@@ -30,6 +30,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Phase 5.3: Streaming input mode (Card #104).
+  Adds the Claude-SDK-shaped multi-turn ergonomic on top of OR's
+  between-turn `interruptedBy` state primitive — implementation is an
+  interrupt-then-restart loop hidden behind a thin facade
+  (see [spike 5.S2](./plans/spikes/5.S2-streaming-input.md) for the
+  trade-off analysis).
+  - `OpenRouterAgentRunOptions.prompt` widens from `string` to
+    `string | AsyncIterable<UserInput>`. Plain `string` keeps the
+    single-shot back-compat path; `AsyncIterable<UserInput>` drives a
+    multi-turn loop where each yielded `UserInput` is the next user
+    message.
+  - `OpenRouterAgentRun.pushUserMessage(msg: UserInput | string)`
+    queues a follow-up message imperatively. Resolves immediately —
+    unbounded FIFO buffer, drained before the iterable on each
+    between-turn pull.
+  - `OpenRouterAgentRun.interrupt()` writes
+    `state.interruptedBy = 'host-interrupt'` via the run's
+    `StateAccessor`; the SDK's `checkForInterruption` polling observes
+    the flag between turns and exits the in-flight `callModel`
+    cleanly. Idempotent: safe to call before iteration starts (the
+    first cycle exits immediately) and after the run terminates
+    (no-op). Returns when the in-flight cycle has unwound.
+  - Multi-turn restart loop carries `messages` + `partialResponse`
+    across cycles via the existing `StateAccessor`. Between cycles,
+    the interrupted partial assistant text is committed as a proper
+    `assistant` message in `ConversationState.messages` and the
+    `partialResponse` field is cleared — preserving the conversation
+    transcript across the interrupt.
+  - Image / file attachments ride on `UserInput.content`, which
+    accepts `string | ReadonlyArray<unknown>` (OR-shaped content
+    blocks: `input_text`, `input_image`, `input_file`, `input_audio`,
+    `input_video`). The library performs no client-side validation —
+    OR's Responses API does the Zod-level check server-side.
+  - New `UserInput` type exported from the public API surface
+    (named distinctly from `messages.ts`'s `UserMessage` aggregator).
+    `streaming-input.ts` houses the source class, normalization
+    helpers, partial-response commit, and the interrupt-flag writer.
+  - `messages()` rich stream stays consistent: an interrupted cycle's
+    open `AssistantMessage` is flushed via a synthetic `turn_end`
+    event so the message stream's per-turn boundaries don't drift
+    relative to the event stream.
+  - Interrupt granularity is between turns / between SSE event
+    batches — NOT mid-token, because OR's wire is unidirectional SSE.
+    Matches the Claude SDK's coarser cross-provider behaviour; the
+    spike documents this as the intentional trade-off.
+  - Auto-compaction (Phase 5.1) fires once at end-of-run, NOT between
+    streaming-input turns, so the two phases don't race on
+    `state.json`.
 - Phase 5.2.5: MCP server integration (Model Context Protocol).
   Consummates the 5.2.\* series — adds two new lifecycle hook events
   (`McpServerStart` / `McpServerStop`) and the full integration test

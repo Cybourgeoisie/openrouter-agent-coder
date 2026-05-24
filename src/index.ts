@@ -130,3 +130,4 @@ export type {
   ToolUseContent,
   ToolResultContent,
 } from './messages.js';
+export type { UserInput } from './streaming-input.js';
