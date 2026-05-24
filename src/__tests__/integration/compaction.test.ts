@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Fixture, MockState } from './mock-openrouter.js';
+import { createGate } from './mock-openrouter.js';
 
 const { state } = vi.hoisted(() => {
   const sharedState: MockState = {
@@ -409,6 +410,228 @@ describe('integration: context compaction', () => {
     });
     await run.compact();
     expect(state.callModelArgs.length).toBe(0);
+  });
+
+  it('auto-compaction fires even when the consumer break-s out on stream_complete (blocker 2)', async () => {
+    // The consumer break-s the for-await on stream_complete instead of
+    // draining — this used to short-circuit auto-compact because the trigger
+    // sat in the `try` body AFTER the yield. Now it lives in the generator's
+    // `finally`, so the generator's `return()` (called by `break`) still
+    // runs it.
+    const longMessages = [
+      { role: 'user', content: 'a'.repeat(100) },
+      { role: 'assistant', content: 'b'.repeat(100) },
+      { role: 'user', content: 'c'.repeat(100) },
+      { role: 'assistant', content: 'd'.repeat(100) },
+      { role: 'user', content: 'e'.repeat(100) },
+      { role: 'assistant', content: 'f'.repeat(100) },
+      { role: 'user', content: 'g'.repeat(100) },
+      { role: 'assistant', content: 'h'.repeat(100) },
+    ];
+    const statePath = await seedState({
+      logsRoot,
+      sessionId: SESSION,
+      messages: longMessages,
+    });
+
+    state.fixtureQueue = [parentFixture(), compactFixture('BREAK-PATH-SUMMARY')];
+
+    const hookEvents: Array<{ event: HookEvent; payload: HookPayload }> = [];
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: SESSION,
+      prompt: 'continue',
+      logsRoot,
+      compactionThreshold: 100,
+      keepRecentTurns: 2,
+      onHook: (event, payload) => {
+        hookEvents.push({ event, payload });
+      },
+    });
+
+    let sawComplete = false;
+    for await (const ev of run) {
+      if (ev.type === 'stream_complete') {
+        sawComplete = true;
+        break; // <-- the idiomatic early-break pattern under test
+      }
+    }
+    expect(sawComplete).toBe(true);
+
+    // Auto-compaction still fired despite the consumer breaking out.
+    const preCompact = hookEvents.find((h) => h.event === 'PreCompact');
+    expect(preCompact).toBeDefined();
+    const payload = preCompact!.payload as Extract<HookPayload, { event: 'PreCompact' }>;
+    expect(payload.reason).toBe('auto');
+
+    // And the state file was rewritten with the new summary.
+    const persisted = JSON.parse(await readFile(statePath, 'utf-8'));
+    expect(persisted.messages.length).toBe(3);
+    expect(persisted.messages[0].role).toBe('developer');
+    expect(persisted.messages[0].content).toContain('BREAK-PATH-SUMMARY');
+
+    // SessionEnd / Stop still fire AFTER the auto-compact, as required.
+    const preCompactIdx = hookEvents.findIndex((h) => h.event === 'PreCompact');
+    const sessionEndIdx = hookEvents.findIndex((h) => h.event === 'SessionEnd');
+    const stopIdx = hookEvents.findIndex((h) => h.event === 'Stop');
+    expect(preCompactIdx).toBeLessThan(sessionEndIdx);
+    expect(sessionEndIdx).toBeLessThan(stopIdx);
+  });
+
+  it('auto-compaction fires on max_turns exits, not only on success (blocker 1)', async () => {
+    // maxTurns=1 + a fixture that emits a single turn (turnNumber=0) means
+    // `deriveCompletionStatus` returns 'max_turns', not 'success'. The old
+    // `status === 'success'` guard skipped this case; the new guard
+    // (`status !== 'error'`) lets it through.
+    const longMessages = [
+      { role: 'user', content: 'a'.repeat(100) },
+      { role: 'assistant', content: 'b'.repeat(100) },
+      { role: 'user', content: 'c'.repeat(100) },
+      { role: 'assistant', content: 'd'.repeat(100) },
+      { role: 'user', content: 'e'.repeat(100) },
+      { role: 'assistant', content: 'f'.repeat(100) },
+      { role: 'user', content: 'g'.repeat(100) },
+      { role: 'assistant', content: 'h'.repeat(100) },
+    ];
+    await seedState({ logsRoot, sessionId: SESSION, messages: longMessages });
+
+    state.fixtureQueue = [parentFixture(), compactFixture('MAX-TURNS-SUMMARY')];
+
+    const hookEvents: Array<{ event: HookEvent; payload: HookPayload }> = [];
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: SESSION,
+      prompt: 'continue',
+      logsRoot,
+      maxTurns: 1, // forces a 'max_turns' completion status
+      compactionThreshold: 100,
+      keepRecentTurns: 2,
+      onHook: (event, payload) => {
+        hookEvents.push({ event, payload });
+      },
+    });
+
+    const events: AgentCoreEvent[] = [];
+    for await (const ev of run) events.push(ev);
+
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.status).toBe('max_turns');
+
+    // Auto-compaction triggered for the max_turns exit.
+    const preCompact = hookEvents.find((h) => h.event === 'PreCompact');
+    expect(preCompact).toBeDefined();
+    expect((preCompact!.payload as Extract<HookPayload, { event: 'PreCompact' }>).reason).toBe(
+      'auto',
+    );
+  });
+
+  it('compact() throws synchronously when called from outside while iterate() is in progress', async () => {
+    // Seed a non-empty state so compact() would otherwise have work to do —
+    // proves the guard fires BEFORE the (would-be) summarizer call.
+    await seedState({
+      logsRoot,
+      sessionId: SESSION,
+      messages: [
+        { role: 'user', content: 'one' },
+        { role: 'assistant', content: 'two' },
+        { role: 'user', content: 'three' },
+      ],
+    });
+
+    // Parent fixture pauses mid-stream on the shared gate. The compact
+    // fixture is queued in case the post-iter compact() call needs it.
+    const gate = createGate();
+    state.pausedGate = gate;
+    const pausingFixture: Fixture = {
+      name: 'parent-paused',
+      steps: [
+        { type: 'yield', event: { type: 'turn.start', turnNumber: 0, timestamp: 1 } },
+        { type: 'wait_until', signal: 'paused' },
+        { type: 'yield', event: { type: 'turn.end', turnNumber: 0, timestamp: 2 } },
+      ],
+      response: {
+        id: 'resp-parent',
+        model: 'mock-model',
+        usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        output: [],
+      },
+    };
+    state.fixtureQueue = [pausingFixture, compactFixture('POST-ITER-SUMMARY')];
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: SESSION,
+      prompt: 'continue',
+      logsRoot,
+      autoCompact: false, // keep this test focused on the guard, not auto-trigger
+      keepRecentTurns: 1,
+    });
+
+    // Drive the iterator manually so we can synchronously assert the throw
+    // while the generator is mid-stream.
+    const iter = run[Symbol.asyncIterator]();
+    const first = await iter.next();
+    expect(first.done).toBeFalsy();
+
+    await expect(run.compact()).rejects.toThrow(
+      /Cannot call compact\(\) while iterate\(\) is in progress/,
+    );
+
+    // Release the gate and drain the rest of the stream so the generator's
+    // finally clears #isIterating.
+    gate.resolve();
+    for (;;) {
+      const { done } = await iter.next();
+      if (done) break;
+    }
+
+    // After iter completes, a fresh compact() call works.
+    await run.compact();
+    const compactCalls = (state.callModelArgs as Array<{ sessionId: string }>).filter((a) =>
+      a.sessionId.startsWith(`${SESSION}:compact:`),
+    );
+    expect(compactCalls.length).toBe(1);
+  });
+
+  it('auto-compact does not trip its own iter-race guard (auto-trigger from inside finally)', async () => {
+    // The auto-trigger calls this.compact('auto') from inside iterate()'s
+    // own finally. If #isIterating were still set, the auto-call would
+    // throw on its own guard. Asserts the bootstrap-sequencing fix (clear
+    // the flag BEFORE invoking compact('auto')).
+    const longMessages = [
+      { role: 'user', content: 'a'.repeat(100) },
+      { role: 'assistant', content: 'b'.repeat(100) },
+      { role: 'user', content: 'c'.repeat(100) },
+      { role: 'assistant', content: 'd'.repeat(100) },
+      { role: 'user', content: 'e'.repeat(100) },
+      { role: 'assistant', content: 'f'.repeat(100) },
+    ];
+    await seedState({ logsRoot, sessionId: SESSION, messages: longMessages });
+
+    state.fixtureQueue = [parentFixture(), compactFixture('NO-SELF-TRIP')];
+
+    const logEntries: Array<{ level: string; message: string }> = [];
+    const hookEvents: HookEvent[] = [];
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: SESSION,
+      prompt: 'continue',
+      logsRoot,
+      compactionThreshold: 100,
+      keepRecentTurns: 2,
+      logger: (level, message) => {
+        logEntries.push({ level, message });
+      },
+      onHook: (event) => {
+        hookEvents.push(event);
+      },
+    });
+
+    for await (const _ of run) void _;
+
+    expect(hookEvents).toContain('PreCompact');
+    // Auto-compact did not crash on its own guard.
+    expect(logEntries.find((l) => l.message === 'Auto-compaction failed')).toBeUndefined();
   });
 
   it('compact() is a no-op when there is no saved state or messages are short', async () => {

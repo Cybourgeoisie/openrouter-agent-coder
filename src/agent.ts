@@ -565,6 +565,13 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
    */
   private readonly stateAccessor: StateAccessor;
   private consumed = false;
+  /**
+   * Phase 5.1: runtime guard against calling {@link compact} while
+   * {@link iterate} is mid-stream. Set to true at the top of iterate(),
+   * cleared in its finally block BEFORE the auto-compact trigger so the
+   * auto-trigger does not race against its own guard.
+   */
+  #isIterating = false;
 
   constructor(options: OpenRouterAgentRunOptions) {
     this.opts = resolveOptions(options);
@@ -637,9 +644,11 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
    * single-shot and the SDK manages the in-memory `ConversationState` while
    * a stream is active; calling `compact()` while {@link iterate} is still
    * yielding will race with the SDK's own `state.save()` calls and may
-   * corrupt the persisted JSON. Auto-compaction (`autoCompact: true`) sites
-   * the trigger AFTER the run's terminal `stream_complete` event for
-   * exactly this reason — the SDK has finished writing by then.
+   * corrupt the persisted JSON. Guarded at runtime: calling from outside
+   * while iteration is in flight throws synchronously. Auto-compaction
+   * (`autoCompact: true`) fires inside {@link iterate}'s `finally` block —
+   * after the SDK has finished writing and regardless of whether the
+   * consumer drained to end-of-stream or `break`ed early on `stream_complete`.
    *
    * Audit-only failures (PreCompact hook throw) are swallowed via the
    * existing {@link safeFireHook} convention. A failed summarizer call
@@ -647,6 +656,11 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
    * decide how to recover.
    */
   async compact(reason: 'auto' | 'manual' = 'manual'): Promise<void> {
+    if (this.#isIterating) {
+      throw new Error(
+        'Cannot call compact() while iterate() is in progress — see the Mid-run safety note in the README.',
+      );
+    }
     const state = await this.stateAccessor.load();
     if (!state) return;
     const rawMessages = (state as { messages?: unknown }).messages;
@@ -820,6 +834,14 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     // last regardless of completion status; reason is populated on abort or
     // thrown-error paths so subscribers can distinguish clean from dirty exit.
     let stopPayload: Extract<HookPayload, { event: 'Stop' }> = { event: 'Stop', status: 'error' };
+    // Hoisted so the `finally` block can gate the auto-compact trigger on
+    // it. Default 'error' covers any path that exits iterate() without
+    // explicitly setting it (pre-abort short-circuit, OR-ctor throw, mid-
+    // stream throw, abort). The happy-path arm assigns the result of
+    // {@link deriveCompletionStatus}.
+    let status: AgentCoreEventStatus = 'error';
+
+    this.#isIterating = true;
 
     // Thin forwarder around the class-level safeFireHook so the existing
     // closures in this generator (subagent lifecycle emitters,
@@ -1225,43 +1247,17 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         });
       }
 
-      const status = deriveCompletionStatus({
+      status = deriveCompletionStatus({
         totalCostUsd,
         maxBudgetUsd,
         maxTurnNumber,
         maxTurns,
       });
 
-      yield {
-        type: 'stream_complete',
-        status,
-        usage: finalUsage,
-        costUsd: totalCostUsd,
-        durationMs: Date.now() - startMs,
-      };
-
-      // Phase 5.1: post-stream auto-compaction check. Runs only on the happy
-      // path (status === 'success' covers max_turns/max_budget exits via the
-      // 'success' arm too — those still produced a useful turn worth
-      // condensing). Errors from the summarizer call are caught here so the
-      // SessionEnd / Stop hook bracket below still fires.
-      if (this.opts.autoCompact && status === 'success') {
-        try {
-          const persistedState = await this.stateAccessor.load();
-          const messages = (persistedState as { messages?: unknown } | null)?.messages;
-          const chars = estimateMessagesCharLength(messages);
-          const thresholdChars = resolveCompactionThresholdChars(
-            this.opts.compactionThreshold,
-            this.opts.model,
-          );
-          if (chars >= thresholdChars) {
-            await this.compact('auto');
-          }
-        } catch (err) {
-          logger?.('error', 'Auto-compaction failed', { error: err });
-        }
-      }
-
+      // Stage the SessionEnd / Stop payloads BEFORE yielding so a consumer
+      // that `break`s on `stream_complete` still gets the trailing hooks
+      // fired from finally. (Generator return() resumes at the yield and
+      // unwinds straight to finally — code after the yield never runs.)
       sessionEndPayload = {
         event: 'SessionEnd',
         sessionId,
@@ -1270,6 +1266,14 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         costUsd: totalCostUsd,
       };
       stopPayload = { event: 'Stop', status };
+
+      yield {
+        type: 'stream_complete',
+        status,
+        usage: finalUsage,
+        costUsd: totalCostUsd,
+        durationMs: Date.now() - startMs,
+      };
     } catch (err) {
       if (signal.aborted) {
         yield {
@@ -1313,6 +1317,34 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       if (abortListenerInstalled) {
         signal.removeEventListener('abort', onAbort);
       }
+      // Clear the iter guard BEFORE the auto-compact call so the auto-trigger
+      // (which calls this.compact('auto')) does not throw on its own guard.
+      this.#isIterating = false;
+
+      // Phase 5.1: auto-compaction fires here (in the generator's `finally`)
+      // so it triggers on any non-error completion regardless of whether the
+      // consumer drained to end-of-stream or `break`ed early on
+      // `stream_complete` — the generator's `return()` still runs finally.
+      // `max_turns` / `max_budget` runs still produced a useful turn worth
+      // condensing. Errors from the summarizer call are caught so the
+      // SessionEnd / Stop hook bracket below still fires.
+      if (this.opts.autoCompact && status !== 'error') {
+        try {
+          const persistedState = await this.stateAccessor.load();
+          const messages = (persistedState as { messages?: unknown } | null)?.messages;
+          const chars = estimateMessagesCharLength(messages);
+          const thresholdChars = resolveCompactionThresholdChars(
+            this.opts.compactionThreshold,
+            this.opts.model,
+          );
+          if (chars >= thresholdChars) {
+            await this.compact('auto');
+          }
+        } catch (err) {
+          logger?.('error', 'Auto-compaction failed', { error: err });
+        }
+      }
+
       if (sessionEndPayload) {
         await safeFireHook('SessionEnd', sessionEndPayload);
       }

@@ -556,7 +556,7 @@ Phase 5.1: long-running sessions whose persisted message history grows past the 
 | --------------------- | --------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `compactionThreshold` | `number`  | `getModelContextWindow(model) * 4 * 0.8` _(chars, not tokens)_ | Threshold in **characters** (v1 ships no tokenizer dep — the default applies a conservative ~4 chars/token estimate at 80% headroom). |
 | `keepRecentTurns`     | `number`  | `5`                                                            | Number of trailing messages preserved verbatim. Treated at message granularity, not strict conversational turns.                      |
-| `autoCompact`         | `boolean` | `true`                                                         | Suppress the post-`stream_complete` threshold check when `false`. `compact()` still works.                                            |
+| `autoCompact`         | `boolean` | `true`                                                         | Suppress the in-`finally` threshold check when `false`. `compact()` still works.                                                      |
 
 ```ts
 import { OpenRouterAgentRun, getModelContextWindow } from 'openrouter-agent-coder';
@@ -598,7 +598,7 @@ const run = new OpenRouterAgentRun({
 
 The `getModelContextWindow(model)` helper is exported so consumers can compute their own threshold without re-deriving the table — it falls back to `DEFAULT_CONTEXT_WINDOW_TOKENS` (128k) for unknown models. The complete static table is also exported as `MODEL_CONTEXT_WINDOWS`.
 
-**Mid-run safety.** `compact()` is designed to be called between runs that share a `sessionId`, not mid-`for await`. The run iterator is single-shot and the SDK manages the in-memory `ConversationState` while a stream is active; calling `compact()` while `iterate()` is still yielding will race with the SDK's own `state.save()` calls and may corrupt the persisted JSON. Auto-compaction sites the trigger AFTER the run's terminal `stream_complete` event for exactly this reason.
+**Mid-run safety.** `compact()` is designed to be called between runs that share a `sessionId`, not mid-`for await`. The run iterator is single-shot and the SDK manages the in-memory `ConversationState` while a stream is active; calling `compact()` while `iterate()` is still yielding will race with the SDK's own `state.save()` calls and may corrupt the persisted JSON. Guarded at runtime — a `compact()` call from outside the iter while iteration is in flight throws synchronously. Auto-compaction fires inside the iterator's `finally` block, so the trigger runs whether the consumer drains the stream to completion OR `break`s on `stream_complete` (the generator's `return()` still runs finally).
 
 #### Subagents
 
