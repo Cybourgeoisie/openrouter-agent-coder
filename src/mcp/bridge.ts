@@ -386,6 +386,47 @@ export class McpBridge {
   get serverNames(): readonly string[] {
     return this.entries.map((e) => e.serverName);
   }
+
+  /**
+   * Phase 5.5: flat catalog of every successfully-listed MCP tool — used by
+   * the `tool_search` index to score by raw `name` / `description` and
+   * stringify the original `inputSchema` for the `schema_preview` field.
+   * Each entry's `name` is the prefixed `<serverName>__<toolName>` (matches
+   * the wrapped Tool's name in {@link tools}); `server` is the originating
+   * server's name. Empty until {@link init} resolves; reflects only the
+   * subset of servers whose handshake succeeded.
+   *
+   * Exposed off the bridge (not derived from the wrapped {@link tools}) so
+   * the search index sees the raw MCP JSON Schema without having to reach
+   * into the Zod-meta wrapper {@link mapMcpToolToTool} stores on each Tool.
+   */
+  get catalog(): ReadonlyArray<{
+    name: string;
+    server: string;
+    description?: string;
+    inputSchema?: unknown;
+  }> {
+    const out: Array<{
+      name: string;
+      server: string;
+      description?: string;
+      inputSchema?: unknown;
+    }> = [];
+    for (const entry of this.entries) {
+      for (const mcpTool of entry.tools) {
+        const prefixed = `${entry.serverName}${MCP_TOOL_NAME_SEPARATOR}${mcpTool.name}`;
+        const item: { name: string; server: string; description?: string; inputSchema?: unknown } =
+          {
+            name: prefixed,
+            server: entry.serverName,
+          };
+        if (mcpTool.description !== undefined) item.description = mcpTool.description;
+        if (mcpTool.inputSchema !== undefined) item.inputSchema = mcpTool.inputSchema;
+        out.push(item);
+      }
+    }
+    return out;
+  }
 }
 
 /**

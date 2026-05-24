@@ -16,6 +16,12 @@ import {
   type SpawnSubagentToolOptions,
   type SpawnSubagentsToolOptions,
 } from './spawn-subagent.js';
+import {
+  toolSearchTool,
+  toolLoadTool,
+  type ToolSearchToolOptions,
+  type ToolLoadToolOptions,
+} from './tool-search.js';
 import { DEFAULT_TOOL_CONTEXT, type ToolContext } from './context.js';
 
 export { readFileTool } from './read-file.js';
@@ -61,6 +67,26 @@ export type {
   SubagentRunner,
   SubagentLifecycleEmitter,
 } from './spawn-subagent.js';
+export {
+  toolSearchTool,
+  toolLoadTool,
+  MAX_SCHEMA_PREVIEW_CHARS,
+  SCHEMA_PREVIEW_TRUNCATION_MARKER,
+  DEFAULT_SEARCH_LIMIT,
+  MAX_SEARCH_LIMIT,
+  scoreMatch,
+  tokenize,
+  searchCatalog,
+  buildSchemaPreview,
+} from './tool-search.js';
+export type {
+  SearchableTool,
+  ToolSearchMatch,
+  ToolSearchToolResult,
+  ToolSearchToolOptions,
+  ToolLoadToolResult,
+  ToolLoadToolOptions,
+} from './tool-search.js';
 export type {
   TaskState,
   Task,
@@ -119,6 +145,23 @@ export interface AllToolsOptions {
    * See {@link SpawnSubagentsToolOptions}.
    */
   spawnSubagents?: SpawnSubagentsToolOptions;
+  /**
+   * Phase 5.5: opt-in {@link toolSearchTool} configuration. When omitted,
+   * the `tool_search` tool is **NOT** included in the default bundle.
+   * `agent.ts` enables both `tool_search` and {@link toolLoad} together
+   * under the single `OpenRouterAgentRun({ enableToolSearch: true })`
+   * switch — the two tools share a catalog closure plus a `loaded` set,
+   * and wiring them independently would force the host to maintain that
+   * shared state. See {@link ToolSearchToolOptions}.
+   */
+  toolSearch?: ToolSearchToolOptions;
+  /**
+   * Phase 5.5: opt-in {@link toolLoadTool} configuration. Always paired
+   * with {@link toolSearch}; the two are wired together under the single
+   * `enableToolSearch` switch on `OpenRouterAgentRun`.
+   * See {@link ToolLoadToolOptions}.
+   */
+  toolLoad?: ToolLoadToolOptions;
 }
 
 /**
@@ -155,6 +198,12 @@ export function allTools(
   }
   if (opts.spawnSubagents !== undefined) {
     tools.push(spawnSubagentsTool(opts.spawnSubagents, ctx));
+  }
+  if (opts.toolSearch !== undefined) {
+    tools.push(toolSearchTool(opts.toolSearch, ctx));
+  }
+  if (opts.toolLoad !== undefined) {
+    tools.push(toolLoadTool(opts.toolLoad, ctx));
   }
   return tools;
 }

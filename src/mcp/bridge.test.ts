@@ -887,3 +887,86 @@ describe('McpBridge lifecycle hooks', () => {
     expect(startCount).toBeGreaterThanOrEqual(2); // start + stop both invoked
   });
 });
+
+describe('McpBridge.catalog (Phase 5.5)', () => {
+  it('is empty before init() and after close()', async () => {
+    const client = createStubClient({
+      tools: [{ name: 't', inputSchema: { type: 'object' } }],
+    });
+    const bridge = new McpBridge({
+      servers: [stdio('a')],
+      clientFactory: () => client,
+    });
+    expect(bridge.catalog).toEqual([]);
+    await bridge.init();
+    expect(bridge.catalog.length).toBe(1);
+    await bridge.close();
+    expect(bridge.catalog).toEqual([]);
+  });
+
+  it('projects each entry with prefixed name, server, description, inputSchema', async () => {
+    const inputSchema = {
+      type: 'object',
+      properties: { message: { type: 'string' } },
+      required: ['message'],
+    };
+    const client = createStubClient({
+      tools: [
+        { name: 'echo', description: 'Echo the input', inputSchema },
+        { name: 'noop', inputSchema: { type: 'object' } },
+      ],
+    });
+    const bridge = new McpBridge({
+      servers: [stdio('srv')],
+      clientFactory: () => client,
+    });
+    await bridge.init();
+    const catalog = [...bridge.catalog].sort((a, b) => a.name.localeCompare(b.name));
+    expect(catalog).toEqual([
+      {
+        name: 'srv__echo',
+        server: 'srv',
+        description: 'Echo the input',
+        inputSchema,
+      },
+      {
+        name: 'srv__noop',
+        server: 'srv',
+        inputSchema: { type: 'object' },
+      },
+    ]);
+  });
+
+  it('flattens across multiple servers', async () => {
+    const a = createStubClient({ tools: [{ name: 't', inputSchema: { type: 'object' } }] });
+    const b = createStubClient({ tools: [{ name: 't', inputSchema: { type: 'object' } }] });
+    const bridge = new McpBridge({
+      servers: [stdio('a'), stdio('b')],
+      clientFactory: (s) => (s.name === 'a' ? a : b),
+    });
+    await bridge.init();
+    const names = bridge.catalog.map((c) => c.name).sort();
+    expect(names).toEqual(['a__t', 'b__t']);
+  });
+
+  it('uses the configured MCP_TOOL_NAME_SEPARATOR for the name prefix', async () => {
+    const client = createStubClient({ tools: [{ name: 't', inputSchema: {} }] });
+    const bridge = new McpBridge({
+      servers: [stdio('srv')],
+      clientFactory: () => client,
+    });
+    await bridge.init();
+    expect(bridge.catalog[0]?.name).toBe(`srv${MCP_TOOL_NAME_SEPARATOR}t`);
+  });
+
+  it('skips servers whose handshake failed', async () => {
+    const good = createStubClient({ tools: [{ name: 'ok', inputSchema: {} }] });
+    const bad = createStubClient({ tools: [], connectError: 'no-connect' });
+    const bridge = new McpBridge({
+      servers: [stdio('good'), stdio('bad')],
+      clientFactory: (s) => (s.name === 'good' ? good : bad),
+    });
+    await bridge.init();
+    expect(bridge.catalog.map((c) => c.server)).toEqual(['good']);
+  });
+});
