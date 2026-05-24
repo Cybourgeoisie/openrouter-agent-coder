@@ -30,6 +30,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Phase 5.1: context compaction. Three new
+  `OpenRouterAgentRunOptions` knobs — `compactionThreshold?: number`
+  (character count, defaults to ~80% of the model's context window
+  translated via a ~4 chars/token heuristic), `keepRecentTurns?: number`
+  (default 5 trailing messages preserved verbatim), and
+  `autoCompact?: boolean` (default `true`). When the persisted message
+  history crosses the threshold between turns, the runtime spawns a
+  single isolated `callModel` (session id
+  `<sessionId>:compact:<uuid>`, no tools) that summarizes the prefix
+  into a `developer`-role message and rewrites
+  `ConversationState.messages = [summary, ...lastN]` on disk —
+  `previousResponseId` is cleared so the server can't splice the stale
+  response chain onto the rewritten input (see spike 5.S1 §2d). New
+  public `OpenRouterAgentRun.compact()` method drives the same flow
+  on demand. New `PreCompact` lifecycle hook fires audit-only with the
+  prefix being condensed (`{ messages, keepRecentTurns, reason: 'auto'
+| 'manual' }`). New `getModelContextWindow(model)` helper exposes
+  the hard-coded window table for known Anthropic / OpenAI / Google /
+  xAI / Qwen models. Closes #97.
 - Phase 5.4: `OpenRouterAgentRunOptions.effort` is live (was an
   accepted-but-not-consumed stub since 4.8). Type tightened from `string`
   to the new exported `EffortLevel` alias

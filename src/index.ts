@@ -86,6 +86,18 @@ export type {
   RestoreCheckpointResult,
   CheckpointLogger,
 } from './checkpoints.js';
+export {
+  COMPACTION_PROMPT,
+  CHARS_PER_TOKEN,
+  DEFAULT_CONTEXT_WINDOW_TOKENS,
+  DEFAULT_KEEP_RECENT_TURNS,
+  DEFAULT_THRESHOLD_RATIO,
+  MODEL_CONTEXT_WINDOWS,
+  estimateMessagesCharLength,
+  getModelContextWindow,
+  partitionMessages,
+  resolveCompactionThresholdChars,
+} from './compaction.js';
 export { accountInfo, supportedModels } from './openrouter-api.js';
 export type { AccountInfo, ModelInfo } from './openrouter-api.js';
 export type {

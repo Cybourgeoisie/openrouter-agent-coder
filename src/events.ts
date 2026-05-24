@@ -44,7 +44,8 @@ export type HookEvent =
   | 'Setup'
   | 'Notification'
   | 'SubagentStart'
-  | 'SubagentEnd';
+  | 'SubagentEnd'
+  | 'PreCompact';
 
 /**
  * Summary of a finished subagent run. Mirrors the fields of a `stream_complete`
@@ -152,6 +153,26 @@ export type HookPayload =
       subagentSessionId: string;
       depth: number;
       result: SubagentResultSummary;
+    }
+  /**
+   * Phase 5.1: fires immediately BEFORE a context-compaction call runs, with
+   * the message prefix that is about to be condensed and the `keepRecentTurns`
+   * window the runtime decided to preserve verbatim. `reason` is `'auto'` when
+   * the per-turn threshold check triggered the compaction, `'manual'` when
+   * {@link OpenRouterAgentRun.compact} was called explicitly.
+   *
+   * Audit-only — the hook's return value is ignored and a thrown error is
+   * logged + swallowed (compaction proceeds regardless). Consumers typically
+   * use this to archive the pre-compaction transcript before it is rewritten
+   * on disk. `messages` is the prefix slice straight from
+   * `ConversationState.messages` (matching the SDK's `InputsUnion` shape) —
+   * do NOT mutate it in place.
+   */
+  | {
+      event: 'PreCompact';
+      messages: unknown;
+      keepRecentTurns: number;
+      reason: 'auto' | 'manual';
     };
 
 /**
