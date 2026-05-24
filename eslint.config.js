@@ -32,5 +32,21 @@ export default [
       '@typescript-eslint/no-explicit-any': 'off',
     },
   },
+  {
+    // Node ESM scripts (record-fixture lives in scripts/, MCP test fixtures
+    // live in scripts/test-fixtures/). They run under `node`, so the default
+    // browser-globals env in eslint:recommended doesn't apply.
+    files: ['scripts/**/*.{js,mjs}'],
+    languageOptions: {
+      globals: {
+        process: 'readonly',
+        console: 'readonly',
+        setInterval: 'readonly',
+        setTimeout: 'readonly',
+        clearInterval: 'readonly',
+        clearTimeout: 'readonly',
+      },
+    },
+  },
   prettier,
 ];

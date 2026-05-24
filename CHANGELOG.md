@@ -30,6 +30,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Phase 5.2.1: MCP stdio transport (preview). New
+  `McpStdioClient` in `src/mcp/transport-stdio.ts` wraps
+  `@modelcontextprotocol/sdk@^1.29.0`'s `Client` +
+  `StdioClientTransport` to spawn an MCP server subprocess, complete
+  the `initialize` handshake, and expose typed `listTools` /
+  `callTool` / `listResources` / `readResource` / `listPrompts` /
+  `getPrompt` passthroughs. Supports `AbortSignal` (pre-aborted
+  rejects `connect()`; mid-handshake aborts close the transport and
+  reject pending requests) and idempotent `close()`. Shared MCP
+  types re-exported from `src/mcp/spec.ts` so downstream cards
+  (5.2.2 HTTP+SSE, 5.2.4 tool-bridge) consume a single internal
+  seam rather than deep SDK subpath imports. SDK is loaded via
+  dynamic `import()` inside `connect()` — zero cold-start cost for
+  users without configured MCP servers. Vendor decision recorded
+  in `plans/spikes/5.2.S1-mcp-vendor.md`. **Not wired into
+  `OpenRouterAgentRun` yet** — that flips in Card 5.2.5 (lifecycle
+  hooks) after the bridge in 5.2.4 lands.
 - Phase 5.1: context compaction. Three new
   `OpenRouterAgentRunOptions` knobs — `compactionThreshold?: number`
   (character count, defaults to ~80% of the model's context window

@@ -827,6 +827,36 @@ new OpenRouterAgentRun({
 
 Today this is purely a value bag — real MCP transports (stdio / HTTP+SSE / `.mcp.json` discovery) come in Phase 5.2 of the [parity roadmap](./plans/claude-sdk-parity-roadmap.md).
 
+### MCP servers (preview)
+
+Phase 5.2.1 ships an `McpStdioClient` (`src/mcp/transport-stdio.ts`) — a thin
+wrapper around [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk)'s
+client. It spawns a subprocess, completes the MCP `initialize` handshake, and
+exposes typed `listTools` / `callTool` / `listResources` / `readResource` /
+`listPrompts` / `getPrompt` passthroughs. The SDK is `import()`-loaded lazily
+inside `connect()`, so users without configured MCP servers pay zero
+cold-start cost.
+
+```ts
+import { McpStdioClient } from 'openrouter-agent-coder/dist/mcp/transport-stdio.js';
+
+const client = new McpStdioClient({
+  command: 'node',
+  args: ['./my-mcp-server.mjs'],
+  signal: someAbortController.signal,
+});
+await client.connect();
+const { tools } = await client.listTools();
+const result = await client.callTool('search', { query: 'mcp' });
+await client.close();
+```
+
+**Preview status — NOT wired into agent runs yet.** Card 5.2.2 adds the
+Streamable-HTTP + SSE transport, 5.2.3 adds `.mcp.json` discovery, 5.2.4
+bridges discovered MCP tools into the agent's `Tool[]` registry, and 5.2.5
+adds `McpServerStart` / `McpServerStop` lifecycle hooks. Until those land
+the surface here is exported but not consumed by `OpenRouterAgentRun`.
+
 ## Tools shipped with the library
 
 Client tools (execute in the host process):
