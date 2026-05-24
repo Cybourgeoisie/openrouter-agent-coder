@@ -38,6 +38,7 @@ import { aggregateMessages, type AgentMessage } from './messages.js';
 import { forkSession, type ForkSessionResult } from './session-fork.js';
 import {
   DEFAULT_MAX_SUBAGENT_DEPTH,
+  DEFAULT_MAX_PARALLEL_SUBAGENTS,
   type SubagentRunner,
   type SubagentRunResult,
 } from './tools/spawn-subagent.js';
@@ -329,6 +330,19 @@ export interface OpenRouterAgentRunOptions {
    */
   currentSubagentDepth?: number;
   /**
+   * Phase 4.9: maximum number of subagents allowed in-flight at once for a
+   * single `spawn_subagents` (plural) invocation. Default
+   * {@link DEFAULT_MAX_PARALLEL_SUBAGENTS} = 4 — picked as a balance
+   * between OR API back-pressure (each child opens its own stream) and
+   * meaningful parallelism on typical fan-outs. The plural tool's array
+   * may be longer than the cap; excess specs queue and are submitted in
+   * order as workers free up. Threaded into every spawned subagent so the
+   * cap propagates uniformly down the chain (a depth-N subagent's own
+   * plural spawns honor the same value). Ignored when the caller supplies
+   * a custom `tools` array.
+   */
+  maxParallelSubagents?: number;
+  /**
    * Phase 4.8 stub (pending Phase 5.4): per-run effort / reasoning-depth
    * override. **Currently accepted-but-not-consumed** — the value is stored
    * on the resolved options struct so the field surface is stable for the
@@ -369,6 +383,7 @@ interface ResolvedOptions {
   enableSubagents: boolean;
   maxSubagentDepth: number;
   currentSubagentDepth: number;
+  maxParallelSubagents: number;
   /**
    * Phase 4.8: preserved here so the subagent runner can inherit the parent's
    * already-resolved `permissionMode` when a spawn call omits its own
@@ -458,6 +473,7 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     enableSubagents: opts.enableSubagents ?? false,
     maxSubagentDepth: opts.maxSubagentDepth ?? DEFAULT_MAX_SUBAGENT_DEPTH,
     currentSubagentDepth: opts.currentSubagentDepth ?? 0,
+    maxParallelSubagents: opts.maxParallelSubagents ?? DEFAULT_MAX_PARALLEL_SUBAGENTS,
     ...(opts.permissionMode !== undefined && { permissionMode: opts.permissionMode }),
     ...(opts.allowedTools !== undefined && { allowedTools: opts.allowedTools }),
     ...(opts.disallowedTools !== undefined && { disallowedTools: opts.disallowedTools }),
@@ -769,6 +785,16 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
               await safeFireHook(event, payload);
             },
           },
+          spawnSubagents: {
+            parentSessionId: config.sessionId,
+            currentDepth: config.depth,
+            maxDepth: this.opts.maxSubagentDepth,
+            maxParallel: this.opts.maxParallelSubagents,
+            runSubagent,
+            onSubagentLifecycle: async (event, payload) => {
+              await safeFireHook(event, payload);
+            },
+          },
         });
         const toolNames = config.toolNames;
         const childTools =
@@ -800,6 +826,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           persistSession,
           tools: childTools,
           signal: config.signal,
+          maxParallelSubagents: this.opts.maxParallelSubagents,
           ...(baseUrl && { baseUrl }),
           ...(logger && { logger }),
           ...(onHook && { onHook }),
@@ -846,6 +873,16 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
                 parentSessionId: sessionId,
                 currentDepth: this.opts.currentSubagentDepth,
                 maxDepth: this.opts.maxSubagentDepth,
+                runSubagent,
+                onSubagentLifecycle: async (event, payload) => {
+                  await safeFireHook(event, payload);
+                },
+              },
+              spawnSubagents: {
+                parentSessionId: sessionId,
+                currentDepth: this.opts.currentSubagentDepth,
+                maxDepth: this.opts.maxSubagentDepth,
+                maxParallel: this.opts.maxParallelSubagents,
                 runSubagent,
                 onSubagentLifecycle: async (event, payload) => {
                   await safeFireHook(event, payload);

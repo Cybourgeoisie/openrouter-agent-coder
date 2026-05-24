@@ -691,4 +691,191 @@ describe('integration: spawn_subagent via OpenRouterAgentRun', () => {
       proto[Symbol.asyncIterator] = origIter;
     }
   });
+
+  it('Phase 4.9: drives parallel spawn_subagents through the agent.ts wiring (lifecycle hooks fire for each child)', async () => {
+    // Parent calls spawn_subagents (plural) with two specs. The agent.ts
+    // wiring should register the plural tool when enableSubagents=true,
+    // route each spec through the runSubagent closure, and fire
+    // SubagentStart/SubagentEnd per child via the agent-wired emitter.
+    const spawnArgs = {
+      subagents: [{ description: 'parallel a' }, { description: 'parallel b' }],
+    };
+    const parentFixture: Fixture = {
+      name: 'parent-parallel',
+      steps: [
+        { type: 'yield', event: { type: 'turn.start', turnNumber: 0, timestamp: 1 } },
+        {
+          type: 'yield',
+          event: {
+            type: 'response.output_item.done',
+            outputIndex: 0,
+            sequenceNumber: 1,
+            item: {
+              type: 'function_call',
+              callId: 'parallel_call_1',
+              name: 'spawn_subagents',
+              arguments: JSON.stringify(spawnArgs),
+            },
+          },
+        },
+        {
+          type: 'tool_execute',
+          toolName: 'spawn_subagents',
+          input: spawnArgs,
+          callId: 'parallel_call_1',
+        },
+        { type: 'yield', event: { type: 'turn.end', turnNumber: 0, timestamp: 2 } },
+      ],
+      response: {
+        id: 'resp-parent-parallel',
+        model: 'mock-model',
+        usage: { cost: 0.001, inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        output: [],
+      },
+    };
+
+    state.fixtureQueue = [parentFixture, childFixtureSimpleText(), childFixtureSimpleText()];
+
+    const hookEvents: Array<{ event: HookEvent; payload: HookPayload }> = [];
+    const parent = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: PARENT_SESSION,
+      prompt: 'use spawn_subagents',
+      enableSubagents: true,
+      persistSession: false,
+      onHook: (event, payload) => {
+        hookEvents.push({ event, payload });
+      },
+    });
+
+    const events: AgentCoreEvent[] = [];
+    for await (const ev of parent) events.push(ev);
+
+    // Parent stream has one tool_call (spawn_subagents) + one tool_result.
+    const toolCall = events.find((e) => e.type === 'tool_call');
+    expect(toolCall?.name).toBe('spawn_subagents');
+
+    const toolResult = events.find((e) => e.type === 'tool_result');
+    expect(toolResult?.isError).toBe(false);
+    const output = toolResult?.output as {
+      results: Array<{ status: string; subagentSessionId: string }>;
+      aggregatedUsage: { usd: number };
+    };
+    expect(output.results).toHaveLength(2);
+    expect(output.results.every((r) => r.status === 'success')).toBe(true);
+    expect(output.aggregatedUsage.usd).toBeGreaterThan(0);
+
+    // The agent-wired onSubagentLifecycle emitter fired SubagentStart +
+    // SubagentEnd for both children (this is what covers the
+    // spawnSubagents-config lifecycle arrow in agent.ts).
+    const startCount = hookEvents.filter((h) => h.event === 'SubagentStart').length;
+    const endCount = hookEvents.filter((h) => h.event === 'SubagentEnd').length;
+    expect(startCount).toBe(2);
+    expect(endCount).toBe(2);
+  });
+
+  it('Phase 4.9: a depth-1 subagent can call spawn_subagents (exercises the child-runner spawnSubagents wiring)', async () => {
+    // Parent spawns one subagent via spawn_subagent. That subagent then
+    // calls spawn_subagents (plural) with one spec. Three callModel
+    // invocations expected: parent → sub-1 → sub-1's child. This covers
+    // the runSubagent closure's own spawnSubagents-config emitter
+    // (otherwise unreachable from depth-0 tests).
+    const parentSpawn = { description: 'depth-1 sub' };
+    const childParallelSpawn = { subagents: [{ description: 'depth-2 sub' }] };
+
+    const parentFixture: Fixture = {
+      name: 'parent-recursive',
+      steps: [
+        { type: 'yield', event: { type: 'turn.start', turnNumber: 0, timestamp: 1 } },
+        {
+          type: 'yield',
+          event: {
+            type: 'response.output_item.done',
+            outputIndex: 0,
+            sequenceNumber: 1,
+            item: {
+              type: 'function_call',
+              callId: 'p_spawn',
+              name: 'spawn_subagent',
+              arguments: JSON.stringify(parentSpawn),
+            },
+          },
+        },
+        {
+          type: 'tool_execute',
+          toolName: 'spawn_subagent',
+          input: parentSpawn,
+          callId: 'p_spawn',
+        },
+        { type: 'yield', event: { type: 'turn.end', turnNumber: 0, timestamp: 2 } },
+      ],
+      response: {
+        id: 'resp-pr',
+        model: 'mock-model',
+        usage: { cost: 0.001, inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        output: [],
+      },
+    };
+
+    const subFixture: Fixture = {
+      name: 'sub-calls-parallel',
+      steps: [
+        { type: 'yield', event: { type: 'turn.start', turnNumber: 0, timestamp: 1 } },
+        {
+          type: 'yield',
+          event: {
+            type: 'response.output_item.done',
+            outputIndex: 0,
+            sequenceNumber: 1,
+            item: {
+              type: 'function_call',
+              callId: 's_par',
+              name: 'spawn_subagents',
+              arguments: JSON.stringify(childParallelSpawn),
+            },
+          },
+        },
+        {
+          type: 'tool_execute',
+          toolName: 'spawn_subagents',
+          input: childParallelSpawn,
+          callId: 's_par',
+        },
+        { type: 'yield', event: { type: 'turn.end', turnNumber: 0, timestamp: 2 } },
+      ],
+      response: {
+        id: 'resp-sub',
+        model: 'mock-model',
+        usage: { cost: 0.001, inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        output: [],
+      },
+    };
+
+    state.fixtureQueue = [parentFixture, subFixture, childFixtureSimpleText()];
+
+    const hookEvents: Array<{ event: HookEvent; payload: HookPayload }> = [];
+    const parent = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: PARENT_SESSION,
+      prompt: 'recursive parallel',
+      enableSubagents: true,
+      persistSession: false,
+      onHook: (event, payload) => {
+        hookEvents.push({ event, payload });
+      },
+    });
+
+    for await (const _ of parent) {
+      void _;
+    }
+
+    // Three SubagentStart events expected: depth-1 (from parent's
+    // spawn_subagent), depth-2 (from sub's spawn_subagents → one child).
+    const starts = hookEvents.filter((h) => h.event === 'SubagentStart');
+    expect(starts.length).toBe(2);
+    const depths = starts
+      .map((h) => (h.payload.event === 'SubagentStart' ? h.payload.depth : -1))
+      .sort();
+    expect(depths).toEqual([1, 2]);
+  });
 });
