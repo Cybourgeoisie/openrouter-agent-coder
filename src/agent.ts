@@ -51,6 +51,8 @@ import {
   type SubagentRunner,
   type SubagentRunResult,
 } from './tools/spawn-subagent.js';
+import { McpBridge } from './mcp/bridge.js';
+import { loadMcpConfig, type McpServerConfig } from './mcp/config.js';
 
 const DEFAULT_MODEL = '~anthropic/claude-sonnet-latest';
 const DEFAULT_MAX_TURNS = 25;
@@ -394,6 +396,36 @@ export interface OpenRouterAgentRunOptions {
    * gates ONLY the implicit trigger. Defaults to `true`.
    */
   autoCompact?: boolean;
+  /**
+   * Phase 5.2.4: explicit list of MCP servers to spawn for this run.
+   * When set, {@link autoDiscoverMcp} is ignored and the bridge uses this
+   * array verbatim. Each entry is the discriminated union from
+   * `src/mcp/config.ts` — stdio (`command`, optional `args`/`env`) or http
+   * (`url`, optional `headers`). Servers are spawned lazily at the top of
+   * {@link OpenRouterAgentRun.iterate} (after the `Setup` hook), their tools
+   * are listed via the `initialize` handshake, and each tool surfaces in the
+   * run's tool array under the prefixed name `<serverName>__<toolName>`.
+   *
+   * Per-server init failures DO NOT crash the run — the bridge logs via
+   * {@link logger}, fires a `Notification` hook with
+   * `message: 'mcp_server_failed'`, and continues with the remaining servers.
+   *
+   * Lifecycle is per-run: the bridge spawns at iter start and tears down in
+   * the `finally` block (success / abort / throw).
+   *
+   * Defaults to undefined → falls through to {@link autoDiscoverMcp}.
+   */
+  mcpServers?: readonly McpServerConfig[];
+  /**
+   * Phase 5.2.4: when {@link mcpServers} is undefined, controls whether
+   * the agent runs {@link loadMcpConfig} from `cwd` + the user scope to
+   * auto-spawn discovered MCP servers. **Defaults to `false`** — silently
+   * auto-spawning user subprocesses from a library constructor is surprising
+   * behaviour for hosts embedding this package, so the opt-in is explicit.
+   * Set to `true` to mirror Claude Code's "scan `.mcp.json` and start
+   * everything" behaviour. Ignored when {@link mcpServers} is set.
+   */
+  autoDiscoverMcp?: boolean;
 }
 
 interface ResolvedOptions {
@@ -448,6 +480,10 @@ interface ResolvedOptions {
   keepRecentTurns: number;
   /** Phase 5.1: resolved auto-trigger toggle. */
   autoCompact: boolean;
+  /** Phase 5.2.4: explicit MCP server list (overrides discovery when set). */
+  mcpServers?: readonly McpServerConfig[];
+  /** Phase 5.2.4: resolved discovery toggle (defaults to `false`). */
+  autoDiscoverMcp: boolean;
 }
 
 function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
@@ -529,6 +565,8 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     }),
     keepRecentTurns: opts.keepRecentTurns ?? DEFAULT_KEEP_RECENT_TURNS,
     autoCompact: opts.autoCompact ?? true,
+    ...(opts.mcpServers !== undefined && { mcpServers: opts.mcpServers }),
+    autoDiscoverMcp: opts.autoDiscoverMcp ?? false,
   };
 }
 
@@ -572,6 +610,13 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
    * auto-trigger does not race against its own guard.
    */
   #isIterating = false;
+  /**
+   * Phase 5.2.4: per-run MCP server pool. Lazily constructed at the top of
+   * {@link iterate} (after the `Setup` hook fires) and torn down in the
+   * `finally` block. `undefined` until init runs; remains `undefined` when
+   * the run has no MCP servers configured (or discovery yields none).
+   */
+  #mcpBridge?: McpBridge;
 
   constructor(options: OpenRouterAgentRunOptions) {
     this.opts = resolveOptions(options);
@@ -788,6 +833,32 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       logsRoot: this.opts.logsRoot,
       ...(opts.newSessionId !== undefined && { newSessionId: opts.newSessionId }),
     });
+  }
+
+  /**
+   * Phase 5.2.4: resolve the MCP server list for this run. Precedence:
+   *
+   * 1. Explicit `mcpServers` ctor option (verbatim, including empty array).
+   * 2. When `autoDiscoverMcp: true`, walk `cwd` + user scope via
+   *    {@link loadMcpConfig}. Discovery failures are caught and logged —
+   *    a malformed `.mcp.json` does not crash the run.
+   * 3. Otherwise an empty array (no MCP servers spawned).
+   */
+  private async resolveMcpServers(): Promise<readonly McpServerConfig[]> {
+    if (this.opts.mcpServers !== undefined) {
+      return this.opts.mcpServers;
+    }
+    if (!this.opts.autoDiscoverMcp) {
+      return [];
+    }
+    try {
+      return await loadMcpConfig({ cwd: this.opts.cwd });
+    } catch (err) {
+      this.opts.logger?.('warn', 'MCP discovery failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
   }
 
   private async *iterate(): AsyncGenerator<AgentCoreEvent> {
@@ -1091,9 +1162,35 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
               },
             }),
           });
+      // Phase 5.2.4: spawn MCP servers AFTER `Setup` fired (above) and BEFORE
+      // the first `callModel` — keeps the ctor sync, matches the Phase 4.7
+      // subagent-runner closure pattern. Per-server failures are logged +
+      // surfaced as `Notification`-hook events by the bridge; the run
+      // continues with whatever subset of servers handshook successfully.
+      // `close()` fires in the outer `finally` regardless of init outcome.
+      const mcpServersToSpawn = await this.resolveMcpServers();
+      if (mcpServersToSpawn.length > 0) {
+        this.#mcpBridge = new McpBridge({
+          servers: mcpServersToSpawn,
+          ...(logger && { logger }),
+          notify: (level, message, context) =>
+            safeFireHook('Notification', {
+              event: 'Notification',
+              level,
+              message,
+              context,
+            }) as Promise<unknown> as Promise<void>,
+          signal,
+        });
+        await this.#mcpBridge.init();
+      }
+      const bridgeTools = this.#mcpBridge?.tools ?? [];
+
+      const combinedTools: readonly Tool[] =
+        bridgeTools.length > 0 ? [...baseTools, ...bridgeTools] : baseTools;
       const permissionedTools = this.opts.canUseTool
-        ? baseTools.map((t) => wrapToolWithPermission(t, this.opts.canUseTool!))
-        : baseTools;
+        ? combinedTools.map((t) => wrapToolWithPermission(t, this.opts.canUseTool!))
+        : combinedTools;
       const toolsForRun = onHook
         ? permissionedTools.map((t) => wrapToolWithHooks(t, safeFireHook, logger))
         : permissionedTools;
@@ -1316,6 +1413,19 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     } finally {
       if (abortListenerInstalled) {
         signal.removeEventListener('abort', onAbort);
+      }
+      // Phase 5.2.4: tear down every MCP server the bridge spawned. Safe to
+      // call before init (no-op) and idempotent. Per-server close errors
+      // are swallowed inside the bridge so a misbehaving server can't break
+      // the rest of the cleanup path.
+      if (this.#mcpBridge) {
+        const bridge = this.#mcpBridge;
+        this.#mcpBridge = undefined;
+        try {
+          await bridge.close();
+        } catch (err) {
+          logger?.('error', 'MCP bridge close failed', { error: err });
+        }
       }
       // Clear the iter guard BEFORE the auto-compact call so the auto-trigger
       // (which calls this.compact('auto')) does not throw on its own guard.

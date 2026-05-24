@@ -30,6 +30,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Phase 5.2.4: MCP tool bridge (preview). New `McpBridge` class in
+  `src/mcp/bridge.ts` — per-run pool that spawns every configured MCP
+  server (stdio via 5.2.1 / streamable HTTP via 5.2.2), completes each
+  one's JSON-RPC `initialize` handshake, lists its tools, and exposes
+  them on `OpenRouterAgentRun`'s tool array under the prefixed name
+  `<serverName>__<toolName>`. Two new constructor options drive the
+  bridge: `mcpServers?: readonly McpServerConfig[]` (explicit list,
+  overrides discovery) and `autoDiscoverMcp?: boolean` (defaults to
+  `false` — opt-in, since silently auto-spawning user subprocesses from
+  a library ctor is surprising; set to `true` to run `loadMcpConfig`
+  at iter start). Init failures DO NOT crash the run: the bridge logs
+  at `warn` level, fires a `Notification` hook with
+  `message: 'mcp_server_failed'` carrying `{ name, transport, source,
+error }`, and continues with the remaining servers. Schema mapping
+  is JSON-Schema passthrough — the MCP `inputSchema` is stored on a
+  Zod `z.unknown().meta(...)` so the OR SDK's `toJSONSchema` emits the
+  original JSON Schema to the model unchanged (Zod conversion is
+  future work; the MCP server validates its own inputs). Lifecycle is
+  per-run: bridge spawns lazily inside `iterate()` after the `Setup`
+  hook fires, and `close()` runs in the `finally` block on every exit
+  path (success / abort / mid-stream throw). The rule grammar used by
+  `allowedTools` / `disallowedTools` was extended to accept any plain
+  name containing `__` so MCP-prefixed names match verbatim (scoped
+  patterns like `Bash(npm *)` are not supported for MCP tools — use a
+  plain name or a `canUseTool` callback). New public exports:
+  `McpBridge`, `MCP_TOOL_NAME_SEPARATOR`, `defaultClientFactory`,
+  `mapMcpToolToTool`, and the supporting types (`McpBridgeOptions`,
+  `McpBridgeClient`, `McpClientFactory`, `McpCallToolDispatch`).
 - Phase 5.2.3: MCP `.mcp.json` config discovery (preview). New
   `loadMcpConfig()` in `src/mcp/config.ts` — pure async loader that
   walks for `.mcp.json` in two scopes (`'user'` =

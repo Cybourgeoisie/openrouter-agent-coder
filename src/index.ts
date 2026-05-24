@@ -108,6 +108,18 @@ export type {
   McpConfigScope,
   LoadMcpConfigOptions,
 } from './mcp/config.js';
+export {
+  McpBridge,
+  MCP_TOOL_NAME_SEPARATOR,
+  defaultClientFactory,
+  mapMcpToolToTool,
+} from './mcp/bridge.js';
+export type {
+  McpBridgeOptions,
+  McpBridgeClient,
+  McpClientFactory,
+  McpCallToolDispatch,
+} from './mcp/bridge.js';
 export type {
   AgentMessage,
   SystemMessage,

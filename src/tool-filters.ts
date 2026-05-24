@@ -2,6 +2,17 @@ import type { CanUseTool, CanUseToolResult } from './agent.js';
 import { compileGlobToRegex } from './utils/glob.js';
 
 /**
+ * Heuristic for the prefixed-tool-name shape emitted by the MCP bridge:
+ * `<serverName>__<toolName>`. Anchored to the literal `MCP_TOOL_NAME_SEPARATOR`
+ * (`__`) used by `src/mcp/bridge.ts`. Kept inline so this module has no
+ * runtime dependency on the bridge.
+ */
+function isMcpPrefixedToolName(name: string): boolean {
+  const idx = name.indexOf('__');
+  return idx > 0 && idx < name.length - 2;
+}
+
+/**
  * Accepts both Claude-SDK-style friendly names (`Bash`, `Edit`, ...) and the
  * library's canonical tool names (`run_command`, `edit_file`, ...). Either form
  * resolves to a single canonical name used internally.
@@ -78,13 +89,21 @@ export function compileRule(rule: string): CompiledRule {
   const parenIdx = trimmed.indexOf('(');
   if (parenIdx === -1) {
     const canonical = TOOL_NAME_LOOKUP[trimmed];
-    if (!canonical) {
-      throw new Error(
-        `Invalid tool filter rule "${rule}": unknown tool name "${trimmed}". ` +
-          `Valid names: ${Object.keys(TOOL_NAME_LOOKUP).join(', ')}.`,
-      );
+    if (canonical) {
+      return { toolName: canonical, matches: () => true };
     }
-    return { toolName: canonical, matches: () => true };
+    // Phase 5.2.4: accept MCP-prefixed names verbatim. These are emitted by
+    // the bridge as `<serverName>__<toolName>` and are not in the static
+    // lookup. Scoped patterns are NOT supported for MCP tools (we don't know
+    // which input key to match against).
+    if (isMcpPrefixedToolName(trimmed)) {
+      return { toolName: trimmed, matches: () => true };
+    }
+    throw new Error(
+      `Invalid tool filter rule "${rule}": unknown tool name "${trimmed}". ` +
+        `Valid names: ${Object.keys(TOOL_NAME_LOOKUP).join(', ')}. ` +
+        `MCP tools (e.g. "<server>__<tool>") are also accepted as plain names.`,
+    );
   }
   if (!trimmed.endsWith(')')) {
     throw new Error(`Invalid tool filter rule "${rule}": missing closing parenthesis.`);

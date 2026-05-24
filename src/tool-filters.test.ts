@@ -38,6 +38,20 @@ describe('compileRule', () => {
       expect(() => compileRule(undefined as unknown as string)).toThrow(/expected string/i);
       expect(() => compileRule(42 as unknown as string)).toThrow(/expected string/i);
     });
+
+    it('Phase 5.2.4: accepts MCP-prefixed plain names ("<server>__<tool>")', () => {
+      const rule = compileRule('linear__list_issues');
+      expect(rule.toolName).toBe('linear__list_issues');
+      // MCP rules match every invocation of that prefixed name (scoped
+      // patterns are not supported — we don't know the input shape).
+      expect(rule.matches({})).toBe(true);
+      expect(rule.matches({ anything: 'else' })).toBe(true);
+    });
+
+    it('Phase 5.2.4: rejects malformed MCP-prefix shapes (leading/trailing __)', () => {
+      expect(() => compileRule('__leading')).toThrow(/unknown tool name/i);
+      expect(() => compileRule('trailing__')).toThrow(/unknown tool name/i);
+    });
   });
 
   describe('Bash(<command pattern>)', () => {
