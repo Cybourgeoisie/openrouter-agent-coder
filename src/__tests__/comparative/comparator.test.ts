@@ -202,8 +202,8 @@ describe('compareTranscripts — event-stream divergence', () => {
       { type: 'session_started', sessionId: 's' },
       { type: 'turn_start', turnNumber: 0 },
       { type: 'tool_call', callId: 'c1', name: 'echo', input: { text: 'goodbye' } },
-      { type: 'tool_result', callId: 'c1', output: 'ok', isError: false },
       { type: 'turn_end', turnNumber: 0, usage: null, costUsd: 0 },
+      { type: 'tool_result', callId: 'c1', output: 'ok', isError: false },
       {
         type: 'stream_complete',
         status: 'success',
@@ -564,8 +564,14 @@ describe('compareTranscripts — per-arg tolerances', () => {
         { type: 'session_started', sessionId: 's' },
         { type: 'turn_start', turnNumber: 0 },
         { type: 'tool_call', callId: 'c1', name: 'summarize', input: orInput },
-        { type: 'tool_result', callId: 'c1', output: 'ok', isError: false },
+        // Real OR SDK ordering: `turn_end` fires the moment the model's
+        // SSE stream ends (i.e. right after the tool_use is emitted), and
+        // `tool_result` lands OUTSIDE the model stream when the host
+        // dispatches. The Anthropic projection's `closeTurn()` on the
+        // `user` message mirrors this, so the canonical event order has
+        // turn_end immediately after the tool_call and BEFORE tool_result.
         { type: 'turn_end', turnNumber: 0, usage: null, costUsd: 0 },
+        { type: 'tool_result', callId: 'c1', output: 'ok', isError: false },
         {
           type: 'stream_complete',
           status: 'success',
@@ -746,8 +752,8 @@ describe('compareTranscripts — ID stripping', () => {
       { type: 'session_started', sessionId: 's' },
       { type: 'turn_start', turnNumber: 0 },
       { type: 'tool_call', callId: 'call_xyz999', name: 'echo', input: { text: 'hi' } },
-      { type: 'tool_result', callId: 'call_xyz999', output: 'ok', isError: false },
       { type: 'turn_end', turnNumber: 0, usage: null, costUsd: 0 },
+      { type: 'tool_result', callId: 'call_xyz999', output: 'ok', isError: false },
       {
         type: 'stream_complete',
         status: 'success',

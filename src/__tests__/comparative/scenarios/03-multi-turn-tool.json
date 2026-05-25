@@ -1,0 +1,183 @@
+{
+  "name": "03-multi-turn-tool",
+  "description": "Canonical scenario #3: multi-turn with tool. Verifies message-history accumulation across two tool-call turns + a final summary turn. Both SDKs run the counter tool twice and report the final value. Per-emulator tool state is closure-scoped so each SDK's counter is independent — but the scripted responses are identical because the model is the emulator.",
+  "prompt": "Run the counter tool twice and tell me the final value.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Use the tools provided.",
+  "tools": ["counter"],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:0b2750280b7784916749c255d0e3eaa553d5078f4abafe02065c936ff6481ed9",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"Run counter tool twice\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 10
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:3974cbb71af2cde3db4a0257943ceb50925883f4308ed100202e9209a71a8c39",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "tool_use",
+        "content": [
+          {
+            "type": "text",
+            "text": "Calling counter (1 of 2)."
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_03a",
+            "name": "mcp__harness__counter",
+            "input": {}
+          }
+        ],
+        "usage": {
+          "input_tokens": 60,
+          "output_tokens": 14
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:e19e607563ffa365d0a7680301725f17f5d1509e620a12fab4e43d8355b05df9",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "tool_use",
+        "content": [
+          {
+            "type": "text",
+            "text": "Calling counter (2 of 2)."
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_03b",
+            "name": "mcp__harness__counter",
+            "input": {}
+          }
+        ],
+        "usage": {
+          "input_tokens": 90,
+          "output_tokens": 14
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:e55aba5ef1b6ff8c3c1453592c43df6b8465818a77e9ec59bb91966087051caf",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "The final counter value is 2."
+          }
+        ],
+        "usage": {
+          "input_tokens": 120,
+          "output_tokens": 8
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:1decaf4bb6232588bc2a19889e0d207e0f0ba345065dc4ee1fc567aa008136cd",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-03-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Calling counter (1 of 2)."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_counter_0",
+            "name": "counter",
+            "arguments": "{}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 60,
+          "output_tokens": 14,
+          "total_tokens": 74
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:0fe9217ecea90fc17c7288e4de07c843e5863af821c812588a64bfd380d24196",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-03-1",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Calling counter (2 of 2)."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_counter_1",
+            "name": "counter",
+            "arguments": "{}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 90,
+          "output_tokens": 14,
+          "total_tokens": 104
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:14a7388746f6c7d439e2751d9b567b5c849923054685febd0e1e1db7a0ab89d8",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-03-2",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "The final counter value is 2."
+          }
+        ],
+        "usage": {
+          "input_tokens": 120,
+          "output_tokens": 8,
+          "total_tokens": 128
+        }
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact"
+  }
+}

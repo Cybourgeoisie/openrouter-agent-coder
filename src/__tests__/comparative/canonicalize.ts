@@ -98,6 +98,34 @@ export function canonicalizeOr(
   let tokenUsage: { input: number; output: number } = { input: 0, output: 0 };
   let terminalStatus: string | null = null;
 
+  // Turn-bracket synthesis (Phase 6.5a): the OR SDK only emits `turn_start` /
+  // `turn_end` events on multi-step tool flows where its internal step
+  // counter advances. Single-turn no-tool responses skip the bracket — but
+  // the Anthropic projection ALWAYS emits a bracket per assistant message
+  // (text or tool_use). To get aligned projections, synthesize a turn bracket
+  // on the OR side around the first content event when the SDK didn't emit
+  // one. Emit at most one synthesized turn_start per detected "turn-worth"
+  // of content (delimited by tool_result, since the next-turn boundary is
+  // unambiguously after the tool returns).
+  let bracketOpen = false;
+  let bracketTurnNumber = 0;
+  let usedRealBracket = false;
+  const openBracketIfNeeded = (): void => {
+    if (!usedRealBracket && !bracketOpen) {
+      events.push({ type: 'turn_start', turnNumber: bracketTurnNumber });
+      hookOrder.push('turn_start');
+      bracketOpen = true;
+    }
+  };
+  const closeBracketIfOpen = (): void => {
+    if (!usedRealBracket && bracketOpen) {
+      events.push({ type: 'turn_end' });
+      hookOrder.push('turn_end');
+      bracketOpen = false;
+      bracketTurnNumber += 1;
+    }
+  };
+
   for (const raw of transcript.events) {
     const ev = stripIds(raw, extraIgnore) as AgentCoreEvent;
     switch (ev.type) {
@@ -106,14 +134,19 @@ export function canonicalizeOr(
         hookOrder.push('session_start');
         break;
       case 'turn_start':
+        // The SDK emitted a real turn_start — fall back to that and stop
+        // synthesizing brackets for the remainder of this transcript.
+        usedRealBracket = true;
         events.push({ type: 'turn_start', turnNumber: ev.turnNumber });
         hookOrder.push('turn_start');
         break;
       case 'text_delta':
+        openBracketIfNeeded();
         textParts.push(ev.content);
         events.push({ type: 'text', text: ev.content });
         break;
       case 'tool_call': {
+        openBracketIfNeeded();
         const args = stripIds(ev.input, extraIgnore);
         events.push({ type: 'tool_call', name: ev.name, args });
         toolCalls.push({ name: ev.name, args });
@@ -125,18 +158,27 @@ export function canonicalizeOr(
         hookOrder.push('tool_result');
         break;
       case 'turn_end':
+        usedRealBracket = true;
         events.push({ type: 'turn_end' });
-        if (ev.usage) {
-          tokenUsage = orUsageToCanon(ev.usage);
-        }
+        // Per-turn usage on `turn_end` is null on the OR SDK in practice
+        // (the SDK forwards `finalUsage` which isn't populated until
+        // `getResponse()` resolves). Token accounting flows through the
+        // terminal `stream_complete` event instead — see below.
         hookOrder.push('turn_end');
         break;
       case 'stream_complete': {
+        closeBracketIfOpen();
         terminalStatus = ev.status;
+        // `stream_complete.usage` carries the LAST turn's usage. The
+        // Anthropic side reads per-turn usage off the final assistant
+        // message (NOT cumulative `result.usage`), so both sides agree at
+        // last-turn granularity. Cross-turn accounting is genuinely
+        // asymmetric between the two SDKs and trying to compare cumulatively
+        // would force divergence the comparator can't actually assert.
         const usage = ev.usage ? orUsageToCanon(ev.usage) : tokenUsage;
         events.push({ type: 'terminal', status: ev.status, usage });
         hookOrder.push(`terminal:${ev.status}`);
-        if (usage) tokenUsage = usage;
+        tokenUsage = usage;
         break;
       }
       case 'error':
@@ -152,6 +194,7 @@ export function canonicalizeOr(
         });
     }
   }
+  closeBracketIfOpen();
 
   return {
     events,
@@ -217,15 +260,30 @@ export function canonicalizeAnthropic(
     if (type === 'assistant') {
       const message = msg.message as Record<string, unknown> | undefined;
       const content = message?.content as unknown[] | undefined;
+      // Capture per-turn usage from the assistant message — NOT the SDK's
+      // aggregated `result.usage`. The Anthropic SDK exposes a running total
+      // on `result.usage`, but the OR SDK's `stream_complete` reports only
+      // the LAST turn's usage. Reading per-turn usage off each assistant and
+      // keeping the latest gives both sides "final turn tokens", which is
+      // the parity claim the comparator's exact-mode token check can actually
+      // assert. See `canonicalizeOr` for the symmetric note.
+      const turnUsage = message?.usage as Record<string, unknown> | undefined;
+      if (turnUsage) {
+        tokenUsage = anthropicUsageToCanon(turnUsage);
+      }
       if (Array.isArray(content)) {
-        // Close the previous turn (if any) before opening this one. Anthropic
-        // doesn't emit a turn index; we count locally from already-emitted
-        // turn_start events.
-        closeTurn();
-        const turnNumber = events.filter((e) => e.type === 'turn_start').length;
-        events.push({ type: 'turn_start', turnNumber });
-        hookOrder.push('turn_start');
-        turnOpen = true;
+        // Turn boundary detection: the agent SDK FRAGMENTS one logical turn
+        // across multiple `assistant` messages (e.g. one for text, a second
+        // for `tool_use`). A new turn only starts when the SDK injects a
+        // `user` (tool_result) message between assistants. So: only open a
+        // turn bracket if none is currently open — re-using an open bracket
+        // keeps fragmented turn content under a single canonical turn.
+        if (!turnOpen) {
+          const turnNumber = events.filter((e) => e.type === 'turn_start').length;
+          events.push({ type: 'turn_start', turnNumber });
+          hookOrder.push('turn_start');
+          turnOpen = true;
+        }
         for (const block of content) {
           if (!block || typeof block !== 'object') continue;
           const b = block as Record<string, unknown>;
@@ -234,13 +292,14 @@ export function canonicalizeAnthropic(
             events.push({ type: 'text', text: b.text });
           } else if (b.type === 'tool_use' && typeof b.name === 'string') {
             const args = stripIds(b.input, extraIgnore);
-            events.push({ type: 'tool_call', name: b.name, args });
-            toolCalls.push({ name: b.name, args });
-            hookOrder.push(`tool_call:${b.name}`);
+            const canonName = stripMcpPrefix(b.name);
+            events.push({ type: 'tool_call', name: canonName, args });
+            toolCalls.push({ name: canonName, args });
+            hookOrder.push(`tool_call:${canonName}`);
           }
         }
         // Bracket stays OPEN — the matching `turn_end` is emitted at the
-        // next turn boundary (next assistant or terminal).
+        // next user (tool_result) message or at the terminal `result`.
       }
       continue;
     }
@@ -248,6 +307,10 @@ export function canonicalizeAnthropic(
     if (type === 'user') {
       const message = msg.message as Record<string, unknown> | undefined;
       const content = message?.content as unknown[] | undefined;
+      // Close the open turn BEFORE emitting tool_result events. This puts
+      // the bracket boundary between the assistant's tool_use and the
+      // user's tool_result — matching the OR side's structural ordering.
+      closeTurn();
       if (Array.isArray(content)) {
         for (const block of content) {
           if (!block || typeof block !== 'object') continue;
@@ -265,11 +328,22 @@ export function canonicalizeAnthropic(
     if (type === 'result') {
       closeTurn();
       const subtype = (msg.subtype as string | undefined) ?? 'success';
-      const usage = (msg.usage as Record<string, unknown> | undefined) ?? undefined;
-      const canonUsage = usage ? anthropicUsageToCanon(usage) : null;
-      if (canonUsage) tokenUsage = canonUsage;
+      // Prefer per-turn usage collected from assistant messages (last
+      // assistant wins) over `result.usage` (cumulative). The OR side
+      // reports last-turn-only on its terminal; matching at last-turn
+      // granularity is the only way the exact-mode token check passes for
+      // multi-turn scenarios without diverging SDK accounting semantics.
+      // Fallback to `result.usage` ONLY when no assistant message carried
+      // per-turn usage (synthetic test fixtures that don't model the SDK's
+      // real shape, or single-turn no-tool runs that didn't expose per-turn).
+      if (tokenUsage.input === 0 && tokenUsage.output === 0) {
+        const usage = (msg.usage as Record<string, unknown> | undefined) ?? undefined;
+        if (usage) {
+          tokenUsage = anthropicUsageToCanon(usage);
+        }
+      }
       terminalStatus = subtype;
-      events.push({ type: 'terminal', status: subtype, usage: canonUsage });
+      events.push({ type: 'terminal', status: subtype, usage: tokenUsage });
       hookOrder.push(`terminal:${subtype}`);
       continue;
     }
@@ -356,6 +430,19 @@ function anthropicUsageToCanon(usage: Record<string, unknown>): {
   const input = pickNumber(usage, ['input_tokens', 'inputTokens']) ?? 0;
   const output = pickNumber(usage, ['output_tokens', 'outputTokens']) ?? 0;
   return { input, output };
+}
+
+/**
+ * Strip the `mcp__<server>__` prefix from a tool name. The Anthropic agent
+ * SDK wraps SDK-defined tools in MCP server semantics; the wire name is
+ * `mcp__harness__echo` while the OR side sees the bare `echo`. The comparator
+ * compares semantic tool calls, so the projection layer normalizes both to
+ * the bare name. (See `scenarios/_tools.ts` for where the prefix comes from
+ * and why it can't be elided at the SDK layer.) No-op on already-bare names.
+ */
+function stripMcpPrefix(name: string): string {
+  const match = /^mcp__[A-Za-z0-9_-]+__(.+)$/.exec(name);
+  return match ? match[1]! : name;
 }
 
 function pickNumber(obj: Record<string, unknown>, keys: string[]): number | null {

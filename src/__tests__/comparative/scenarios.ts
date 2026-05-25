@@ -55,6 +55,35 @@ const openaiResponseSchema = z.object({
   }),
 });
 
+// ----- /responses (OpenResponses) wire — Phase 6.5a -----
+//
+// Mirrors the in-memory `OpenResponsesResponse` shape from `script-engine.ts`.
+// Tool-use args land as a JSON string so the wire-level "args streamed as
+// incremental string concat" property is preserved verbatim from script to
+// emulator output.
+
+const openResponsesContentBlockSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('text'), text: z.string() }),
+  z.object({
+    type: z.literal('tool_use'),
+    callId: z.string(),
+    name: z.string(),
+    arguments: z.string(),
+  }),
+]);
+
+const openResponsesResponseSchema = z.object({
+  id: z.string().optional(),
+  model: z.string(),
+  status: z.enum(['completed', 'incomplete', 'failed']),
+  content: z.array(openResponsesContentBlockSchema),
+  usage: z.object({
+    input_tokens: z.number().int().nonnegative(),
+    output_tokens: z.number().int().nonnegative(),
+    total_tokens: z.number().int().nonnegative().optional(),
+  }),
+});
+
 const streamControlSchema = z
   .object({
     chunkSize: z.union([z.literal('natural'), z.number().int().positive()]).optional(),
@@ -80,7 +109,20 @@ const openaiEntrySchema = z.object({
   stream: streamControlSchema,
 });
 
-const scriptEntrySchema = z.union([anthropicEntrySchema, openaiEntrySchema]);
+const openResponsesEntrySchema = z.object({
+  wire: z.literal('openresponses'),
+  promptHash: z.string(),
+  turn: z.number().int().nonnegative(),
+  kind: z.literal('success'),
+  response: openResponsesResponseSchema,
+  stream: streamControlSchema,
+});
+
+const scriptEntrySchema = z.union([
+  anthropicEntrySchema,
+  openaiEntrySchema,
+  openResponsesEntrySchema,
+]);
 
 // ----- Comparator config (Phase 6.4) -----
 //
@@ -133,12 +175,47 @@ export type ComparatorConfig = z.infer<typeof comparatorConfigSchema>;
 export type FinalTextAssertion = z.infer<typeof finalTextAssertionSchema>;
 export type ArgTolerance = z.infer<typeof argToleranceSchema>;
 
+// ----- Tool + permission wiring (Phase 6.5a) -----
+//
+// Scenarios with tool calls declare the fixture names from `_tools.ts` and an
+// optional `canUseToolPolicy` (used by scenario #4's permission-denial case).
+// The harness reads these and wires both SDKs symmetrically:
+//   - OR: `tools` option (filtered to scenario's set), `canUseTool` closure
+//         that fires the policy.
+//   - Anthropic: `mcpServers: { harness: ... }`, `allowedTools` filter,
+//         `canUseTool` closure that mirrors the OR policy.
+
+const harnessToolNameSchema = z.enum(['echo', 'counter', 'rm']);
+
+const canUseToolPolicySchema = z.array(
+  z.discriminatedUnion('action', [
+    z.object({ tool: harnessToolNameSchema, action: z.literal('allow') }),
+    z.object({
+      tool: harnessToolNameSchema,
+      action: z.literal('deny'),
+      // Deny message is canon per ambiguity call #4 — exact-text comparison
+      // is the point of the parity assertion. Both SDKs receive the same
+      // string back from canUseTool; the model's adaptation text is asserted
+      // by the comparator's per-event positional equality.
+      message: z.string().min(1),
+    }),
+  ]),
+);
+
 export const scenarioSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
   prompt: z.string().min(1),
   model: z.string().optional(),
   systemPrompt: z.string().optional(),
+  /**
+   * Fixture tool names to register from `scenarios/_tools.ts`. Empty/omitted
+   * means no tools (scenario #1's no-tool happy path). The harness builds
+   * BOTH SDK-side bindings from this single declaration.
+   */
+  tools: z.array(harnessToolNameSchema).optional(),
+  /** Policy applied by both SDKs' `canUseTool` closure. Per-tool allow/deny. */
+  canUseToolPolicy: canUseToolPolicySchema.optional(),
   script: z.array(scriptEntrySchema).min(1),
   comparator: comparatorConfigSchema,
 });
@@ -169,7 +246,10 @@ export async function loadScenario(scenarioPath: string): Promise<Scenario> {
  * Extract the script entries for a given wire format. Entries without `wire`
  * default to `anthropic` — same default as the emulator's script-engine.
  */
-export function entriesForWire(scenario: Scenario, wire: 'anthropic' | 'openai'): ScriptEntry[] {
+export function entriesForWire(
+  scenario: Scenario,
+  wire: 'anthropic' | 'openai' | 'openresponses',
+): ScriptEntry[] {
   const out: ScriptEntry[] = [];
   for (const entry of scenario.script) {
     const entryWire = entry.wire ?? 'anthropic';

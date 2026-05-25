@@ -24,12 +24,18 @@ export default [
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['**/*.test.ts'],
+    files: ['**/*.test.ts', 'src/__tests__/**/*.ts', 'scripts/**/*.ts'],
     rules: {
-      // Tests legitimately use `any` for SDK event fixtures and partial mocks
-      // where the full type isn't useful; narrowing them adds noise without
-      // catching real bugs.
+      // Tests + test-only harness modules legitimately use `any` for SDK
+      // event fixtures and partial mocks where the full type isn't useful;
+      // narrowing them adds noise without catching real bugs. The same
+      // applies to underscore-prefixed unused args (callback signatures where
+      // the framework dictates the shape).
       '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
+      ],
     },
   },
   {

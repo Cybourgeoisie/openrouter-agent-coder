@@ -27,9 +27,17 @@ export function buildAnthropicEvents(
 ): SseEvent[] {
   const events: SseEvent[] = [];
   const messageId = response.id ?? `msg_${Math.random().toString(36).slice(2, 14)}`;
+  // Use the scripted final output_tokens here even though the real Anthropic
+  // API emits a placeholder `1` at message_start and only finalizes via
+  // message_delta. The agent SDK in subprocess form appears to read the
+  // assistant message's `usage.output_tokens` straight from message_start
+  // and ignore the message_delta update — so emitting the real number up
+  // front is the only way the per-turn usage agrees with the scripted
+  // payload across both sides. (See `canonicalizeAnthropic` for the
+  // canonical-projection rationale.)
   const initialUsage = {
     input_tokens: response.usage.input_tokens,
-    output_tokens: 1,
+    output_tokens: response.usage.output_tokens,
   };
 
   events.push({
