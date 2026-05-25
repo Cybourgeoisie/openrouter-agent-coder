@@ -263,23 +263,61 @@ type OpenResponsesSuccessOutcome = {
   stream?: StreamControl;
 };
 
-// Phase 6.5c: minimal failure-mode set on the OpenResponses wire. v1 ships
-// only `rate_limit_429` (for scenario #12's retry-on-429 parity claim) — that
-// is the smallest extension that lets the OR SDK's built-in retry sequencing
-// be exercised against the emulator. Other failure modes (mid-stream errors,
-// truncation, malformed payloads, etc.) are deferred to 6.6's failure-injection
-// pass; the OpenResponses event vocabulary differs from chat-completions enough
-// that copying that adapter's full failure surface 1:1 would be a re-think,
-// not a port. See the file header for the "v1 success-mode only" carve-out
-// being relaxed here.
-export type OpenResponsesFailureMode = {
-  type: 'rate_limit_429';
-  retryAfter: string | number;
-};
+// Phase 6.5c: minimal failure-mode set on the OpenResponses wire. v1 shipped
+// only `rate_limit_429` (for scenario #12's retry-on-429 parity claim).
+// Phase 6.6 extends with the four wire-level failure modes needed to exercise
+// scenarios #13–#16's parity claim on the OR side: mid_stream_error,
+// malformed_chunk, truncated_stream, split_json_field. The shapes are ported
+// 1:1 from the OpenAI adapter's failure-mode set (openai.ts) so the per-wire
+// surface stays uniform — only the event vocabulary differs at the byte level,
+// which the openresponses adapter handles internally. Scope-deviation flagged
+// in the 6.6 PR body: this is the smallest extension that lets the parity
+// claim "both SDKs surface a typed error on a malformed stream" be asserted
+// against the OR SDK's real /responses consumer, since the OR client doesn't
+// route through chat-completions.
+export type OpenResponsesFailureMode =
+  | {
+      type: 'rate_limit_429';
+      retryAfter: string | number;
+    }
+  | {
+      type: 'mid_stream_error';
+      // Deliver this many normal SSE events before emitting an OpenResponses
+      // `response.failed` event and closing the connection. The SDK surfaces
+      // the failed-response payload as a typed error on its consumer stream.
+      eventsBeforeError: number;
+      error?: { type: string; message: string };
+    }
+  | {
+      type: 'malformed_event';
+      // Inject malformed JSON in the Nth delta-bearing event (0-indexed,
+      // counting only `response.output_text.delta` /
+      // `response.function_call_arguments.delta` events). Mirrors openai.ts's
+      // `malformed_chunk` shape.
+      atEventIndex: number;
+    }
+  | {
+      type: 'truncated_stream';
+      // Deliver this many normal events, then close the socket mid-event
+      // (no terminating `\n\n` and no `data: [DONE]`).
+      eventsBeforeTruncation: number;
+    }
+  | {
+      type: 'split_json_field';
+      // Force a TCP chunk boundary inside the Nth delta-bearing event's
+      // `data:` line so the SDK's incremental parser must reassemble across
+      // reads. Mirrors openai.ts's `split_json_field` shape.
+      atEventIndex: number;
+      splitAt: number;
+    };
 
 type OpenResponsesFailureOutcome = {
   kind: 'failure';
   failure: OpenResponsesFailureMode;
+  // For failure modes that need a partial stream, the script may carry a
+  // response whose initial events are replayed up to the failure point.
+  // 429 doesn't use this (the handler short-circuits before any SSE bytes).
+  partial?: OpenResponsesResponse;
   stream?: StreamControl;
 };
 

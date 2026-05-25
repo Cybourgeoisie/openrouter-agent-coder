@@ -1,0 +1,91 @@
+{
+  "name": "16-chunk-boundary-split",
+  "description": "Canonical scenario #16: SSE chunk boundary splits a JSON field. The emulator emits one delta-bearing event whose serialized bytes are split across two TCP writes at an unfortunate boundary (mid-string), separated by a setImmediate flush so the kernel send buffer actually fragments. After both writes arrive the event is well-formed; the SDK's incremental SSE/JSON parser MUST reassemble it and produce the same canonical text output a non-split stream would. This is the SDK-incremental-parser parity test: it is expected to PASS with the reassembled event, and the comparator uses exact-mode positional equality on the canonical event stream. Per issue body ambiguity call #3 — if either SDK fails this scenario, that's evidence of an incremental-parser bug worth filing upstream. The failure injection is unusual in that it goes through the failure code path (entry.kind=failure, split_json_field) but the resulting stream is well-formed end-to-end including the [DONE] terminator; that asymmetry is deliberate so a single emulator code path covers both 'parser must reassemble' tests AND 'parser must surface an error' tests.",
+  "prompt": "Say hello.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Answer concisely.",
+  "tools": [],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:d1ac1d72783fe3c81b0ec89df57756c87cc05c03e7c1c45d1128c3d0f32bd414",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"Say hello\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 10
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:b13c6ab263b383673d8e492fea22aa2d49d2173f276e4573a5c7ee68c3ca2795",
+      "turn": 0,
+      "kind": "failure",
+      "failure": {
+        "type": "split_json_field",
+        "atDeltaIndex": 0,
+        "splitAt": 50
+      },
+      "partial": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "Hello there, world!"
+          }
+        ],
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 8
+        }
+      },
+      "stream": {
+        "chunkSize": "natural"
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:5f6dc1d5c348514d1de33ec7c4c9ba47124acb150a48b72c0f724c8726ab7175",
+      "turn": 0,
+      "kind": "failure",
+      "failure": {
+        "type": "split_json_field",
+        "atEventIndex": 0,
+        "splitAt": 50
+      },
+      "partial": {
+        "id": "resp-16-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Hello there, world!"
+          }
+        ],
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 8,
+          "total_tokens": 28
+        }
+      },
+      "stream": {
+        "chunkSize": "natural"
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact"
+  }
+}

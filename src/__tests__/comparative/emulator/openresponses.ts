@@ -62,6 +62,7 @@ import type {
   ScriptRegistry,
   OpenResponsesScriptEntry,
   OpenResponsesResponse,
+  OpenResponsesFailureMode,
   StreamControl,
 } from './script-engine.js';
 
@@ -481,27 +482,163 @@ async function streamScriptEntry(
     return;
   }
 
-  // Success path. Failure path above returns directly; nothing else to handle.
-  if (entry.kind !== 'success') {
-    // Defensive — unreachable given the union, but a typed exhaustiveness
-    // check would force a re-think on every new failure mode added below.
-    res.writeHead(500, { 'content-type': 'application/json' });
-    res.end(
-      JSON.stringify({ error: { type: 'emulator_internal', message: 'Unknown entry kind' } }),
-    );
+  // Phase 6.6: stream-level failure modes. All four share the same
+  // pre-stream-body shape (200 + SSE headers, then events partly written
+  // before the failure manifests). The source response used to materialize
+  // the partial event stream comes from `entry.response` on success or
+  // `entry.partial` on failure; failure entries that omit `partial` get an
+  // empty SSE body before the abort. Mirrors openai.ts:287-310 + 338-431.
+  const source = entry.kind === 'success' ? entry.response : entry.partial;
+  if (!source) {
+    writeSseHeaders(res);
+    res.end();
     return;
   }
-
-  const events = buildOpenResponsesEvents(entry.response, entry.stream);
+  const events = buildOpenResponsesEvents(source, entry.stream);
   const interChunkDelayMs = entry.stream?.interChunkDelayMs ?? 0;
 
   writeSseHeaders(res);
-  for (let i = 0; i < events.length; i += 1) {
-    res.write(serializeSseEvent(events[i]!));
-    if (interChunkDelayMs > 0 && i < events.length - 1) {
-      await delay(interChunkDelayMs);
+
+  if (entry.kind === 'success') {
+    for (let i = 0; i < events.length; i += 1) {
+      res.write(serializeSseEvent(events[i]!));
+      if (interChunkDelayMs > 0 && i < events.length - 1) {
+        await delay(interChunkDelayMs);
+      }
+    }
+    res.write(SSE_RESPONSES_DONE);
+    res.end();
+    return;
+  }
+
+  await applyFailureMode(res, events, entry.failure, interChunkDelayMs);
+}
+
+/**
+ * Identify which events in the OR /responses sequence are "delta-bearing" —
+ * i.e. content/argument deltas that a scenario can target via
+ * `atEventIndex`. Skips the framing events (`response.created`,
+ * `response.in_progress`, `response.output_item.added` / `.done`,
+ * `response.completed`) so authors don't have to count them. Mirrors the
+ * spirit of openai.ts's `isDelta` check (skip framing/usage chunks).
+ */
+function isDeltaEvent(event: { event: string }): boolean {
+  return (
+    event.event === 'response.output_text.delta' ||
+    event.event === 'response.function_call_arguments.delta'
+  );
+}
+
+async function applyFailureMode(
+  res: ServerResponse,
+  events: Array<{ event: string; data: unknown }>,
+  failure: OpenResponsesFailureMode,
+  interChunkDelayMs: number,
+): Promise<void> {
+  switch (failure.type) {
+    case 'rate_limit_429':
+      // Handled in streamScriptEntry before SSE headers. Unreachable here.
+      return;
+
+    case 'mid_stream_error': {
+      const take = Math.min(failure.eventsBeforeError, events.length);
+      for (let i = 0; i < take; i += 1) {
+        res.write(serializeSseEvent(events[i]!));
+        if (interChunkDelayMs > 0) await delay(interChunkDelayMs);
+      }
+      // OR /responses emits a `response.failed` event when the upstream
+      // model run aborts mid-stream. The SDK's discriminated-union parser
+      // sees `type: 'response.failed'` and surfaces it to the consumer as
+      // a typed terminal error — mirrors the Anthropic adapter's `error`
+      // event shape (anthropic.ts:180) and openai.ts's error-chunk path
+      // (openai.ts:357).
+      const errorEvent = {
+        event: 'response.failed',
+        data: {
+          type: 'response.failed',
+          response: {
+            error: failure.error ?? {
+              type: 'server_error',
+              message: 'Emulator-injected mid-stream error.',
+            },
+          },
+        },
+      };
+      res.write(serializeSseEvent(errorEvent));
+      res.end();
+      return;
+    }
+
+    case 'malformed_event': {
+      let deltaIdx = 0;
+      for (let i = 0; i < events.length; i += 1) {
+        const ev = events[i]!;
+        if (isDeltaEvent(ev)) {
+          if (deltaIdx === failure.atEventIndex) {
+            // Emit a delta-typed event with malformed JSON in its data
+            // line. The SDK's incremental JSON parser should surface this
+            // as a typed parse error rather than crashing.
+            res.write(
+              `event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"\\xZZ-not-valid-json}\n\n`,
+            );
+            res.end();
+            return;
+          }
+          deltaIdx += 1;
+        }
+        res.write(serializeSseEvent(ev));
+        if (interChunkDelayMs > 0) await delay(interChunkDelayMs);
+      }
+      res.end();
+      return;
+    }
+
+    case 'truncated_stream': {
+      const take = Math.min(failure.eventsBeforeTruncation, events.length);
+      for (let i = 0; i < take; i += 1) {
+        res.write(serializeSseEvent(events[i]!));
+        if (interChunkDelayMs > 0) await delay(interChunkDelayMs);
+      }
+      // Write the head of one more event but no trailing `\n\n` and no
+      // `[DONE]`. Mirrors anthropic.ts:225-231 + openai.ts:391-401.
+      if (take < events.length) {
+        const partial = serializeSseEvent(events[take]!);
+        const truncated = partial.replace(/\n\n$/, '');
+        res.write(truncated);
+      }
+      // Yield the event loop so the bytes leave the kernel send buffer
+      // before we destroy the socket — same fix as the other adapters.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      res.socket?.destroy();
+      return;
+    }
+
+    case 'split_json_field': {
+      let deltaIdx = 0;
+      for (let i = 0; i < events.length; i += 1) {
+        const ev = events[i]!;
+        if (isDeltaEvent(ev) && deltaIdx === failure.atEventIndex) {
+          const serialized = serializeSseEvent(ev);
+          const splitAt = Math.min(Math.max(0, failure.splitAt), serialized.length);
+          // Force a TCP-level chunk boundary by writing the two halves
+          // separately with an awaited flush in between. Mirrors
+          // anthropic.ts:246-256 + openai.ts:416-421.
+          res.write(serialized.slice(0, splitAt));
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          res.write(serialized.slice(splitAt));
+          deltaIdx += 1;
+        } else {
+          if (isDeltaEvent(ev)) deltaIdx += 1;
+          res.write(serializeSseEvent(ev));
+        }
+        if (interChunkDelayMs > 0) await delay(interChunkDelayMs);
+      }
+      // Split-json-field is meant to PASS — the SDK reassembles the event
+      // across chunks and the stream completes normally. Emit [DONE] like
+      // the success path. The Anthropic + OpenAI adapters do the same.
+      res.write(SSE_RESPONSES_DONE);
+      res.end();
+      return;
     }
   }
-  res.write(SSE_RESPONSES_DONE);
-  res.end();
 }
