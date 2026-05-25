@@ -1,21 +1,26 @@
 // Comparative-parity emulator entrypoint. Spawns an in-process HTTP server
 // bound to an ephemeral port on 127.0.0.1, routes `POST /v1/messages`
-// (tolerating `?beta=true` and other query strings) to the Anthropic adapter,
-// and exposes lifecycle + script-registration helpers for tests.
+// (tolerating `?beta=true` and other query strings) to the Anthropic adapter
+// and `POST /v1/chat/completions` to the OpenAI/OR adapter, and exposes
+// lifecycle + script-registration helpers for tests.
 //
 // Hosting pattern locked by spike 6.S1: in-process, ephemeral port, IPv4-only
 // bind. The Claude Agent SDK spawns a subprocess per `query()` call and reads
 // `ANTHROPIC_BASE_URL` from that subprocess's env, so structural isolation
-// drops out of the picture — no parent-process env mutation needed.
+// drops out of the picture — no parent-process env mutation needed. The
+// OpenRouter SDK accepts a `serverURL` option that points its
+// `/chat/completions` posts at the emulator's `/v1` prefix.
 //
-// TODO(6.2): wire `POST /v1/chat/completions` to the OpenAI/OR adapter. The
-// router below already dispatches on `pathname`; 6.2 just adds another arm.
+// TODO(6.3): the comparative harness will wrap this entrypoint to spin up
+// one emulator per scenario, pre-seed both wires' scripts, and tear it down
+// after each scenario completes.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { once } from 'node:events';
 import { AddressInfo } from 'node:net';
 
 import { handleAnthropicMessages } from './anthropic.js';
+import { handleOpenAIChatCompletions } from './openai.js';
 import { ScriptRegistry, type ScriptEntry } from './script-engine.js';
 
 export type EmulatorHandle = {
@@ -78,7 +83,10 @@ async function route(
       await handleAnthropicMessages(req, res, registry);
       return;
     }
-    // TODO(6.2): if (pathname === '/v1/chat/completions') → OpenAI adapter.
+    if (req.method === 'POST' && pathname === '/v1/chat/completions') {
+      await handleOpenAIChatCompletions(req, res, registry);
+      return;
+    }
     if (!res.headersSent) {
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(
@@ -125,9 +133,21 @@ export {
   ScriptRegistry,
   computePromptHash,
   canonicalizeRequest,
+  entryWire,
+  isAnthropicEntry,
+  isOpenAIEntry,
+  type WireFormat,
   type AnthropicResponse,
   type AnthropicContentBlock,
   type AnthropicStopReason,
+  type AnthropicScriptEntry,
+  type AnthropicFailureMode,
+  type OpenAIResponse,
+  type OpenAIFinishReason,
+  type OpenAIToolCall,
+  type OpenAIScriptEntry,
+  type OpenAIFailureMode,
   type FailureMode,
   type StreamControl,
 } from './script-engine.js';
+export { buildOpenAIChunks, serializeOpenAIChunk, SSE_DONE } from './openai.js';
