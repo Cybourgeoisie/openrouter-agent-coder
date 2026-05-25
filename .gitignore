@@ -6,3 +6,4 @@ logs/
 *.tsbuildinfo
 .test-tmp/
 coverage/
+tmp/
