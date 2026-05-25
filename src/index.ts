@@ -153,6 +153,7 @@ export {
   parseSkillFile,
   parseYamlFrontmatter,
   normalizeFrontmatterKeys,
+  splitFrontmatter,
   splitShellArgs,
   renderSkillBody,
   substituteVariables,
@@ -181,3 +182,17 @@ export {
   DEFAULT_SKILL_DESCRIPTION_BUDGET,
 } from './tools/skill.js';
 export type { SkillToolOptions, SkillToolResult, ActiveSkillContext } from './tools/skill.js';
+export {
+  createCommandLoader,
+  parseCommandFile,
+  COMMAND_NAMESPACE_SEPARATOR,
+} from './commands/index.js';
+export type {
+  CommandInfo,
+  CommandFrontmatter,
+  CommandSource,
+  CommandLoader,
+  CommandLoaderOptions,
+  ResolveContext as CommandResolveContext,
+  ResolvedCommand,
+} from './commands/index.js';

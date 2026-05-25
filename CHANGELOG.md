@@ -30,6 +30,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Phase 5.6: Slash commands — Claude Code-compatible `.claude/commands/*.md`
+  discovery + host-side `/`-input resolver, built as a flat-file degenerate
+  skill that reuses the Phase 5.7 frontmatter parser + substitution helper
+  end-to-end (no new YAML dep). Public API: `createCommandLoader({ cwd, home,
+pluginRoots, skillLoader?, disableSkillShellExecution })` → `{ list(),
+resolve(input, ctx?) }`. Discovery walks project (cwd up to `.git` boundary,
+  depth-10 cap) + user (`<home>/.claude/commands/`) + plugin scopes; subdir
+  paths namespaced with `:` (`git/commit.md` → `git:commit`); plugin commands
+  always namespaced `<pluginName>:<command>`. Commands are HOST-invoked
+  (model never sees them): the host calls `resolve('foo bar "baz qux"')`,
+  receives `{ name, args, body }`, and feeds `body` as the next prompt to
+  `OpenRouterAgentRun({ prompt })`. Frontmatter is OPTIONAL — a body-only
+  `.md` file is a valid command; its name is inferred from the filename.
+  **Converged-menu** (opencode pattern): when a `skillLoader` is supplied,
+  `list()` also surfaces every skill as a `source: 'skill'` command
+  (command wins on same-name collision) — lets hosts present one unified
+  `/`-menu over built-ins + commands + skills + plugins. Unknown command →
+  `undefined` (host shows "no such command", does not throw). Re-exports:
+  `createCommandLoader`, `parseCommandFile`, `COMMAND_NAMESPACE_SEPARATOR`,
+  types `CommandInfo` / `CommandFrontmatter` / `CommandSource` /
+  `CommandLoader` / `CommandLoaderOptions` / `CommandResolveContext` /
+  `ResolvedCommand`. Card #107.
 - Phase 5.7: Skills system — Claude Code-compatible `.claude/skills/<name>/SKILL.md`
   discovery, listing injection, and a built-in `skill` tool (Card #108).
   New constructor options on `OpenRouterAgentRun`:

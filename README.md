@@ -1134,6 +1134,84 @@ A skill's frontmatter `allowed-tools: Bash(git:*) Read` layers an additional nar
 
 Loaded skills fire a `Notification` hook (`level: 'info'`, `message: 'skill_loaded'`, `context: { name, source }`) on each successful render so audit consumers can observe activations without polling.
 
+### Slash commands (`.claude/commands/<name>.md`)
+
+Phase 5.6 adds **slash commands** as a flat-file degenerate skill: markdown files under `.claude/commands/*.md` whose body becomes the next prompt to `OpenRouterAgentRun({ prompt })`. Commands are HOST-invoked (a CLI parses `/foo bar` and feeds the resolved body in); the model never sees the command machinery, unlike skills which the model auto-triggers via the `skill` tool.
+
+**Discovery** mirrors the skill loader's precedence stack:
+
+- **Project** — walks up from `cwd` to the first `.git` boundary (or 10 levels), scanning `<level>/.claude/commands/*.md` at each step.
+- **User** — `<home>/.claude/commands/*.md` (use `opts.home` to override the default `os.homedir()`).
+- **Plugin** — caller-supplied `pluginRoots: Array<{ name, root }>` entries. Plugin commands are namespaced `<pluginName>:<commandName>` and therefore never collide with project/user names.
+- **Subdirectory namespacing** — `commands/git/commit.md` surfaces as `git:commit`; `commands/git/branch/list.md` as `git:branch:list`. Combine with plugin namespacing: `acme/commands/git/commit.md` → `acme:git:commit`.
+
+Precedence on name collision: **project > user**. Plugins are always namespaced so they never collide.
+
+```ts
+import { OpenRouterAgentRun, createCommandLoader } from 'openrouter-agent-coder';
+
+const commands = createCommandLoader({
+  cwd: process.cwd(),
+  // home defaults to os.homedir() when omitted
+  pluginRoots: [{ name: 'acme', root: '/opt/acme-plugin' }],
+});
+
+// Discover everything (autocomplete UX)
+const listing = await commands.list();
+//=> [{ name: 'review', description: 'review pending diff', argumentHint: '<pr-number>', source: 'project', path: '/proj/.claude/commands/review.md' }, ...]
+
+// Host CLI sees the user type `/review 137`:
+const resolved = await commands.resolve('review 137');
+if (!resolved) {
+  // Unknown command → resolve returns undefined (NOT throw). Host surfaces
+  // a "no such command" message and continues.
+  process.stderr.write('no such command\n');
+} else {
+  // Feed the rendered body as the next prompt.
+  const run = new OpenRouterAgentRun({
+    apiKey: process.env.OPENROUTER_API_KEY!,
+    prompt: resolved.body,
+  });
+  for await (const evt of run) {
+    /* … */
+  }
+}
+```
+
+**Frontmatter is OPTIONAL** — a body-only `.md` file is a valid command; its name is inferred from the filename. When present, the frontmatter shares the Phase 5.7 `SkillFrontmatter` shape (`description` / `argument-hint` / `arguments` / `allowed-tools` / etc.), parsed by the same Zod schema. The `name:` field is auto-injected from the filename when omitted; explicit values are honored.
+
+**Argument parsing** uses a small inline tokenizer (shared with the skill loader's `splitShellArgs`) — double-quote grouping is honored, environment-variable expansion is NOT. The split positional list is passed through to the substitution helper's `arguments` field:
+
+| Input           | `args`          | `body` (for `first=$1 all=$ARGUMENTS`) |
+| --------------- | --------------- | -------------------------------------- |
+| `/echo`         | `[]`            | `first= all=`                          |
+| `/echo bar baz` | `['bar','baz']` | `first=bar all=bar baz`                |
+| `/echo "a b" c` | `['a b','c']`   | `first=a b all=a b c`                  |
+
+**Converged menu** (opencode pattern): pass a `skillLoader` to `createCommandLoader({ skillLoader })` and `list()` ALSO surfaces every loaded skill as a command of `source: 'skill'`. On same-name collision the command wins (the skill is suppressed from the menu — still callable via the model-facing `skill` tool). This lets a host present one unified `/`-menu containing built-ins, project commands, plugin commands, and skills.
+
+```ts
+const skills = createSkillLoader({ cwd: process.cwd() });
+const commands = createCommandLoader({ cwd: process.cwd(), skillLoader: skills });
+const menu = await commands.list();
+// menu now includes entries with source ∈ { 'project', 'user', 'plugin', 'skill' }
+```
+
+**Constructor options**:
+
+| Option                       | Type                            | Default        | Behaviour                                                                                          |
+| ---------------------------- | ------------------------------- | -------------- | -------------------------------------------------------------------------------------------------- |
+| `cwd`                        | `string`                        | (required)     | Project working directory — the walker climbs from here.                                           |
+| `home`                       | `string`                        | `os.homedir()` | User scope root.                                                                                   |
+| `pluginRoots`                | `Array<{ name, root }>`         | `[]`           | Plugin command roots; entries namespaced `<pluginName>:<command>`.                                 |
+| `skillLoader`                | `SkillLoader`                   | —              | When supplied, `list()` folds skills in as `source: 'skill'` commands (command wins on collision). |
+| `disableUserCommands`        | `boolean`                       | `false`        | Skip the user scope.                                                                               |
+| `disableProjectCommands`     | `boolean`                       | `false`        | Skip the project scope.                                                                            |
+| `disableSkillShellExecution` | `boolean`                       | `false`        | When `true`, every `` !`cmd` `` block becomes `[shell command execution disabled by policy]`.      |
+| `logger`                     | `(level, msg, fields?) => void` | —              | Diagnostic logger; discovery / parse failures are logged at `warn`. The walk never throws.         |
+
+`resolve(input, ctx?)` accepts an optional `ctx` with `sessionId` / `named` / `userConfig` / `env` / `signal` / `cwd` to thread through the substitution context (mirrors the skill loader's substitution shape).
+
 ## Tools shipped with the library
 
 Client tools (execute in the host process):

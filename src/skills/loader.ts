@@ -296,8 +296,11 @@ export function parseSkillFile(
  * Hand-rolled YAML-frontmatter splitter. Accepts the standard `---\n...\n---`
  * convention plus a trailing newline (or its absence). Returns `yaml=null`
  * when the file does not open with `---`.
+ *
+ * Exported so {@link ../commands/loader.ts} can reuse the same splitter
+ * without duplicating the BOM / fence-edge handling.
  */
-function splitFrontmatter(raw: string): { yaml: string | null; body: string } {
+export function splitFrontmatter(raw: string): { yaml: string | null; body: string } {
   // Accept BOM or leading whitespace before the opening fence — common with
   // editors that auto-prepend a BOM.
   let i = 0;
