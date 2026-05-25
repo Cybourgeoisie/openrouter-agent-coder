@@ -258,6 +258,82 @@ function extractOrCost(event: { type: string; costUsd?: number }): number | unde
   return event.costUsd;
 }
 
+/**
+ * Build the env we hand to the spawned `claude` CLI subprocess. We DO spread
+ * `process.env` (PATH/HOME/TMPDIR have to flow through for the subprocess to
+ * find its binary, write temp files, etc.) but we EXPLICITLY scrub any env
+ * vars that signal "you're being invoked from another Claude Code instance".
+ *
+ * Why: when this test suite is run from inside a Claude Code session
+ * (whether interactively or in a CI runner with `CLAUDECODE=1` set), the
+ * parent process exports a bundle of `CLAUDE_*` / `CLAUDECODE` /
+ * `CLAUDE_CODE_*` env vars. The spawned `claude` subprocess detects them,
+ * decides it's nested in another Claude Code instance, and inherits the
+ * parent's tool-palette context — adding ~29 ambient tools (`Agent`,
+ * `AskUserQuestion`, `Bash`, `CronCreate`, etc.) into the API request body
+ * that hash-canonicalization sees. The recorded scenario hashes were taken
+ * on a clean machine WITHOUT these env vars, so the hashes diverge in the
+ * "nested" case and every scenario script-misses.
+ *
+ * The fix is a deny-list of known parent-Claude-Code env vars rather than
+ * an allow-list: the CLI legitimately depends on a wide range of system env
+ * vars (PATH, HOME, TMPDIR, LANG, LC_*, NODE_*, etc.) and an allow-list
+ * would either miss something or grow stale. The deny-list is narrow and
+ * its membership criterion is concrete: any var whose name encodes "we are
+ * Claude Code". `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY` are explicit
+ * arguments to this function (callers set them per-mode) so they are NOT
+ * filtered here — the override-spread at the call site handles them.
+ *
+ * GitHub Actions sets `GITHUB_ACTIONS=true` and `CI=true`. The CI runner
+ * ALSO sets `CLAUDECODE=1` if Claude Code is invoking the workflow (via
+ * the same SDK we're calling). Those env vars get scrubbed too.
+ */
+const PARENT_CLAUDE_ENV_DENY_PREFIXES = ['CLAUDE_', 'CLAUDECODE'] as const;
+
+/**
+ * Env vars whose mere presence signals "you are running in a CI/build
+ * environment" to the bundled `claude` binary. Empirically (via
+ * `strings node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude`),
+ * the binary checks for these names from the ci-info package — when ANY of
+ * them is set, the binary takes a different code path that injects more
+ * system-reminder content (a richer skills list + current-date block) into
+ * the API request body. That makes the request body — and therefore its
+ * canonical hash — diverge from the recorded fixtures.
+ *
+ * We scrub these from the subprocess env (NOT from `process.env`, which
+ * would poison sibling tests per the file header). The deny-list comes
+ * straight from the ci-info package's well-known marker list.
+ *
+ * `GITHUB_REPOSITORY` and similar PR-context vars are NOT scrubbed because
+ * they don't trigger the alternate code path on their own; only the boolean
+ * "I am a CI build" markers do.
+ */
+const CI_MARKER_ENV_VARS = [
+  'CI',
+  'CONTINUOUS_INTEGRATION',
+  'APPVEYOR',
+  'BUILDKITE',
+  'CIRCLECI',
+  'DRONE',
+  'GITHUB_ACTIONS',
+  'GITLAB_CI',
+  'TRAVIS',
+  'CI_NAME',
+] as const;
+
+function sanitizeParentEnvForClaudeSubprocess(
+  source: NodeJS.ProcessEnv,
+): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  const ciMarkers = new Set<string>(CI_MARKER_ENV_VARS);
+  for (const [k, v] of Object.entries(source)) {
+    if (PARENT_CLAUDE_ENV_DENY_PREFIXES.some((prefix) => k.startsWith(prefix))) continue;
+    if (ciMarkers.has(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 // ----- Anthropic side capture -----
 
 /**
@@ -311,7 +387,7 @@ async function captureAnthropic(
       prompt: scenario.prompt,
       options: {
         env: {
-          ...process.env,
+          ...sanitizeParentEnvForClaudeSubprocess(process.env),
           ...envOverrides,
         },
         abortController,

@@ -15,6 +15,8 @@
 // tests continue to type-check and behave identically.
 
 import { createHash } from 'node:crypto';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 export type WireFormat = 'anthropic' | 'openai' | 'openresponses';
 
@@ -683,6 +685,9 @@ export class ScriptRegistry {
         kind: e.kind,
       })),
     };
+    if (!dedup && process.env.DEBUG_COMPARATIVE_HASH === '1') {
+      writeDebugHashDump(promptHash, turn, body, expectedWire, this.entries);
+    }
     return {
       ok: false,
       error: {
@@ -710,5 +715,47 @@ export class ScriptRegistry {
     this.turnByHash.clear();
     this.totalServed = 0;
     this.emittedMisses.clear();
+  }
+}
+
+// Debug helper guarded behind `DEBUG_COMPARATIVE_HASH=1`. Dumps the raw
+// request body, the wire format, the computed hash, the canonical-form
+// string, and the registered (hash, turn) catalog to
+// `tmp/comparative-hash-dump/<promptHash>@<turn>.json` on each unique miss.
+// Diagnostic-only; never committed enabled.
+function writeDebugHashDump(
+  promptHash: string,
+  turn: number,
+  body: unknown,
+  wire: WireFormat,
+  entries: ScriptEntry[],
+): void {
+  try {
+    const dir = join(process.cwd(), 'tmp', 'comparative-hash-dump');
+    mkdirSync(dir, { recursive: true });
+    const safeHash = promptHash.replace(/[^a-zA-Z0-9]/g, '_');
+    const file = join(dir, `${safeHash}_turn${turn}.json`);
+    const canonical = canonicalizeRequest(body, wire);
+    appendFileSync(
+      file,
+      JSON.stringify(
+        {
+          promptHash,
+          turn,
+          wire,
+          rawBody: body,
+          canonical,
+          registered: entries.map((e) => ({
+            promptHash: e.promptHash,
+            turn: e.turn,
+            wire: entryWire(e),
+          })),
+        },
+        null,
+        2,
+      ) + '\n---\n',
+    );
+  } catch {
+    // best-effort diagnostic; never throw from the registry path
   }
 }
