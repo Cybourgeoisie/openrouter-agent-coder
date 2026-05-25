@@ -196,3 +196,16 @@ export type {
   ResolveContext as CommandResolveContext,
   ResolvedCommand,
 } from './commands/index.js';
+export {
+  loadPlugins,
+  pluginManifestSchema,
+  PLUGIN_NAME_REGEX,
+  PLUGIN_DEFAULT_PATHS,
+  PLUGIN_MCP_NAMESPACE_SEPARATOR,
+} from './plugins/index.js';
+export type {
+  PluginManifest,
+  LoadedPlugin,
+  PluginHookConfig,
+  LoadPluginsOptions,
+} from './plugins/index.js';

@@ -64,6 +64,7 @@ import {
 } from './tools/spawn-subagent.js';
 import { McpBridge } from './mcp/bridge.js';
 import { loadMcpConfig, type McpServerConfig } from './mcp/config.js';
+import type { LoadedPlugin } from './plugins/index.js';
 import {
   StreamingInputSource,
   commitPartialResponse,
@@ -529,6 +530,30 @@ export interface OpenRouterAgentRunOptions {
    * to `{}` (only the well-known `CLAUDE_*` keys resolve).
    */
   skillEnv?: Readonly<Record<string, string>>;
+  /**
+   * Phase 5.8: pre-resolved plugin contributions to fold into the run. Each
+   * {@link LoadedPlugin} contributes:
+   *
+   * - Skill discovery roots — appended to the {@link skills} loader's plugin
+   *   roots (namespaced `<pluginName>:<skillName>`).
+   * - MCP server entries — appended to the resolved {@link mcpServers} list
+   *   (namespaced `<pluginName>:<serverName>`).
+   * - Hook configs — exposed verbatim on the plugin loader output. v1 does
+   *   NOT execute plugin hook commands; runtime hook command execution is a
+   *   v2 deferral. Hosts that need it can read `LoadedPlugin.hookConfigs`
+   *   and wire their own dispatch.
+   *
+   * `PluginStart` / `PluginStop` lifecycle hooks bracket the run for every
+   * entry in this array (always 1:1 paired). Auto-discovery from user /
+   * project scope is NOT performed by the agent — callers use
+   * {@link loadPlugins} to resolve their own list.
+   *
+   * Ignored when neither {@link skills} nor {@link skillsDir} is set AND
+   * {@link mcpServers} is explicitly set (plugins contribute through both
+   * channels; the lifecycle hook still fires for audit). Defaults to an
+   * empty array.
+   */
+  plugins?: readonly LoadedPlugin[];
 }
 
 interface ResolvedOptions {
@@ -597,6 +622,8 @@ interface ResolvedOptions {
   disableSkillShellExecution: boolean;
   /** Phase 5.7: resolved env passthrough for skill substitution. */
   skillEnv: Readonly<Record<string, string>>;
+  /** Phase 5.8: resolved plugin contributions (empty array when none supplied). */
+  plugins: readonly LoadedPlugin[];
 }
 
 function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
@@ -642,7 +669,8 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
   } else if (opts.permissionMode !== undefined) {
     canUseTool = permissionModeToCanUseTool(opts.permissionMode);
   }
-  const skills = resolveSkillLoader(opts, cwd);
+  const plugins = opts.plugins ?? [];
+  const skills = resolveSkillLoader(opts, cwd, plugins);
   return {
     apiKey: opts.apiKey,
     sessionId: opts.sessionId,
@@ -686,24 +714,49 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     skillDescriptionBudget: opts.skillDescriptionBudget ?? DEFAULT_SKILL_DESCRIPTION_BUDGET,
     disableSkillShellExecution: opts.disableSkillShellExecution ?? false,
     skillEnv: opts.skillEnv ?? {},
+    plugins,
   };
 }
 
 /**
- * Resolve the skill loader from the constructor options. Explicit `skills`
- * wins; otherwise `skillsDir` constructs a default loader. Returns `undefined`
- * when neither is set (no skill wiring happens).
+ * Resolve the skill loader from the constructor options.
+ *
+ * - Explicit `skills` wins (caller is responsible for any plugin pluginRoots
+ *   wiring on their own loader; a `'warn'`-level log fires when plugins are
+ *   supplied alongside a pre-built skills loader to flag the silent skip).
+ * - Otherwise: when `skillsDir` is set OR `plugins` is non-empty, construct a
+ *   default loader. Plugin skill roots are folded in as namespaced
+ *   {@link SkillLoaderOptions.pluginRoots}.
+ * - Otherwise returns `undefined` (no skill wiring happens).
  */
-function resolveSkillLoader(opts: OpenRouterAgentRunOptions, cwd: string): SkillLoader | undefined {
-  if (opts.skills !== undefined) return opts.skills;
-  if (opts.skillsDir !== undefined) {
-    return createSkillLoader({ cwd: opts.skillsDir, ...(opts.logger && { logger: opts.logger }) });
+function resolveSkillLoader(
+  opts: OpenRouterAgentRunOptions,
+  cwd: string,
+  plugins: readonly LoadedPlugin[],
+): SkillLoader | undefined {
+  if (opts.skills !== undefined) {
+    if (plugins.length > 0) {
+      opts.logger?.(
+        'warn',
+        'plugins supplied alongside a pre-built skills loader — plugin skill roots will not be auto-wired; pass the plugin pluginRoots into the loader yourself',
+        { pluginCount: plugins.length },
+      );
+    }
+    return opts.skills;
   }
-  // Pass cwd through so the inferred-default loader walks from the run's cwd
-  // when both `skills` and `skillsDir` are omitted but a caller-side helper
-  // wanted a loader-or-undefined. Currently no opt enables this implicit
-  // path — keeping the function shape future-proof for 5.8 plugin wiring.
-  void cwd;
+  if (opts.skillsDir !== undefined || plugins.length > 0) {
+    const pluginRoots: Array<{ name: string; root: string; skillsDir?: string }> = [];
+    for (const plugin of plugins) {
+      for (const skillsDir of plugin.skillRoots) {
+        pluginRoots.push({ name: plugin.manifest.name, root: plugin.root, skillsDir });
+      }
+    }
+    return createSkillLoader({
+      cwd: opts.skillsDir ?? cwd,
+      ...(opts.logger && { logger: opts.logger }),
+      ...(pluginRoots.length > 0 && { pluginRoots }),
+    });
+  }
   return undefined;
 }
 
@@ -1075,29 +1128,38 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
   }
 
   /**
-   * Phase 5.2.4: resolve the MCP server list for this run. Precedence:
+   * Phase 5.2.4 / 5.8: resolve the MCP server list for this run. Precedence:
    *
    * 1. Explicit `mcpServers` ctor option (verbatim, including empty array).
    * 2. When `autoDiscoverMcp: true`, walk `cwd` + user scope via
    *    {@link loadMcpConfig}. Discovery failures are caught and logged —
    *    a malformed `.mcp.json` does not crash the run.
    * 3. Otherwise an empty array (no MCP servers spawned).
+   *
+   * Phase 5.8: plugin-contributed MCP servers are appended AFTER the
+   * base resolution. They are already namespaced `<pluginName>:<serverName>`
+   * by the plugin loader so collisions with user/project servers are
+   * impossible.
    */
   private async resolveMcpServers(): Promise<readonly McpServerConfig[]> {
+    let base: readonly McpServerConfig[];
     if (this.opts.mcpServers !== undefined) {
-      return this.opts.mcpServers;
+      base = this.opts.mcpServers;
+    } else if (!this.opts.autoDiscoverMcp) {
+      base = [];
+    } else {
+      try {
+        base = await loadMcpConfig({ cwd: this.opts.cwd });
+      } catch (err) {
+        this.opts.logger?.('warn', 'MCP discovery failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        base = [];
+      }
     }
-    if (!this.opts.autoDiscoverMcp) {
-      return [];
-    }
-    try {
-      return await loadMcpConfig({ cwd: this.opts.cwd });
-    } catch (err) {
-      this.opts.logger?.('warn', 'MCP discovery failed', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return [];
-    }
+    if (this.opts.plugins.length === 0) return base;
+    const fromPlugins = this.opts.plugins.flatMap((p) => p.mcpServers);
+    return [...base, ...fromPlugins];
   }
 
   private async *iterate(): AsyncGenerator<AgentCoreEvent> {
@@ -1176,6 +1238,17 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     let status: AgentCoreEventStatus = 'error';
 
     this.#isIterating = true;
+
+    // Phase 5.8: per-plugin start timestamps so `PluginStop` can report the
+    // elapsed lifetime. Populated as each `PluginStart` fires below; drained
+    // in the outer `finally`. Empty Map when no plugins are configured.
+    const pluginStartTimes = new Map<string, number>();
+    // Phase 5.8: lookup table consumed by the skill tool's `buildContext`
+    // closure when an active plugin-sourced skill renders — built once here
+    // so the closure body is a single Map.get call. Empty Map when no
+    // plugins are configured (the closure short-circuits via the
+    // `skill.pluginName` truthy check).
+    const pluginByName = new Map(this.opts.plugins.map((p) => [p.manifest.name, p]));
 
     // Thin forwarder around the class-level safeFireHook so the existing
     // closures in this generator (subagent lifecycle emitters,
@@ -1425,6 +1498,26 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       }
       const bridgeTools = this.#mcpBridge?.tools ?? [];
 
+      // Phase 5.8: fire PluginStart for every loaded plugin AFTER MCP init so
+      // hosts auditing the lifecycle see "MCP servers attached, plugins
+      // attached, ready to model-loop" in order. Per-plugin counts come
+      // straight from the LoadedPlugin aggregate. Start times are captured
+      // here so the matching PluginStop in `finally` can report `durationMs`.
+      for (const plugin of this.opts.plugins) {
+        pluginStartTimes.set(plugin.manifest.name, Date.now());
+        await safeFireHook('PluginStart', {
+          event: 'PluginStart',
+          pluginName: plugin.manifest.name,
+          root: plugin.root,
+          contributions: {
+            skills: plugin.skillRoots.length,
+            commands: plugin.commandRoots.length,
+            mcpServers: plugin.mcpServers.length,
+            hooks: plugin.hookConfigs.length,
+          },
+        });
+      }
+
       // Phase 5.5: shared state for the `tool_search` / `tool_load` pair.
       // `loadedToolNames` is the per-run working-set; `toolsForRun` is the
       // mutable array passed to `callModel`. When `tool_load` fires, we
@@ -1549,19 +1642,32 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
               skill: {
                 loader: this.opts.skills,
                 visibleNames: skillVisibleNames,
-                buildContext: (args, skill): SubstitutionContext => ({
-                  arguments: args,
-                  sessionId,
-                  projectDir: cwd,
-                  cwd,
-                  env: this.opts.skillEnv,
-                  signal,
-                  disableShellExecution: this.opts.disableSkillShellExecution,
-                  ...(this.opts.effort !== undefined && { effort: this.opts.effort }),
-                  ...(skill.frontmatter.arguments !== undefined && {
-                    named: namedFromPositional(skill.frontmatter.arguments, args),
-                  }),
-                }),
+                buildContext: (args, skill): SubstitutionContext => {
+                  // Phase 5.8: when the active skill came from a plugin,
+                  // propagate ${CLAUDE_PLUGIN_ROOT} / ${CLAUDE_PLUGIN_DATA}
+                  // into the substitution context. The plugin lookup uses
+                  // the run-level Map built once below for O(1) access.
+                  const owningPlugin = skill.pluginName
+                    ? pluginByName.get(skill.pluginName)
+                    : undefined;
+                  return {
+                    arguments: args,
+                    sessionId,
+                    projectDir: cwd,
+                    cwd,
+                    env: this.opts.skillEnv,
+                    signal,
+                    disableShellExecution: this.opts.disableSkillShellExecution,
+                    ...(this.opts.effort !== undefined && { effort: this.opts.effort }),
+                    ...(skill.frontmatter.arguments !== undefined && {
+                      named: namedFromPositional(skill.frontmatter.arguments, args),
+                    }),
+                    ...(owningPlugin && {
+                      pluginRoot: owningPlugin.root,
+                      pluginData: owningPlugin.dataDir,
+                    }),
+                  };
+                },
                 onSkillLoaded: async (skill: SkillInfo) => {
                   await safeFireHook('Notification', {
                     event: 'Notification',
@@ -1960,6 +2066,21 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         } catch (err) {
           logger?.('error', 'MCP bridge close failed', { error: err });
         }
+      }
+      // Phase 5.8: fire PluginStop for every plugin that fired PluginStart.
+      // Pairs 1:1 with PluginStart; durations come from `pluginStartTimes`.
+      // Plugins for which PluginStart did NOT fire (run aborted pre-bridge,
+      // or constructor throw) silently skip — their LoadedPlugin had no
+      // observable lifecycle to bracket.
+      for (const plugin of this.opts.plugins) {
+        const startedAt = pluginStartTimes.get(plugin.manifest.name);
+        if (startedAt === undefined) continue;
+        await safeFireHook('PluginStop', {
+          event: 'PluginStop',
+          pluginName: plugin.manifest.name,
+          durationMs: Date.now() - startedAt,
+          reason: 'closed',
+        });
       }
       // Clear the iter guard BEFORE the auto-compact call so the auto-trigger
       // (which calls this.compact('auto')) does not throw on its own guard.

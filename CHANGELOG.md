@@ -30,6 +30,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Phase 5.8: Plugins — Claude Code-compatible plugin manifest + directory
+  loader. **This is the consummating Phase 5 card: the library now reaches
+  full parity with Claude Code + the Agent SDK on the in-scope dimensions
+  (slash commands, skills, plugins, MCP, hooks, subagents, streaming input,
+  compaction, tool-search, effort, session forking, checkpoints).** Card #109.
+
+  New public API:
+  - `loadPlugins({ pluginDirs, home?, logger? }) → Promise<LoadedPlugin[]>` —
+    resolves a caller-supplied list of plugin directories to aggregated
+    contributions ready to fold into the agent. Auto-discovery (directory
+    name → plugin name) kicks in when `.claude-plugin/plugin.json` is absent.
+    Per-plugin parse failures log + skip; surviving plugins still load.
+  - `pluginManifestSchema` (Zod) — validates `.claude-plugin/plugin.json`
+    against the documented shape: `name` required; `displayName`, `version`,
+    `description`, `author`, `homepage`, `repository`, `license`, `keywords`,
+    `skills`, `commands`, `agents`, `hooks`, `mcpServers`, `outputStyles`,
+    `lspServers`, `userConfig`, `dependencies`, `experimental` — all
+    optional. Unknown top-level keys pass through (forward-compat with
+    manifests written against newer Claude Code builds).
+  - `OpenRouterAgentRunOptions.plugins?: readonly LoadedPlugin[]` ctor
+    option. Each entry contributes: skill discovery roots (namespaced
+    `<pluginName>:<skillName>`), MCP server entries (namespaced
+    `<pluginName>:<serverName>`), and hook configs.
+  - `PLUGIN_NAME_REGEX`, `PLUGIN_DEFAULT_PATHS`, `PLUGIN_MCP_NAMESPACE_SEPARATOR`
+    — exported alongside the schema for hosts building their own walkers.
+  - Re-exported types: `PluginManifest`, `LoadedPlugin`, `PluginHookConfig`,
+    `LoadPluginsOptions`.
+
+  Two new lifecycle hooks bracket every loaded plugin:
+  - `PluginStart` — fires once per plugin after the MCP bridge handshakes.
+    Payload: `{ pluginName, root, contributions: { skills, commands,
+mcpServers, hooks } }`. Counts (not arrays) for cheap audit logging,
+    matching the `McpServerStart` pattern.
+  - `PluginStop` — fires once per plugin from the run's `finally` block
+    (always 1:1 paired with `PluginStart`). Payload: `{ pluginName,
+durationMs, reason: 'closed' | 'error' }`. v1 only emits `'closed'`;
+    `'error'` is declared for the future `${CLAUDE_PLUGIN_DATA}` cleanup
+    lifecycle.
+
+  Composition rules (per the Claude Code docs):
+  - **`skills` ADDS to the default `<root>/skills/`** — extra paths in the
+    manifest layer on. Skill loader's `SkillLoaderOptions.pluginRoots`
+    gained an additive `skillsDir?: string` field so plugins with multiple
+    skill paths each emit one pluginRoot entry.
+  - **`commands` / `agents` REPLACE the default** `<root>/commands/` /
+    `<root>/agents/`.
+  - **`hooks`, `mcpServers`** — accept either inline objects or relative
+    file paths; the loader normalizes both shapes.
+
+  Substitution: `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_DATA}` are
+  resolved inside plugin-shipped skill bodies (when the active skill came
+  from a plugin, the agent's skill-tool `buildContext` populates both fields
+  from the owning `LoadedPlugin`). `${CLAUDE_PLUGIN_DATA}` is a path string
+  only — the directory is NOT auto-created in v1 (v2 deferred, see below).
+
+  Namespace collision rules:
+  - Plugin skills: namespaced via Phase 5.7's `<pluginName>:<skillName>`.
+  - Plugin commands: namespaced via Phase 5.6's `<pluginName>:<command>`.
+  - Plugin MCP servers: namespaced `<pluginName>:<serverName>` (matches the
+    skill/command separator; the bridge's internal `<serverName>__<toolName>`
+    formatting still applies on top, producing
+    `<pluginName>:<serverName>__<toolName>`).
+  - Plugin hooks: composed alongside the user `onHook` via `safeFireHook`
+    broadcast — no collision possible (every subscriber fires).
+
+  **v1 deferrals** (accepted in the manifest schema, NOT implemented at
+  runtime):
+  - `userConfig` runtime (prompt-on-enable + keychain integration).
+  - `dependencies` (no install lifecycle / transitive resolver).
+  - `experimental.themes`, `experimental.monitors` (out of scope).
+  - `lspServers` (LSP integration is broader v2; not on the parity roadmap).
+  - Plugin hook command execution — `LoadedPlugin.hookConfigs` exposes the
+    parsed config for host inspection; v1 does NOT spawn hook command
+    children. Hosts can read and dispatch themselves.
+  - Marketplace fetcher (`marketplace.json` → install/update/uninstall flow
+    - `~/.claude/plugins/cache/` resolution).
+  - `${CLAUDE_PLUGIN_DATA}` directory auto-creation + cleanup lifecycle —
+    the path string resolves but no directory is created or pruned.
+  - `bin/` directory PATH injection (Phase 3.9's enhanced Bash tool already
+    handles per-tool path overrides; revisit if a real plugin needs it).
+  - `channels` — deferred pending channel-protocol design (Phase 5.3
+    streaming input is shipped, but the channel ↔ MCP server binding is a
+    separate piece of plumbing).
+
+  Re-exports from the top-level index: `loadPlugins`,
+  `pluginManifestSchema`, `PLUGIN_NAME_REGEX`, `PLUGIN_DEFAULT_PATHS`,
+  `PLUGIN_MCP_NAMESPACE_SEPARATOR`, types `PluginManifest`, `LoadedPlugin`,
+  `PluginHookConfig`, `LoadPluginsOptions`.
+
 - Phase 5.6: Slash commands — Claude Code-compatible `.claude/commands/*.md`
   discovery + host-side `/`-input resolver, built as a flat-file degenerate
   skill that reuses the Phase 5.7 frontmatter parser + substitution helper
