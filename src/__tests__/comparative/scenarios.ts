@@ -407,12 +407,33 @@ const cancellationConfigSchema = z
   })
   .optional();
 
+// Phase 6.9 backfill #154: enum intersection of OR `EffortLevel`
+// (`xhigh|high|medium|low|minimal|none`) and the Claude Agent SDK's
+// `EffortLevel` (`low|medium|high|xhigh|max`). The scenario JSON is wire-
+// agnostic so only the values both SDKs accept are exposed here. Authors
+// who need an SDK-specific value (`minimal`, `none`, `max`) can extend
+// this enum then; v1 keeps it tight.
+const scenarioEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh']);
+
 export const scenarioSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
   prompt: z.string().min(1),
   model: z.string().optional(),
   systemPrompt: z.string().optional(),
+  /**
+   * Phase 6.9 backfill #154: forward a per-run reasoning-effort knob into
+   * BOTH SDKs. The OR side flows it through `OpenRouterAgentRunOptions.effort`
+   * → `reasoning: { effort }` on the `/responses` request body (canonicalized
+   * by `script-engine.ts`'s `reasoning` field, so the request hash differs
+   * from the same scenario without `effort` set). The Anthropic side flows
+   * it through `query()`'s `Options.effort`; the SDK's request-body mapping
+   * to `thinking` is NOT surfaced in the Anthropic canonical projection
+   * (intentionally — see #154 PR body, ambiguity call), so the Anthropic
+   * hash matches the no-effort case. The parity claim the scenario actually
+   * makes is event-stream equality, NOT request-hash equality.
+   */
+  effort: scenarioEffortSchema.optional(),
   /**
    * Fixture tool names to register from `scenarios/_tools.ts`. Empty/omitted
    * means no tools (scenario #1's no-tool happy path). The harness builds

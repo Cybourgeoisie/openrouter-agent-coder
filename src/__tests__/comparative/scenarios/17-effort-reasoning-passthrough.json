@@ -1,0 +1,76 @@
+{
+  "name": "17-effort-reasoning-passthrough",
+  "description": "Phase 6.9 backfill #154: single-turn no-tool happy path with `effort: 'high'` set on the scenario. The OR side forwards effort → `reasoning: { effort: 'high' }` on the `callModel` /responses request body (visible in the OR canonical request hash, which differs from #01 even though prompt+model are identical). The Anthropic side accepts `effort: 'high'` as a top-level query() option; the SDK's request-body mapping (a `thinking` field) is NOT surfaced in the Anthropic-side canonical request hash, so that hash matches the no-effort case — this asymmetry is intentional (extending the Anthropic canonicalizer would invalidate the existing 16 scenarios' captured hashes, well beyond the scope of one backfill card). The parity claim the scenario asserts is event-stream + hook-firing-order equality with the effort knob set on both wires; the request-hash story is documented for future auditors here in this description.",
+  "prompt": "What is 2+2?",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful math assistant. Answer concisely.",
+  "effort": "high",
+  "tools": [],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:23de58079ba1a066d7f15353c0816069e87f0dacf66a4e4475fa50fa0c518e81",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"Math question 2 plus 2\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 10
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:eb3c6a7264356e9d2eff1e8c52cdcad9e02c7ee4353bb041c8d6bff70b7593c7",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "2 + 2 = 4."
+          }
+        ],
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 8
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:d6ca1567963c15b9f7aa560954acbc9b4692b94898bd1692289010b18c7ad4bf",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-17-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "2 + 2 = 4."
+          }
+        ],
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 8,
+          "total_tokens": 28
+        }
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact"
+  }
+}

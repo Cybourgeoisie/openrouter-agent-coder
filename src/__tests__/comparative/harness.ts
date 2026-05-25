@@ -400,6 +400,11 @@ async function captureAnthropic(
         settingSources: [],
         ...(scenario.model && { model: scenario.model }),
         ...(scenario.systemPrompt && { systemPrompt: scenario.systemPrompt }),
+        // Phase 6.9 backfill #154: thread the scenario's `effort` knob into
+        // the Claude Agent SDK. The SDK's request-body mapping (`thinking`)
+        // is invisible to the Anthropic canonical hash, but the option is
+        // still accepted at the SDK boundary and reaches the subprocess.
+        ...(scenario.effort !== undefined && { effort: scenario.effort }),
         // Phase 6.5b: enable per-chunk message events when a cancellation
         // policy is set. The Anthropic SDK normally buffers the streaming
         // response and emits ONE coalesced `assistant` message; without
@@ -527,6 +532,11 @@ async function captureOpenRouter(
       tools: tools.orTools,
       ...(scenario.model && { model: scenario.model }),
       ...(scenario.systemPrompt && { instructions: scenario.systemPrompt }),
+      // Phase 6.9 backfill #154: per-run effort knob → production agent.ts
+      // forwards it as `reasoning: { effort }` on the `callModel` request
+      // body. The OR canonical projection (`script-engine.ts`'s `reasoning`
+      // field) surfaces it, so the request hash differs from scenario #01.
+      ...(scenario.effort !== undefined && { effort: scenario.effort }),
       ...(canUseTool && { canUseTool }),
     });
     const cancelAfter = scenario.cancellation?.afterEventsOr;

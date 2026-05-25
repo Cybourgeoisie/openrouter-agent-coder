@@ -18,6 +18,19 @@
 // Not checked in as a vitest test because it has no assertions and only
 // runs on demand during scenario authoring. The README documents the
 // workflow; this script is the workflow's beating heart.
+//
+// IMPORTANT — run this from a CLEAN ENV (no `CLAUDECODE=1` / `CLAUDE_*`
+// vars set). The probe spreads `...process.env` into the spawned `claude`
+// subprocess, while the test-time harness scrubs the same vars via
+// `sanitizeParentEnvForClaudeSubprocess` (see `comparative/harness.ts`).
+// A capture taken inside an active Claude Code session encodes the parent's
+// inflated tool palette into the canonical request hash; the test-time run
+// then misses the hash and the SDK retries until the harness timeout.
+// Workaround when running from within Claude Code:
+//   env -i HOME="$HOME" PATH="$PATH" NVM_DIR="$NVM_DIR" \
+//     npx tsx scripts/capture-comparative-hashes.ts <scenario>
+// Folding the sanitizer into the probe itself is a follow-up (out of scope
+// for #154 — flagged as an ambiguity call in that PR body).
 
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -53,6 +66,10 @@ interface RawScenario {
   systemPrompt?: string;
   tools?: string[];
   canUseToolPolicy?: Array<{ tool: string; action: 'allow' | 'deny'; message?: string }>;
+  // Phase 6.9 backfill #154: top-level effort knob, threaded into both SDKs
+  // by the capture probe so the captured hashes reflect the same request
+  // bodies the harness will see at scenario-runtime.
+  effort?: 'low' | 'medium' | 'high' | 'xhigh';
   script: RawEntry[];
   [k: string]: unknown;
 }
@@ -130,6 +147,7 @@ async function captureOne(scenarioPath: string, dryRun: boolean): Promise<void> 
       tools: orTools.orTools,
       ...(scenario.model && { model: scenario.model }),
       ...(scenario.systemPrompt && { instructions: scenario.systemPrompt }),
+      ...(scenario.effort !== undefined && { effort: scenario.effort }),
       ...(denyByName.size > 0 && {
         canUseTool: (toolName, _input) => {
           const msg = denyByName.get(toolName);
@@ -161,6 +179,7 @@ async function captureOne(scenarioPath: string, dryRun: boolean): Promise<void> 
         settingSources: [],
         ...(scenario.model && { model: scenario.model }),
         ...(scenario.systemPrompt && { systemPrompt: scenario.systemPrompt }),
+        ...(scenario.effort !== undefined && { effort: scenario.effort }),
         ...(anthropicTools.anthropicMcpServer && {
           mcpServers: {
             [anthropicTools.anthropicMcpServer.name]: anthropicTools.anthropicMcpServer,
