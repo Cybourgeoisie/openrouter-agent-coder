@@ -82,6 +82,57 @@ const openaiEntrySchema = z.object({
 
 const scriptEntrySchema = z.union([anthropicEntrySchema, openaiEntrySchema]);
 
+// ----- Comparator config (Phase 6.4) -----
+//
+// Carried on the scenario; consumed by `comparator.ts`. `mode` picks
+// exact (deterministic emulator runs) vs tolerant (live runs). Token /
+// final-text / per-arg tolerance bands apply ONLY in tolerant mode — the
+// load-bearing parity claim ("event-shape + hook firing order exact in both
+// modes") cannot be widened from here. See `plans/comparative-parity-harness.md`
+// § "The comparator" for rationale.
+//
+// `ignore` extends the hard-coded mask set in `transcript.ts` with scenario-
+// local additions; it does NOT subtract from the base set. Keys are matched
+// the same way `maskNondeterminism` matches its built-in set — by exact key
+// name anywhere in the projected event tree.
+//
+// `argTolerances` is keyed by `<toolName>.<dot.path.into.args>` — dot-path
+// syntax, no JSONPath, no array indexing. v1 keeps this simple; richer
+// matching is a follow-up if a real scenario needs it.
+
+const finalTextAssertionSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('substring'), value: z.string() }),
+  z.object({ type: z.literal('regex'), value: z.string() }),
+  z.object({
+    type: z.literal('lengthRange'),
+    min: z.number().int().nonnegative().optional(),
+    max: z.number().int().nonnegative().optional(),
+  }),
+]);
+
+const argToleranceSchema = z.discriminatedUnion('type', [
+  // Substring containment on a string-valued arg.
+  z.object({ type: z.literal('substring'), value: z.string() }),
+  // Numeric proximity within ±delta on a number-valued arg.
+  z.object({ type: z.literal('numericDelta'), delta: z.number().nonnegative() }),
+  // "Any value, just must be present" — for fields the model varies freely.
+  z.object({ type: z.literal('anyString') }),
+]);
+
+const comparatorConfigSchema = z
+  .object({
+    mode: z.enum(['exact', 'tolerant']),
+    ignore: z.array(z.string()).optional(),
+    tokenTolerancePct: z.number().nonnegative().optional(),
+    finalTextAssertion: finalTextAssertionSchema.nullable().optional(),
+    argTolerances: z.record(z.string(), argToleranceSchema).nullable().optional(),
+  })
+  .optional();
+
+export type ComparatorConfig = z.infer<typeof comparatorConfigSchema>;
+export type FinalTextAssertion = z.infer<typeof finalTextAssertionSchema>;
+export type ArgTolerance = z.infer<typeof argToleranceSchema>;
+
 export const scenarioSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
@@ -89,6 +140,7 @@ export const scenarioSchema = z.object({
   model: z.string().optional(),
   systemPrompt: z.string().optional(),
   script: z.array(scriptEntrySchema).min(1),
+  comparator: comparatorConfigSchema,
 });
 
 export type Scenario = z.infer<typeof scenarioSchema>;
