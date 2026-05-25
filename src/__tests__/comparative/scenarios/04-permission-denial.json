@@ -1,0 +1,138 @@
+{
+  "name": "04-permission-denial",
+  "description": "Canonical scenario #4: permission denial via canUseTool. Phase 3.1/3.2 parity — host short-circuits a tool BEFORE dispatch on both SDKs. The model emits tool_use(rm, foo.txt); the canUseToolPolicy denies; the SDK feeds the deny message back as the tool_result; the model adapts in the next turn. Hook firing order is the load-bearing parity claim: tool_call → tool_result(isError=true) → next-turn text MUST be identical on both sides.",
+  "prompt": "Delete file foo.txt using the rm tool.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Use the tools provided.",
+  "tools": ["rm"],
+  "canUseToolPolicy": [
+    {
+      "tool": "rm",
+      "action": "deny",
+      "message": "The rm tool is disabled for this scenario."
+    }
+  ],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:68f96bddf01d4e11b4eabe74bf6e941f866e7ee896634a42d1b2e4686f6cdcb1",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"Delete foo.txt with rm\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 8
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:86bb37862740babd113db98eb0bfca024ca6081cff2cbaa0c4dd270fd58f360c",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "tool_use",
+        "content": [
+          {
+            "type": "text",
+            "text": "Deleting foo.txt."
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_04a",
+            "name": "mcp__harness__rm",
+            "input": {
+              "path": "foo.txt"
+            }
+          }
+        ],
+        "usage": {
+          "input_tokens": 55,
+          "output_tokens": 16
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:bc4ee1374d538f94d5ae1b153f2a77efde1ce8f397dce2080b06a883be4c9a91",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "I cannot delete that file — the rm tool was denied."
+          }
+        ],
+        "usage": {
+          "input_tokens": 85,
+          "output_tokens": 14
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:a06ba8c582b64d5a78be5dc200437b4f6d72ea9c3374cb29dcf51d173ae75bfa",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-04-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Deleting foo.txt."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_rm_0",
+            "name": "rm",
+            "arguments": "{\"path\":\"foo.txt\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 55,
+          "output_tokens": 16,
+          "total_tokens": 71
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:edd7902695a1cdd0a5362984b73aa9f88ca0f747d9d78c850889cdb57aa1e393",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-04-1",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "I cannot delete that file — the rm tool was denied."
+          }
+        ],
+        "usage": {
+          "input_tokens": 85,
+          "output_tokens": 14,
+          "total_tokens": 99
+        }
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact"
+  }
+}

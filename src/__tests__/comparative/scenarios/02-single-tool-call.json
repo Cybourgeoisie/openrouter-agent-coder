@@ -1,0 +1,131 @@
+{
+  "name": "02-single-tool-call",
+  "description": "Canonical scenario #2: single tool call + result. Foundational tool-loop parity — both SDKs receive the echo tool, the model emits one tool_use call, the tool dispatches, the model returns final text incorporating the tool result.",
+  "prompt": "Echo 'hello world' using the echo tool.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Use the tools provided.",
+  "tools": ["echo"],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:ea139574f26528e4463b097a5d56290387dce2dd796708dea8230c7e3d88c6e1",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"Echo hello world tool call\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 12
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:6546bd1973a5dac9e065f172699747f59a780ccd1a19eca91fcc41a8e6ef77b4",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "tool_use",
+        "content": [
+          {
+            "type": "text",
+            "text": "I'll echo that."
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_01abc",
+            "name": "mcp__harness__echo",
+            "input": {
+              "text": "hello world"
+            }
+          }
+        ],
+        "usage": {
+          "input_tokens": 50,
+          "output_tokens": 18
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:0ebfe089f03719eb6c86f7e1d0f5f7a6cd1e95a3d9573f7804bc3243ccc44f4b",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "Done — echoed 'hello world'."
+          }
+        ],
+        "usage": {
+          "input_tokens": 80,
+          "output_tokens": 10
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:d6c940e07ef4ed97403996f1133df141b47847689d5f663bb2958f850baf37b6",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-02-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "I'll echo that."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_echo_0",
+            "name": "echo",
+            "arguments": "{\"text\":\"hello world\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 50,
+          "output_tokens": 18,
+          "total_tokens": 68
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:b17092a2cd1e6f66f12b5774c0689d9542b924f230c531fb12602866f372e560",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-02-1",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Done — echoed 'hello world'."
+          }
+        ],
+        "usage": {
+          "input_tokens": 80,
+          "output_tokens": 10,
+          "total_tokens": 90
+        }
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact"
+  }
+}

@@ -44,12 +44,13 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query, type CanUseTool as AnthropicCanUseTool } from '@anthropic-ai/claude-agent-sdk';
 
-import { OpenRouterAgentRun } from '../../agent.js';
+import { OpenRouterAgentRun, type CanUseTool as OrCanUseTool } from '../../agent.js';
 
 import { startEmulator, type EmulatorHandle, type ScriptEntry } from './emulator/index.js';
 import { entriesForWire, loadScenario, type Scenario } from './scenarios.js';
+import { anthropicToolName, buildHarnessTools } from './scenarios/_tools.js';
 import {
   maskNondeterminism,
   type AnthropicTranscript,
@@ -126,6 +127,11 @@ export async function runScenario(
   // Entries that don't match are silently skipped (the wire-mismatch path is
   // owned by the script-engine when a request actually arrives).
   registerEntries(anthropicEmulator, entriesForWire(scenario, 'anthropic'));
+  // The OR SDK posts to `/responses` (OpenResponses wire) in production. The
+  // 6.2 `/v1/chat/completions` adapter is still registered into the OR
+  // emulator so scenarios that historically scripted `openai` entries don't
+  // break, but `openresponses` is the wire the SDK actually hits.
+  registerEntries(orEmulator, entriesForWire(scenario, 'openresponses'));
   registerEntries(orEmulator, entriesForWire(scenario, 'openai'));
 
   let transcripts: [AnthropicTranscript, OrTranscript];
@@ -184,6 +190,13 @@ async function captureAnthropic(
   }, timeoutMs);
   timer.unref();
 
+  // Per-scenario tool wiring. Built INSIDE this function (not shared with
+  // the OR side) so the `counter` fixture's closure state is independent
+  // between the two SDKs — otherwise scenario #3's counter would emit `1,2`
+  // on the SDK that ran first and `3,4` on the slower one, breaking parity.
+  const tools = buildHarnessTools(scenario.tools ?? []);
+  const canUseTool = buildAnthropicCanUseTool(scenario);
+
   try {
     const q = query({
       prompt: scenario.prompt,
@@ -194,8 +207,22 @@ async function captureAnthropic(
           ANTHROPIC_API_KEY: 'sk-ant-emulator-stub',
         },
         abortController,
+        // `settingSources: []` puts the SDK in isolation mode — no
+        // `.claude/settings.json` hierarchies, no project-level settings —
+        // so the request body the SDK sends doesn't pick up per-machine
+        // configuration. (System-reminder blocks from `~/.claude/CLAUDE.md`
+        // and skills are still inserted by the CLI and stripped at hash
+        // time; this is the other half of the per-machine isolation.)
+        settingSources: [],
         ...(scenario.model && { model: scenario.model }),
         ...(scenario.systemPrompt && { systemPrompt: scenario.systemPrompt }),
+        ...(tools.anthropicMcpServer && {
+          mcpServers: { [tools.anthropicMcpServer.name]: tools.anthropicMcpServer },
+        }),
+        ...(tools.anthropicAllowedToolNames.length > 0 && {
+          allowedTools: tools.anthropicAllowedToolNames,
+        }),
+        ...(canUseTool && { canUseTool }),
       },
     });
     for await (const msg of q) {
@@ -254,6 +281,10 @@ async function captureOpenRouter(
   }, timeoutMs);
   timer.unref();
 
+  // Per-scenario tool wiring (independent state — see captureAnthropic).
+  const tools = buildHarnessTools(scenario.tools ?? []);
+  const canUseTool = buildOrCanUseTool(scenario);
+
   let run: OpenRouterAgentRun | undefined;
   try {
     run = new OpenRouterAgentRun({
@@ -263,8 +294,10 @@ async function captureOpenRouter(
       baseUrl: emulatorUrl,
       persistSession: false,
       signal: abortController.signal,
+      tools: tools.orTools,
       ...(scenario.model && { model: scenario.model }),
       ...(scenario.systemPrompt && { instructions: scenario.systemPrompt }),
+      ...(canUseTool && { canUseTool }),
     });
     for await (const event of run) {
       events.push(maskNondeterminism(event));
@@ -322,4 +355,53 @@ async function dumpFailure(
 function formatThrown(err: unknown): string {
   if (err instanceof Error) return err.stack ?? `${err.name}: ${err.message}`;
   return String(err);
+}
+
+// ----- canUseTool wiring (Phase 6.5a) -----
+//
+// Two builders that translate the scenario's wire-agnostic `canUseToolPolicy`
+// into the two SDKs' wire-specific closure signatures. The shapes diverge in
+// two places that scenario authors don't need to think about:
+//
+//   - **Tool name:** Anthropic sees `mcp__harness__echo`, OR sees `echo`.
+//     The lookup keys off the bare name on both sides so the policy declared
+//     in the JSON stays SDK-agnostic.
+//   - **Deny-payload field:** Anthropic's `PermissionResult.deny.message`
+//     vs. OR's `CanUseToolResult.deny.reason`. The scenario's `message` is
+//     the canon text (ambiguity call #4) — both sides receive identical
+//     bytes, just under each SDK's field name.
+
+function buildAnthropicCanUseTool(scenario: Scenario): AnthropicCanUseTool | undefined {
+  const policy = scenario.canUseToolPolicy;
+  if (!policy || policy.length === 0) return undefined;
+  // Build a `mcp__harness__<bare>` → rule lookup so the prefix doesn't bleed
+  // into the scenario JSON. Allow is the default for tools not listed.
+  const ruleByPrefixed = new Map<string, (typeof policy)[number]>();
+  for (const rule of policy) {
+    ruleByPrefixed.set(anthropicToolName(rule.tool), rule);
+  }
+  return async (toolName, input) => {
+    const rule = ruleByPrefixed.get(toolName);
+    if (!rule || rule.action === 'allow') {
+      return { behavior: 'allow', updatedInput: input };
+    }
+    return { behavior: 'deny', message: rule.message };
+  };
+}
+
+function buildOrCanUseTool(scenario: Scenario): OrCanUseTool | undefined {
+  const policy = scenario.canUseToolPolicy;
+  if (!policy || policy.length === 0) return undefined;
+  // OR-side tool names are the bare fixture names (no MCP prefix).
+  const ruleByName = new Map<string, (typeof policy)[number]>();
+  for (const rule of policy) {
+    ruleByName.set(rule.tool, rule);
+  }
+  return (toolName) => {
+    const rule = ruleByName.get(toolName);
+    if (!rule || rule.action === 'allow') {
+      return { behavior: 'allow' };
+    }
+    return { behavior: 'deny', reason: rule.message };
+  };
 }

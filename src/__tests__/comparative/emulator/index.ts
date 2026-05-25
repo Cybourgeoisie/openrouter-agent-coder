@@ -21,6 +21,7 @@ import { AddressInfo } from 'node:net';
 
 import { handleAnthropicMessages } from './anthropic.js';
 import { handleOpenAIChatCompletions } from './openai.js';
+import { handleOpenResponses } from './openresponses.js';
 import { ScriptRegistry, type ScriptEntry } from './script-engine.js';
 
 export type EmulatorHandle = {
@@ -87,6 +88,13 @@ async function route(
       await handleOpenAIChatCompletions(req, res, registry);
       return;
     }
+    if (req.method === 'POST' && pathname === '/responses') {
+      // OpenRouter `/responses` (OpenResponses) wire — what `@openrouter/agent`
+      // actually posts to. Added in 6.5a so the OR side of the comparative
+      // harness can reach a clean terminal state instead of 404-ing.
+      await handleOpenResponses(req, res, registry);
+      return;
+    }
     if (!res.headersSent) {
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(
@@ -136,6 +144,7 @@ export {
   entryWire,
   isAnthropicEntry,
   isOpenAIEntry,
+  isOpenResponsesEntry,
   type WireFormat,
   type AnthropicResponse,
   type AnthropicContentBlock,
@@ -147,7 +156,12 @@ export {
   type OpenAIToolCall,
   type OpenAIScriptEntry,
   type OpenAIFailureMode,
+  type OpenResponsesResponse,
+  type OpenResponsesContentBlock,
+  type OpenResponsesStatus,
+  type OpenResponsesScriptEntry,
   type FailureMode,
   type StreamControl,
 } from './script-engine.js';
 export { buildOpenAIChunks, serializeOpenAIChunk, SSE_DONE } from './openai.js';
+export { buildOpenResponsesEvents, SSE_RESPONSES_DONE } from './openresponses.js';

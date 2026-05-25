@@ -16,7 +16,7 @@
 
 import { createHash } from 'node:crypto';
 
-export type WireFormat = 'anthropic' | 'openai';
+export type WireFormat = 'anthropic' | 'openai' | 'openresponses';
 
 export type AnthropicStopReason =
   | 'end_turn'
@@ -206,7 +206,66 @@ export type AnthropicScriptEntry = AnthropicScriptEntryBase & ScriptOutcome;
 export type OpenAIScriptEntry = OpenAIScriptEntryBase &
   (OpenAISuccessOutcome | OpenAIFailureOutcome);
 
-export type ScriptEntry = AnthropicScriptEntry | OpenAIScriptEntry;
+// ----- OpenRouter `/responses` (OpenResponses) wire (Phase 6.5a) -----
+//
+// The `@openrouter/agent` SDK posts to `/responses` (not `/v1/chat/completions`
+// — that endpoint is owned by 6.2's wire and currently has no live consumer
+// inside this repo's harness). We add a third wire to drive the OR-side of
+// the comparative harness without forking the SDK or routing through a
+// chat-compat layer that the agent SDK doesn't use in production.
+//
+// v1 scope (success-mode only) covers exactly what scenarios #1-#4 need:
+//   - assistant text output
+//   - tool-use calls (function_call output items)
+//   - multi-turn continuation via `previous_response_id`
+//
+// Failure injection on this wire is deliberately deferred to 6.6 — the
+// `/responses` event vocabulary differs significantly from chat-completions
+// and the failure-injection design has to be re-thought per wire anyway.
+
+export type OpenResponsesContentBlock =
+  | { type: 'text'; text: string }
+  | {
+      type: 'tool_use';
+      callId: string;
+      name: string;
+      // Arguments serialized as a JSON string — matches the wire shape where
+      // `response.function_call_arguments.delta` carries string fragments.
+      arguments: string;
+    };
+
+export type OpenResponsesStatus = 'completed' | 'incomplete' | 'failed';
+
+export type OpenResponsesResponse = {
+  id?: string;
+  model: string;
+  status: OpenResponsesStatus;
+  content: OpenResponsesContentBlock[];
+  // Token accounting that lands on the terminal `response.completed` event's
+  // OpenResponsesResult body. The OR SDK normalizes these into `inputTokens`
+  // / `outputTokens` on its consumer-facing `Usage` shape.
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens?: number;
+  };
+};
+
+type OpenResponsesScriptEntryBase = {
+  promptHash: string;
+  turn: number;
+  wire: 'openresponses';
+};
+
+type OpenResponsesSuccessOutcome = {
+  kind: 'success';
+  response: OpenResponsesResponse;
+  stream?: StreamControl;
+};
+
+export type OpenResponsesScriptEntry = OpenResponsesScriptEntryBase & OpenResponsesSuccessOutcome;
+
+export type ScriptEntry = AnthropicScriptEntry | OpenAIScriptEntry | OpenResponsesScriptEntry;
 
 export function entryWire(entry: ScriptEntry): WireFormat {
   return entry.wire ?? 'anthropic';
@@ -218,6 +277,10 @@ export function isAnthropicEntry(entry: ScriptEntry): entry is AnthropicScriptEn
 
 export function isOpenAIEntry(entry: ScriptEntry): entry is OpenAIScriptEntry {
   return entryWire(entry) === 'openai';
+}
+
+export function isOpenResponsesEntry(entry: ScriptEntry): entry is OpenResponsesScriptEntry {
+  return entryWire(entry) === 'openresponses';
 }
 
 type DiagnosticEvent = {
@@ -267,6 +330,33 @@ export function canonicalizeRequest(body: unknown, wire: WireFormat = 'anthropic
     return stableStringify({ raw: body });
   }
   const b = body as Record<string, unknown>;
+  if (wire === 'openresponses') {
+    // OpenRouter `/responses` (OpenResponses) shape. Fields kept are those
+    // that meaningfully change what the model would produce:
+    //   - `model`, `input` (the message list), `instructions` (system prompt)
+    //   - `tools`, `tool_choice`
+    //   - `previous_response_id` (multi-turn continuation chain)
+    //   - sampling knobs (`temperature`, `top_p`, `max_output_tokens`)
+    // Explicitly excluded: `stream` (transport), `store` (server-side
+    // persistence flag), `session_id` (per-run identifier), `service_tier`
+    // (transport preference), `metadata` / `user` / unknown forward-compat
+    // fields. The hash deliberately does NOT include the `wire` token so the
+    // wire-mismatch path stays reachable (same rationale as the openai wire).
+    const canonical: Record<string, unknown> = {
+      model: b.model ?? null,
+      input: b.input ?? [],
+      instructions: b.instructions ?? null,
+      tools: b.tools ?? null,
+      tool_choice: b.tool_choice ?? null,
+      previous_response_id: b.previous_response_id ?? null,
+      max_output_tokens: b.max_output_tokens ?? null,
+      temperature: b.temperature ?? null,
+      top_p: b.top_p ?? null,
+      reasoning: b.reasoning ?? null,
+      response_format: b.response_format ?? null,
+    };
+    return stableStringify(canonical);
+  }
   if (wire === 'openai') {
     // OpenAI/OR-compatible chat-completions shape. Fields kept are the
     // ones that meaningfully shape the model's output. Excluded: `stream`
@@ -293,8 +383,28 @@ export function canonicalizeRequest(body: unknown, wire: WireFormat = 'anthropic
   }
   const canonical: Record<string, unknown> = {
     model: b.model ?? null,
-    system: b.system ?? null,
-    messages: b.messages ?? [],
+    // The Anthropic agent SDK injects two classes of nondeterministic content
+    // into the request that have to be stripped before hashing or no two
+    // captures of "the same scenario" will ever agree:
+    //
+    //   - **Billing-header system block** (`x-anthropic-billing-header:
+    //     cc_version=...; cch=<content-hash>;`). The `cch` token is a
+    //     content hash the SDK rotates on its own internal state — it
+    //     changes between runs on the same machine, between SDK versions,
+    //     and across users.
+    //   - **`<system-reminder>` blocks** the SDK pastes into the first user
+    //     message from `~/.claude/CLAUDE.md`, the project CLAUDE.md, the
+    //     user's skills list, and the user-email/date context. Every one of
+    //     these is per-developer-machine state that has nothing to do with
+    //     the scenario's parity claim.
+    //
+    // Both get stripped here; the remaining `system` / `messages` content
+    // (custom system prompt, the actual user prompt) is what the model would
+    // semantically see. Filtering is conservative — anything that doesn't
+    // match the known patterns is kept verbatim — so a scenario that needs
+    // to assert on system-prompt content still can.
+    system: stripAnthropicBillingHeader(b.system),
+    messages: stripAnthropicSystemReminders(b.messages),
     tools: b.tools ?? null,
     tool_choice: b.tool_choice ?? null,
     max_tokens: b.max_tokens ?? null,
@@ -304,6 +414,58 @@ export function canonicalizeRequest(body: unknown, wire: WireFormat = 'anthropic
     stop_sequences: b.stop_sequences ?? null,
   };
   return stableStringify(canonical);
+}
+
+/**
+ * Strip the `x-anthropic-billing-header: …` text block (and the SDK's
+ * standard "You are a Claude agent…" preamble that always rides with it)
+ * from an Anthropic system field. Returns the remaining blocks unchanged.
+ *
+ * The two stripped blocks are SDK-injected boilerplate that varies per run
+ * (billing header) or per SDK version (preamble); filtering them here keeps
+ * the hash stable across both axes.
+ */
+function stripAnthropicBillingHeader(system: unknown): unknown {
+  if (!Array.isArray(system)) return system ?? null;
+  return system.filter((block) => {
+    if (!block || typeof block !== 'object') return true;
+    const b = block as Record<string, unknown>;
+    if (b.type !== 'text' || typeof b.text !== 'string') return true;
+    if (b.text.startsWith('x-anthropic-billing-header:')) return false;
+    if (b.text === "You are a Claude agent, built on Anthropic's Claude Agent SDK.") return false;
+    return true;
+  });
+}
+
+/**
+ * Strip `<system-reminder>…</system-reminder>` blocks from any text content
+ * inside an Anthropic `messages` array. These are per-machine context
+ * blocks the SDK pastes in from CLAUDE.md / skills / user-context files.
+ * They're not part of the scenario; keeping them would tie the hash to a
+ * specific developer's local state.
+ *
+ * If a text block is ENTIRELY a system-reminder (no other content), the
+ * block is dropped. Mixed content has just the `<system-reminder>...` spans
+ * removed; surrounding text is preserved verbatim.
+ */
+function stripAnthropicSystemReminders(messages: unknown): unknown {
+  if (!Array.isArray(messages)) return messages ?? [];
+  return messages.map((msg) => {
+    if (!msg || typeof msg !== 'object') return msg;
+    const m = msg as Record<string, unknown>;
+    if (!Array.isArray(m.content)) return msg;
+    const filtered = m.content
+      .map((block) => {
+        if (!block || typeof block !== 'object') return block;
+        const b = block as Record<string, unknown>;
+        if (b.type !== 'text' || typeof b.text !== 'string') return block;
+        const stripped = b.text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '');
+        if (stripped.trim() === '') return null;
+        return { ...b, text: stripped };
+      })
+      .filter((b) => b !== null);
+    return { ...m, content: filtered };
+  });
 }
 
 export function computePromptHash(body: unknown, wire: WireFormat = 'anthropic'): string {
@@ -337,7 +499,13 @@ export type ScriptWireMismatchError = {
 
 /**
  * Per-emulator-instance script registry. One ScriptRegistry per test (or per
- * emulator instance). The `turn` counter advances on each successful match.
+ * emulator instance). Turn counters are **per-promptHash** (Phase 6.5a):
+ * the SDK fires multiple distinct request bodies in parallel (Anthropic's
+ * title-generation request + the main-prompt request, for example), and
+ * each one is its own "track" — turn 0 of track A and turn 0 of track B
+ * are independent. Without per-hash counters the registry would advance
+ * past turn 0 on the first match and miss the parallel request that
+ * legitimately needed turn 0 too.
  *
  * Missing-script diagnostics are deduped by `{promptHash, turn}` so that the
  * SDK's 15-retry-on-500 loop doesn't spam the test output 15× with the same
@@ -346,7 +514,10 @@ export type ScriptWireMismatchError = {
  */
 export class ScriptRegistry {
   private readonly entries: ScriptEntry[] = [];
-  private nextTurn = 0;
+  /** Per-promptHash turn counter. Independent tracks per distinct request body. */
+  private readonly turnByHash = new Map<string, number>();
+  /** Aggregate turn count across all hashes — what `turnsServed` exposes. */
+  private totalServed = 0;
   private readonly emittedMisses = new Set<string>();
 
   register(entry: ScriptEntry): void {
@@ -385,13 +556,20 @@ export class ScriptRegistry {
     | { ok: false; error: ScriptWireMismatchError; dedup: boolean; mismatch: true };
   lookup(
     body: unknown,
+    expectedWire: 'openresponses',
+  ):
+    | { ok: true; entry: OpenResponsesScriptEntry; turn: number }
+    | { ok: false; error: ScriptMissError; dedup: boolean }
+    | { ok: false; error: ScriptWireMismatchError; dedup: boolean; mismatch: true };
+  lookup(
+    body: unknown,
     expectedWire: WireFormat = 'anthropic',
   ):
     | { ok: true; entry: ScriptEntry; turn: number }
     | { ok: false; error: ScriptMissError; dedup: boolean }
     | { ok: false; error: ScriptWireMismatchError; dedup: boolean; mismatch: true } {
     const promptHash = computePromptHash(body, expectedWire);
-    const turn = this.nextTurn;
+    const turn = this.turnByHash.get(promptHash) ?? 0;
     const hit = this.entries.find((e) => e.promptHash === promptHash && e.turn === turn);
     if (hit) {
       const hitWire = entryWire(hit);
@@ -429,7 +607,8 @@ export class ScriptRegistry {
           dedup,
         };
       }
-      this.nextTurn += 1;
+      this.turnByHash.set(promptHash, turn + 1);
+      this.totalServed += 1;
       return { ok: true, entry: hit, turn };
     }
     const diagnosticKey = `${promptHash}@${turn}`;
@@ -462,14 +641,15 @@ export class ScriptRegistry {
     };
   }
 
-  /** Total turns served so far. Useful for tests that assert how many round-trips happened. */
+  /** Total turns served so far (sum across every promptHash track). */
   get turnsServed(): number {
-    return this.nextTurn;
+    return this.totalServed;
   }
 
-  /** Reset the turn counter (e.g. between scenarios within one emulator instance). */
+  /** Reset all per-hash turn counters (e.g. between scenarios within one emulator instance). */
   reset(): void {
-    this.nextTurn = 0;
+    this.turnByHash.clear();
+    this.totalServed = 0;
     this.emittedMisses.clear();
   }
 }
