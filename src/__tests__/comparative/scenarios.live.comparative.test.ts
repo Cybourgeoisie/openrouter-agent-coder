@@ -113,19 +113,35 @@ describe('comparative-live smoke', () => {
       const orCost = result.orTranscript.costUsd ?? 0;
       const totalCost = anthropicCost + orCost;
 
-      // Append the per-scenario cost line to the workflow-facing artifact.
-      // JSONL format — one record per line. The workflow's $0.25 aggregate
-      // cap is computed from these lines after the test run completes.
+      // Derive a single `pass` boolean per scenario so the 6.8 nightly
+      // workflow can classify drift (emulated PASS + live FAIL) without
+      // duplicating the per-scenario throw-tolerance logic that lives
+      // below. Mirrors the assert block: pass iff neither SDK threw OR
+      // the scenario's comparator config tolerates throws.
+      const cancelling = scenario.comparator?.ignoreThrown === true;
+      const tolerateInjection = scenario.comparator?.tolerateThrownInjection === true;
+      const anthropicThrew = result.anthropicTranscript.thrown !== undefined;
+      const orThrew = result.orTranscript.thrown !== undefined;
+      const pass = cancelling || tolerateInjection ? true : !anthropicThrew && !orThrew;
+
+      // Append the per-scenario cost + pass-signal line to the workflow-
+      // facing artifact. JSONL format — one record per line. The
+      // workflow's $0.25 aggregate cap is computed from these lines
+      // after the test run completes; the 6.8 nightly's drift
+      // classification joins on `scenario` against the emulated artifact
+      // and uses `pass` directly.
       const line =
         JSON.stringify({
           scenario: name,
+          mode: 'live',
+          pass,
           anthropicCostUsd: anthropicCost,
           orCostUsd: orCost,
           totalCostUsd: totalCost,
           maxCostUsd: scenario.maxCostUsd ?? 0.5,
           costBreach: result.costBreach === true,
-          anthropicThrew: result.anthropicTranscript.thrown !== undefined,
-          orThrew: result.orTranscript.thrown !== undefined,
+          anthropicThrew,
+          orThrew,
         }) + '\n';
       await appendFile(COST_REPORT_PATH, line, 'utf8');
 
@@ -143,9 +159,7 @@ describe('comparative-live smoke', () => {
       // The cancellation scenario (#6) deliberately aborts both SDKs; the
       // throw IS the success signal. Match the emulated driver's
       // ignoreThrown/cancelling semantics by leaning on the scenario's
-      // comparator config.
-      const cancelling = scenario.comparator?.ignoreThrown === true;
-      const tolerateInjection = scenario.comparator?.tolerateThrownInjection === true;
+      // comparator config. (Both flags are computed above for `pass`.)
       if (!cancelling && !tolerateInjection) {
         expect(
           result.anthropicTranscript.thrown,
