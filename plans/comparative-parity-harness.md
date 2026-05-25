@@ -177,9 +177,11 @@ Both SDKs already support this, but **asymmetrically**:
 - **`@openrouter/agent`** — the openrouter-agent-coder library plumbs `baseUrl` through to the OR client constructor's `serverURL` parameter (`src/agent.ts:398`). Already tested at `src/agent.test.ts:325`. Passed via **ctor config**.
 - **`@anthropic-ai/claude-agent-sdk`** — respects `ANTHROPIC_BASE_URL`; the agent SDK forwards env config to its underlying Anthropic client. Passed via **env injection per test process**. (6.S1 confirms the agent-SDK wrapper doesn't swallow it and pins the agent-SDK version that exhibits this behavior.)
 
-Document the asymmetry but don't try to unify it — the wire formats differ anyway, so a shared abstraction would leak. The asymmetry has a real test-isolation consequence: `ANTHROPIC_BASE_URL` must be set **before** any import that constructs the agent SDK's client. 6.S1 picks the hosting pattern (in-process emulator with vitest worker env vs. subprocess emulator with `spawn` env vs. per-file isolation) so 6.3 inherits that choice rather than re-relitigating it.
+Document the asymmetry but don't try to unify it — the wire formats differ anyway, so a shared abstraction would leak.
 
-The emulator binds to a random ephemeral port per test process (parallel safety), and the harness writes the bound URL into both SDK configs (OR via ctor, Anthropic via env) before kicking off the run.
+**Resolved hosting pattern** (per [`spikes/6.S1-baseurl-emulator-hosting.md`](./spikes/6.S1-baseurl-emulator-hosting.md), 2026-05-25): **in-process emulator + per-`query()` `Options.env` injection** on the Anthropic side. The agent SDK spawns a `claude` subprocess per call and reads `ANTHROPIC_BASE_URL` _in that subprocess_, not in the parent — so env-isolation is structural. The harness passes `{ ...process.env, ANTHROPIC_BASE_URL: '<emulator-url>', ANTHROPIC_API_KEY: 'sk-ant-emulator-stub' }` via `query({ options: { env: ... } })` per scenario. No parent-process `process.env` mutation; no vitest setup-file env injection; no subprocess emulator. Rejected alternatives (subprocess emulator, vitest project-level env) and tradeoffs are documented in the spike.
+
+The emulator binds to a random ephemeral port per test process (parallel safety), and the harness writes the bound URL into both SDK configs (OR via ctor `baseUrl`, Anthropic via `Options.env.ANTHROPIC_BASE_URL`) before kicking off the run.
 
 ### The comparator
 
@@ -268,7 +270,7 @@ Initial target: 8–12 scripts. The full set won't be defined until 6.5, but the
 | 6.S1 | SPIKE — verify env-var baseURL + pick emulator hosting pattern     | 1–2h   | —                   |
 | 6.1  | Emulator skeleton + Anthropic Messages wire format                 | 10–12h | 6.S1                |
 | 6.2  | Emulator: OpenAI/OR chat-completions wire format                   | 8–10h  | 6.1                 |
-| 6.3  | Dual-mode harness scaffolding + base-URL plumbing                  | 6–8h   | 6.1, 6.2            |
+| 6.3  | Dual-mode harness scaffolding + base-URL plumbing                  | 5–7h   | 6.1, 6.2            |
 | 6.4  | Comparator: exact + tolerant modes                                 | 8–10h  | 6.3                 |
 | 6.5a | Scenario authoring helper + happy-path scenarios (#1–#4)           | 6–8h   | 6.4                 |
 | 6.5b | Scenarios #5–#8 (plan-mode, cancel, tool error, hook block)        | 5–7h   | 6.5a                |
@@ -279,13 +281,13 @@ Initial target: 8–12 scripts. The full set won't be defined until 6.5, but the
 | 6.9  | Scenario-additions rolling card (Phase 3/4/5 backfill + ongoing)   | n/a    | 6.8, prior phases   |
 | 6.10 | _(Deferred, if-needed)_ Live→script recorder                       | 6–8h   | 6.5a if 6.5 painful |
 
-**Phase 6 total:** ~62–84h, ~1.5–2 weeks full-time (revised from original ~80h after spike de-risking and 6.5 split).
+**Phase 6 total:** ~61–83h, ~1.5–2 weeks full-time (revised from original ~80h after spike de-risking, 6.5 split, and 6.S1 trimming 6.3 by ~1h).
 
 **Phasing dependency:** Phase 6 is gated on **Phase 5 substantially complete** — Phases 3 and 4 are both 100% done, but Phase 5 still has the surface that scenarios would assert against (MCP bridge, streaming input, skills, slash commands, plugins). Starting earlier risks scenarios that have to be rewritten as the surface settles. Card the Phase 6 issues only after Phase 5's build cards close.
 
 **Order of operations within the phase:**
 
-1. **6.S1** runs first — small spike to pin the agent-SDK version and pick the emulator-hosting pattern that 6.1/6.3 inherit. (Could fold into 6.1 as task 0; kept standalone to match the Phase 5 spike pattern and keep the answer findable in project history.)
+1. **6.S1** runs first — small spike to pin the agent-SDK version and pick the emulator-hosting pattern that 6.1/6.3 inherit. (Could fold into 6.1 as task 0; kept standalone to match the Phase 5 spike pattern and keep the answer findable in project history.) **Resolved 2026-05-25**: agent-SDK pinned to `^0.3.150`; in-process emulator + per-call `Options.env` injection. See [`spikes/6.S1-baseurl-emulator-hosting.md`](./spikes/6.S1-baseurl-emulator-hosting.md).
 2. **6.1 → 6.2** sequential (the wire formats share infrastructure but the second pass tells you what to refactor in the first).
 3. **6.3 → 6.4** sequential (the comparator can't be specified until the harness produces transcripts).
 4. **6.5a** lands first scenario + authoring helper. **6.5b**, **6.5c**, and **6.6** are parallel-eligible once 6.5a sets the authoring pattern — each is a self-contained set of fixture files with no shared production touches. Under a one-card-in-flight rule they run serial; under parallel-pull they're independent.
@@ -316,7 +318,7 @@ Initial target: 8–12 scripts. The full set won't be defined until 6.5, but the
 ### Resolved
 
 - **Q5 — Does the Claude Agent SDK accept a pre-built `Anthropic` client / how do we override the base URL?** **Resolved:** `@anthropic-ai/claude-agent-sdk` respects the `ANTHROPIC_BASE_URL` environment variable (the agent SDK forwards env config to its underlying Anthropic client). 6.3 plumbs via env injection per test process. 6.S1 verifies the agent-SDK wrapper doesn't swallow it and pins the version.
-- **Q1 — In-process vs subprocess emulator?** **Deferred to 6.S1**, where the choice is made and pinned for 6.1/6.3 to inherit. Original recommendation (start in-process) stands as the default unless 6.S1 finds an env-isolation reason to spawn.
+- **Q1 — In-process vs subprocess emulator?** **Resolved** by [`spikes/6.S1-baseurl-emulator-hosting.md`](./spikes/6.S1-baseurl-emulator-hosting.md) (2026-05-25): **in-process emulator + per-`query()` `Options.env` injection**. The agent SDK already spawns a subprocess per call and reads `ANTHROPIC_BASE_URL` inside that subprocess, so env-isolation is structural — no second layer of subprocessing needed. Original recommendation (start in-process) stands.
 
 ### Still open (carded or deferred)
 
