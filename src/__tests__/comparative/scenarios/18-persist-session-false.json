@@ -1,0 +1,132 @@
+{
+  "name": "18-persist-session-false",
+  "description": "Phase 6.9 backfill #174: exercises `persistSession: false` (Phase 3.12). Two-turn flow — turn 0 invokes the `write` tool, turn 1 emits final text — so the in-memory StateAccessor's `previousResponseId` roundtrip is load-bearing for the comparator pass: the turn-1 OR request includes `previous_response_id: resp-18-0` and is canonicalized into the prompt hash; if the in-memory accessor failed to carry the id forward, the emulator would script-miss and the scenario would fail. The companion supplemental test in `scenarios.comparative.test.ts` runs an OR-only inline construction with an explicit `logsRoot` tmpdir and asserts zero filesystem writes (no `session.json` / `request.json` / `response.json` / `state.json`). The Anthropic side has no `persistSession` equivalent on the Claude Agent SDK; the comparator pass on this scenario asserts event-stream + hook-firing-order parity given the OR side runs with in-memory state and the Anthropic side runs with its default subprocess persistence — that asymmetry is structural (see PR #190 body, ambiguity call #1).",
+  "prompt": "Write 'hello' to test.txt and confirm.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Use the tools provided.",
+  "tools": ["write"],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:af6e443340bd7f37360d5e3d7d301bf817b9d023fd599d31c42e7d1fb68025cd",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"Write hello to test.txt\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 12
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:435608369da74d5ef066386ab309b371e6b714e47868564d62d500aceb949dcc",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "tool_use",
+        "content": [
+          {
+            "type": "text",
+            "text": "I'll write that now."
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_18a",
+            "name": "mcp__harness__write",
+            "input": {
+              "path": "test.txt",
+              "content": "hello"
+            }
+          }
+        ],
+        "usage": {
+          "input_tokens": 60,
+          "output_tokens": 20
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:b997c161fe70829efe3d7c08ee2539e1b9323294da38ccebf59f46517eb64c08",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "Done — wrote 'hello' to test.txt."
+          }
+        ],
+        "usage": {
+          "input_tokens": 90,
+          "output_tokens": 12
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:b06a75494022a924fd3bf5a7530693861e651ba1b42c7b5bae480859bfa0391c",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-18-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "I'll write that now."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_write_0",
+            "name": "write",
+            "arguments": "{\"path\":\"test.txt\",\"content\":\"hello\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 60,
+          "output_tokens": 20,
+          "total_tokens": 80
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:4234a8cfc9a0951b0dd9cf4344d7c35daf65ed2b76d4191d3fc4a369585d3e72",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-18-1",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Done — wrote 'hello' to test.txt."
+          }
+        ],
+        "usage": {
+          "input_tokens": 90,
+          "output_tokens": 12,
+          "total_tokens": 102
+        }
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact"
+  }
+}

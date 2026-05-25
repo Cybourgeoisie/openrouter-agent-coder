@@ -316,3 +316,86 @@ describe('comparative scenario: 08-hook-block-modify — hook order', () => {
     expect(canonicalizeOr(orTranscript).hookOrder).toEqual(expected);
   });
 });
+
+// ----- Phase 6.9 backfill #174: persistSession: false — zero-disk-writes -----
+//
+// The shared `runScenario` harness already constructs the OR side with
+// `persistSession: false` (harness.ts:530), so the standard comparator-pass
+// run on scenario #18 implicitly exercises the in-memory `StateAccessor`'s
+// `previousResponseId` roundtrip: the turn-1 OR request includes
+// `previous_response_id: resp-18-0`, which is canonicalized into the
+// promptHash; an in-memory accessor that failed to carry the id forward
+// would produce a different turn-1 hash and miss the script.
+//
+// This supplemental test pins the OTHER half of the Phase 3.12 contract: that
+// `persistSession: false` produces ZERO filesystem writes under `logsRoot`.
+// It builds an OR-only run inline (the Anthropic agent SDK has no equivalent
+// `persistSession` knob — its subprocess writes to `~/.claude/projects/`
+// under its own bookkeeping, out of scope for this parity claim — see PR
+// body ambiguity call #1), drives the same two-turn `write`-tool flow against
+// an in-process emulator seeded with scenario #18's OR-wire script entries,
+// and asserts the explicit `logsRoot` tmpdir remains EMPTY after the run.
+//
+// The full-harness `runScenario` would suffice for the previousResponseId
+// roundtrip but does NOT thread `logsRoot` through to the OR ctor (it
+// defaults to `<cwd>/logs/`, which the harness assumes is unused because
+// `persistSession: false` is set). Pinning an explicit `logsRoot` here lets
+// the assertion target a known-empty tmpdir without touching the harness
+// surface.
+
+describe('comparative scenario: 18-persist-session-false — zero disk writes (OR-only)', () => {
+  it('writes nothing under logsRoot when persistSession is false', async () => {
+    const { mkdtemp, rm, readdir } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { startEmulator } = await import('./emulator/index.js');
+    const { OpenRouterAgentRun } = await import('../../agent.js');
+    const { buildHarnessTools } = await import('./scenarios/_tools.js');
+
+    const scenarioPath = join(SCENARIO_DIR, '18-persist-session-false.json');
+    const scenario = await loadScenario(scenarioPath);
+
+    const logsRoot = await mkdtemp(join(tmpdir(), 'persist-session-false-'));
+    const emu = await startEmulator();
+    for (const entry of scenario.script) {
+      if ((entry.wire ?? 'anthropic') !== 'openresponses') continue;
+      emu.registry.register(entry as Parameters<typeof emu.registry.register>[0]);
+    }
+    const tools = buildHarnessTools(scenario.tools ?? []);
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 30_000).unref();
+
+    try {
+      const run = new OpenRouterAgentRun({
+        apiKey: 'sk-or-emulator-stub',
+        sessionId: `persist-session-false-${Date.now()}`,
+        prompt: scenario.prompt,
+        baseUrl: emu.url,
+        persistSession: false,
+        logsRoot,
+        signal: ac.signal,
+        tools: tools.orTools,
+        model: scenario.model,
+        instructions: scenario.systemPrompt,
+      });
+      for await (const _ev of run) {
+        // discard — the parity claim above already asserts event-stream
+        // correctness; this test's job is the filesystem assertion below.
+      }
+    } finally {
+      await emu.stop();
+    }
+
+    // Phase 3.12's contract: nothing under logsRoot. We assert the directory
+    // tree is empty (`{ withFileTypes: true, recursive: true }` surfaces
+    // both files and any nested dirs the implementation might have created
+    // — a passing run leaves the dir we mkdtemp'd above pristine).
+    const entries = await readdir(logsRoot, { recursive: true, withFileTypes: true });
+    const written = entries.map((e) => (e.parentPath ? `${e.parentPath}/${e.name}` : e.name));
+    expect(
+      written,
+      `persistSession: false must not write under logsRoot; found: ${written.join(', ')}`,
+    ).toEqual([]);
+
+    await rm(logsRoot, { recursive: true, force: true });
+  });
+});
