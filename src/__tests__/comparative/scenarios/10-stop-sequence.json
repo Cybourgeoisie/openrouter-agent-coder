@@ -1,0 +1,76 @@
+{
+  "name": "10-stop-sequence",
+  "description": "Canonical scenario #10: stop_sequence terminal path. Anthropic-side scripted response sets stop_reason='stop_sequence' with stopSequence='###'; OR-side /responses scripted response sets status='completed' with the stop sequence baked into the assistant text (the /responses agent loop has no separate stop-sequence concept — the model's text contains the sequence and the loop terminates normally). The parity claim asserted: both SDKs reach terminal:success and the final assistant text contains the canon stop sequence verbatim (asserted via the comparator's positional event-stream check). Per ambiguity call #5 from issue 127, observed behavior: the Anthropic SDK does NOT strip the matched stop sequence from the assistant text on its way to the host; both sides surface '###' in the final text. If a future SDK update starts stripping, this scenario's final-text comparison would break and the failure would document the change.",
+  "prompt": "List the first 5 prime numbers, one per line. End with ###.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Use the requested terminator.",
+  "tools": [],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:593eb1340bafada8c89aa7868492893da3277008012dac2b99bf1854d40ca2bb",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"List five primes\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 10
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:7926aeefe4b9e9b5ffdd2f0064617af24b33e1d1de56650d73266bd78debdb5c",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "stop_sequence",
+        "stopSequence": "###",
+        "content": [
+          {
+            "type": "text",
+            "text": "2\n3\n5\n7\n11\n###"
+          }
+        ],
+        "usage": {
+          "input_tokens": 35,
+          "output_tokens": 14
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:b64627ccf1af1db13c08a62af8439f0419588f7117ef60a2c3fa4bc8e0924825",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-10-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "2\n3\n5\n7\n11\n###"
+          }
+        ],
+        "usage": {
+          "input_tokens": 35,
+          "output_tokens": 14,
+          "total_tokens": 49
+        }
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact"
+  }
+}

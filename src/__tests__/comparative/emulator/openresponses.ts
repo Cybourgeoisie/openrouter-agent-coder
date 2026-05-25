@@ -38,10 +38,14 @@
 //
 // === What's NOT here (deferred) ===
 //
-//   - Failure injection (mid-stream errors, malformed JSON, truncation, 429).
-//     6.6 owns the failure-scenario set; the `/responses` event vocabulary
-//     differs enough that the failure modes from 6.1/6.2 need a re-think per
-//     wire and a strict 1:1 port would be wrong.
+//   - Failure injection EXCEPT rate_limit_429 (Phase 6.5c carve-out for
+//     scenario #12 — see streamScriptEntry's 429 branch; that mode mirrors
+//     anthropic.ts:111 and openai.ts:271 byte-for-byte at the HTTP layer
+//     so the comparator's retry parity claim can be made across all three
+//     wires). The remaining failure modes (mid-stream errors, malformed
+//     JSON, truncation, etc.) are still deferred to 6.6 — the `/responses`
+//     event vocabulary differs enough that a strict 1:1 port from chat-
+//     completions would be wrong.
 //   - Non-streaming `/responses` (`stream: false`). The agent SDK always
 //     opens a streaming request; stub with 400 like the other adapters do.
 //   - Reasoning / refusal / annotation events. None of #1-#4 need them; if a
@@ -60,6 +64,16 @@ import type {
   OpenResponsesResponse,
   StreamControl,
 } from './script-engine.js';
+
+/**
+ * Format an HTTP-date string for Retry-After when the script supplied a
+ * number (seconds). Both string and number forms are valid per RFC 7231, but
+ * keeping the wire shape identical to Anthropic/OpenAI's `String(retryAfter)`
+ * pattern preserves the SDK-side parse path under test.
+ */
+function formatRetryAfter(retryAfter: string | number): string {
+  return String(retryAfter);
+}
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -445,6 +459,39 @@ async function streamScriptEntry(
   res: ServerResponse,
   entry: OpenResponsesScriptEntry,
 ): Promise<void> {
+  // Phase 6.5c: failure-mode dispatch BEFORE SSE headers are written. 429
+  // returns a synthetous OR error body shape with a `retry-after` header so
+  // the OR SDK's built-in backoff can pick it up and retry. The SDK keys on
+  // HTTP status alone — the body is informational. Mirrors the wire shape of
+  // Anthropic's rate_limit_429 path (anthropic.ts:111) and OpenAI's
+  // (openai.ts:271) so the comparator can assert end-to-end retry parity
+  // against all three adapters once a scenario exercises it.
+  if (entry.kind === 'failure' && entry.failure.type === 'rate_limit_429') {
+    writeJson(
+      res,
+      429,
+      {
+        error: {
+          type: 'rate_limit_exceeded',
+          message: 'Emulator-injected rate-limit (429).',
+        },
+      },
+      { 'retry-after': formatRetryAfter(entry.failure.retryAfter) },
+    );
+    return;
+  }
+
+  // Success path. Failure path above returns directly; nothing else to handle.
+  if (entry.kind !== 'success') {
+    // Defensive — unreachable given the union, but a typed exhaustiveness
+    // check would force a re-think on every new failure mode added below.
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(
+      JSON.stringify({ error: { type: 'emulator_internal', message: 'Unknown entry kind' } }),
+    );
+    return;
+  }
+
   const events = buildOpenResponsesEvents(entry.response, entry.stream);
   const interChunkDelayMs = entry.stream?.interChunkDelayMs ?? 0;
 

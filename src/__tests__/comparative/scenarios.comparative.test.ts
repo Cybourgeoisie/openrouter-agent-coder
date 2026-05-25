@@ -212,6 +212,33 @@ describe('comparative scenario: 07-tool-error-resume — hook order', () => {
   });
 });
 
+// Phase 6.5c: scenario #12 retry assertion. The comparator above asserts that
+// the canonical event streams match (i.e., the 429+retry is invisible at the
+// projection layer); this supplemental check inspects the raw Anthropic
+// transcript for `system:api_retry` messages, proving the SDK ACTUALLY
+// retried. Without this, the scenario could spuriously "pass" if the SDK had
+// some other (unintended) recovery path that bypassed retry but still reached
+// terminal:success — the bytes-on-the-wire claim of "the SDK retries 429" is
+// the load-bearing finding, and the test must check that bytes-on-the-wire
+// directly. The OR side is NOT checked here because its SDK doesn't retry
+// 429 by default (see scenario JSON description for the divergence finding).
+
+describe('comparative scenario: 12-retry-on-429 — retry observed', () => {
+  it('Anthropic transcript carries at least one api_retry message (proves 429 retry path fired)', async () => {
+    const scenarioPath = join(SCENARIO_DIR, '12-retry-on-429.json');
+    const { anthropicTranscript } = await runScenario(scenarioPath, 'emulated');
+    const apiRetryCount = anthropicTranscript.messages.filter(
+      (m) =>
+        (m as { type?: string }).type === 'system' &&
+        (m as { subtype?: string }).subtype === 'api_retry',
+    ).length;
+    expect(
+      apiRetryCount,
+      `Expected at least 1 api_retry message on the Anthropic transcript (proves the SDK retried the scripted 429); got ${apiRetryCount}.`,
+    ).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe('comparative scenario: 08-hook-block-modify — hook order', () => {
   it('emits the hook-block (shell denied before dispatch) sequence in EXACT order on both SDKs', async () => {
     const scenarioPath = join(SCENARIO_DIR, '08-hook-block-modify.json');

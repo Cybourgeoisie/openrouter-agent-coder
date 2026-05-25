@@ -1,0 +1,131 @@
+{
+  "name": "11-malformed-tool-args",
+  "description": "Canonical scenario #11: malformed tool-call args recovery. PARITY FINDING / v1 LIMITATION (ambiguity call: documented gap, deferred-to-follow-up posture per issue 127's recommended call #2) — v1 of this scenario does NOT actually inject truncated/malformed args, because neither the OpenResponses adapter nor the Anthropic adapter ships a 'tool_call_args_malformed' failure mode in their current scripted-success registries. The OpenAI/chat-completions adapter DOES (see emulator/openai.ts:312 `injectMalformedToolArgs`), but the OR SDK posts to /responses (not /v1/chat/completions), so reusing it would never fire. Extending both adapters (a) on the OpenResponses wire to truncate `response.function_call_arguments.delta`, AND (b) on the Anthropic wire to corrupt `input_json_delta`, is a non-trivial change to wire-shape-specific code paths that the issue body suggests are out of scope for v1. Instead, v1 scripts WELL-FORMED args on both wires and asserts that the two SDKs parse + dispatch the lookup tool identically — i.e., the happy-path tool-call parity for the `lookup({query: string})` fixture. The malformed-args parity QUESTION the issue actually wants answered (does SDK X retry, fail loud, or recover?) is the deferred follow-up that adds the missing failure modes to both adapters and re-runs this scenario as a divergence detector. Until then, this scenario serves as the structural placeholder + the lookup-tool registration for the follow-up to extend. See PR body for the full v1 vs. eventual-design comparison.",
+  "prompt": "Look up the meaning of 'parity'.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Use the lookup tool when asked about word meanings.",
+  "tools": ["lookup"],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:ddf63f254b9928f08dbe9445c28f848ee43f615ec469927b69c1674825818159",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"Look up parity\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 10
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:1949e7019d2a220e82caaf6172f71b8d6721c1275f063576634112b7690d10b4",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "tool_use",
+        "content": [
+          {
+            "type": "text",
+            "text": "Looking up parity."
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_11a",
+            "name": "mcp__harness__lookup",
+            "input": {
+              "query": "parity"
+            }
+          }
+        ],
+        "usage": {
+          "input_tokens": 60,
+          "output_tokens": 18
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:56eb998a69d9cb2ed0165cba4601c840a4979fa23c215c41b7052019640fa590",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "Parity means: definition of parity: stub meaning."
+          }
+        ],
+        "usage": {
+          "input_tokens": 110,
+          "output_tokens": 14
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:1c3d48cae574315ab122cd77cbb622b70c198e23ae5ef00578b30274a5a24d53",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-11-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Looking up parity."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_lookup_0",
+            "name": "lookup",
+            "arguments": "{\"query\":\"parity\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 60,
+          "output_tokens": 18,
+          "total_tokens": 78
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:124f6fe3e29f3a469162ed54d8332f9621107aacfc2e119bce0f94f89ce1e7b5",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-11-1",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Parity means: definition of parity: stub meaning."
+          }
+        ],
+        "usage": {
+          "input_tokens": 110,
+          "output_tokens": 14,
+          "total_tokens": 124
+        }
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact"
+  }
+}
