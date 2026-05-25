@@ -32,11 +32,7 @@ async function writeSkill(
 
 async function writePluginManifest(root: string, manifest: object): Promise<void> {
   await mkdir(join(root, '.claude-plugin'), { recursive: true });
-  await writeFile(
-    join(root, '.claude-plugin', 'plugin.json'),
-    JSON.stringify(manifest),
-    'utf8',
-  );
+  await writeFile(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify(manifest), 'utf8');
 }
 
 describe('loadPlugins — manifest validation', () => {
