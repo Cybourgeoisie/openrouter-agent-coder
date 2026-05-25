@@ -27,6 +27,12 @@ export type OrTranscript = {
    * scenario failure or expected. Stringified with `error.stack` if present.
    */
   readonly thrown?: string;
+  /**
+   * Phase 6.7: sum of `costUsd` observed on this side's events. Live-mode
+   * smoke runs use this for the per-scenario budget cap and for workflow
+   * aggregate reporting. Emulated runs report 0 (the emulator never charges).
+   */
+  readonly costUsd?: number;
 };
 
 /**
@@ -45,11 +51,24 @@ export type AnthropicTranscript = {
   readonly wire: 'anthropic';
   readonly messages: ReadonlyArray<Record<string, unknown>>;
   readonly thrown?: string;
+  /**
+   * Phase 6.7: sum of `total_cost_usd` observed on Anthropic-side `result`
+   * messages. Live-mode smoke runs use this for the per-scenario budget cap
+   * and for workflow aggregate reporting. Emulated runs report 0.
+   */
+  readonly costUsd?: number;
 };
 
 export type ScenarioTranscripts = {
   readonly orTranscript: OrTranscript;
   readonly anthropicTranscript: AnthropicTranscript;
+  /**
+   * Phase 6.7: set to `true` when the harness observed a `maxCostUsd` breach
+   * mid-run and aborted both SDKs. Live-mode smoke drivers surface this as a
+   * "flaky-scenario" warning (not a hard fail). Always `false` in emulated
+   * mode (no cost incurred).
+   */
+  readonly costBreach?: boolean;
 };
 
 // ----- Masking helpers (capture-time nondeterminism scrubbers) -----

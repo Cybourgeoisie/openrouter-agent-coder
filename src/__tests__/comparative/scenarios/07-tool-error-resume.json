@@ -184,5 +184,6 @@
   "comparator": {
     "mode": "exact",
     "tolerateToolResultIsError": true
-  }
+  },
+  "liveSmoke": true
 }

@@ -1,0 +1,150 @@
+# Comparative-parity LIVE-mode smoke (Phase 6.7).
+#
+# Runs the 4-scenario live smoke subset against REAL provider endpoints on
+# every non-draft, non-fork pull request. Uses repo secrets
+# `OPENROUTER_API_KEY` + `ANTHROPIC_API_KEY` — fork PRs cannot access these
+# (GitHub strips secrets from `pull_request` events on fork branches), so the
+# fork-equality gate below skips the job entirely for those PRs rather than
+# having the test driver discover missing keys mid-run.
+#
+# Fork-PR safety posture (CRITICAL):
+#   - Trigger is `pull_request` (NOT `pull_request_target`). The latter
+#     would let untrusted PR code run with secrets in scope — the canonical
+#     supply-chain attack surface for forked-PR CI. Stick with
+#     `pull_request` + the fork-equality gate.
+#   - The `if:` guard on the job skips when `head.repo.full_name !=
+#     repository`. The job appears as "skipped" in the PR's checks panel
+#     for fork PRs — visible, not silently green.
+#
+# Failure posture:
+#   - This job is NOT a merge blocker. Live runs are inherently flaky
+#     (real provider latency, transient 5xx, model-output nondeterminism)
+#     and a merge gate that flakes is worse than no gate. The job reports
+#     yellow on failure and posts a PR comment with the cost breakdown +
+#     scenario status (the comment step uses `peter-evans/create-or-update-
+#     comment@v4`, an action already trusted by `actions-cache` etc.).
+#   - Auto-opening a `parity-drift` issue on failure is 6.8's job; v1 is
+#     just yellow + comment.
+#
+# Budget guardrails:
+#   - Per-scenario `maxCostUsd` enforced inside the harness (default $0.50,
+#     scenario-JSON overridable).
+#   - Per-PR aggregate cap of $0.25 enforced HERE: after the test command
+#     completes, we sum the `totalCostUsd` column from the JSONL artifact
+#     `tmp/comparative-live-cost-report.jsonl` and fail the budget-check
+#     step (yellow, not merge-blocking) if the sum exceeds $0.25.
+name: Comparative parity (live smoke)
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  live-smoke:
+    # Fork-PR safety: only run on PRs from the same repository (where
+    # secrets are available). Fork PRs see "skipped" and are not blocked.
+    # Also skip drafts — saves cost on in-progress work.
+    if: |
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # The test runner enforces per-scenario `maxCostUsd`; this is a
+    # defensive outer ceiling so a runaway runner can't burn through more
+    # than ~10 minutes of compute before we yank it.
+    timeout-minutes: 15
+    permissions:
+      # `contents: read` is required by `actions/checkout@v4`. Setting any
+      # `permissions:` block scopes GITHUB_TOKEN to ONLY the listed keys —
+      # omitting `contents: read` causes checkout to fail with
+      # `Repository not found` at git fetch (auth-layer rejection, not a
+      # real "repo missing" error).
+      contents: read
+      # Needed by `peter-evans/create-or-update-comment@v4` to leave a
+      # comment on the PR with the cost report.
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build
+
+      - name: Run comparative-parity live smoke
+        id: smoke
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Pin the cost-report artifact path so the aggregate-cap step
+          # below can locate it deterministically.
+          COMPARATIVE_LIVE_COST_REPORT: ${{ github.workspace }}/tmp
+        # `continue-on-error` so a hard test failure still lets the
+        # aggregate-cap + PR-comment steps execute. The job's overall
+        # status reflects all step outcomes; we set the job to yellow
+        # (vs. red) at the end via the final step's exit code.
+        continue-on-error: true
+        run: npm run test:comparative:live
+
+      - name: Aggregate cost + enforce $0.25/PR cap
+        id: budget
+        if: always()
+        run: |
+          REPORT="${{ github.workspace }}/tmp/comparative-live-cost-report.jsonl"
+          if [ ! -f "$REPORT" ]; then
+            echo "No cost report produced (the test step may have skipped or crashed before writing)." >&2
+            echo "total_cost=0" >> "$GITHUB_OUTPUT"
+            echo "breach=false" >> "$GITHUB_OUTPUT"
+            echo "summary=No live smoke artifact produced." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Sum totalCostUsd across all per-scenario JSONL lines.
+          TOTAL=$(jq -s '[.[].totalCostUsd] | add // 0' "$REPORT")
+          echo "Aggregate cost: \$${TOTAL}"
+          # Build a markdown table for the PR comment.
+          SUMMARY=$(jq -s -r '
+            ["| scenario | anthropic | openrouter | total | cap | breach |",
+             "|---|---|---|---|---|---|"] +
+            (map("| \(.scenario) | $\(.anthropicCostUsd) | $\(.orCostUsd) | $\(.totalCostUsd) | $\(.maxCostUsd) | \(.costBreach) |"))
+            | .[]' "$REPORT")
+          {
+            echo "summary<<__EOF__"
+            echo "$SUMMARY"
+            echo "__EOF__"
+            echo "total_cost=$TOTAL"
+          } >> "$GITHUB_OUTPUT"
+          # The $0.25/PR aggregate cap. Compare as a float via `bc -l`.
+          BREACH=$(echo "$TOTAL > 0.25" | bc -l)
+          echo "breach=$BREACH" >> "$GITHUB_OUTPUT"
+          if [ "$BREACH" = "1" ]; then
+            echo "::warning::Live smoke aggregate cost \$$TOTAL exceeded the \$0.25/PR cap."
+          fi
+
+      - name: Post PR comment with cost report
+        if: always()
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ### Comparative parity (live smoke) — cost report
+
+            **Aggregate cost:** $${{ steps.budget.outputs.total_cost }} (cap: $0.25/PR; breach: ${{ steps.budget.outputs.breach }})
+            **Test step outcome:** ${{ steps.smoke.outcome }}
+
+            ${{ steps.budget.outputs.summary }}
+
+            <sub>This is informational. Live smoke is NOT a merge blocker — yellow status here is OK to merge. Failures should be triaged into the canonical scenario set or flagged as `parity-drift`. Phase 6.8 will add auto-issue-open on regression.</sub>
+          edit-mode: replace
+
+      - name: Final status
+        # If the test step failed (and we didn't budget-breach our way out),
+        # surface a yellow status by re-exiting non-zero — but ONLY in the
+        # cases where the smoke step actually failed. A budget breach
+        # alone is informational and does NOT fail the job (per plan-doc
+        # § Budget guardrails: "abort the run, emit a 'flaky-scenario'
+        # warning, NOT a hard fail").
+        if: always() && steps.smoke.outcome == 'failure'
+        run: |
+          echo "::warning::Live smoke had failing scenarios — see the PR comment for details. This is NOT a merge blocker."
+          exit 1

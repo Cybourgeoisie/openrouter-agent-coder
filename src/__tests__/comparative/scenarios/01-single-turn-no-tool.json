@@ -44,5 +44,6 @@
       }
     }
   ],
-  "comparator": { "mode": "exact" }
+  "comparator": { "mode": "exact" },
+  "liveSmoke": true
 }
