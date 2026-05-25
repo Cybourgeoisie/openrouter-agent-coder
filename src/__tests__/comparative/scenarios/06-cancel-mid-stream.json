@@ -1,0 +1,95 @@
+{
+  "name": "06-cancel-mid-stream",
+  "description": "Canonical scenario #6: mid-stream cancellation. A deliberately-slow streaming response (chunkSize 2, interChunkDelayMs 50) gives the harness time to call abortController.abort() after a few chunks have been observed on each SDK. Per-SDK thresholds are independent because the two SDKs emit events at different granularities (OR yields one text_delta per chunk; Anthropic yields one assistant message carrying the full text). The parity claim under cancellation is: both runs were terminated cleanly (no socket leaks, the in-flight HTTP request is torn down) and both produced the same canonical hookOrder up to the abort point. Final-text positional equality is NOT a parity claim here — the cancel mid-stream means the captured text differs by SDK chunking granularity. The comparator's skipEventStreamCheck / skipTerminalCheck / ignoreThrown handle the structural asymmetry; the hook-order EXACT check (always-on) is the load-bearing parity assertion.",
+  "prompt": "Count from 1 to 100 slowly.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant.",
+  "tools": [],
+  "cancellation": {
+    "afterEventsAnthropic": 2,
+    "afterEventsOr": 5
+  },
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:5e94325a138cc98d98bab53e3ec3eb2d8b0348cc86a86d79efe7ffcbea19daa8",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"Count 1 to 100 slowly\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 10
+        }
+      },
+      "stream": {
+        "chunkSize": 2,
+        "interChunkDelayMs": 50
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:5956ba05acecbdd7e49fba6bd01519d246f638e67585dcb7c89d181c9146ae6a",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100"
+          }
+        ],
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 300
+        }
+      },
+      "stream": {
+        "chunkSize": 2,
+        "interChunkDelayMs": 50
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:c33d66c52f4564cd023129c4fb9113cc8eb82271542e9bc6f7ef76d26331cfae",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-06-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100"
+          }
+        ],
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 300,
+          "total_tokens": 320
+        }
+      },
+      "stream": {
+        "chunkSize": 2,
+        "interChunkDelayMs": 50
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "tolerant",
+    "ignoreThrown": true,
+    "skipTerminalCheck": true,
+    "skipEventStreamCheck": true,
+    "finalTextAssertion": null
+  }
+}

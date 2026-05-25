@@ -168,7 +168,16 @@ export function canonicalizeOr(
         break;
       case 'stream_complete': {
         closeBracketIfOpen();
-        terminalStatus = ev.status;
+        // Phase 6.5b: map `status: 'error'` + `reason: 'aborted'` to a
+        // canonical `terminal:aborted` so the cancellation scenario's
+        // Anthropic-side synthetic `terminal:aborted` (emitted when the SDK
+        // throws and never produces a `result` message) aligns with what
+        // the OR side reports. Other error statuses (genuine runtime
+        // failures, max_turns, etc.) keep their literal status string.
+        const isAbort =
+          ev.status === 'error' && typeof ev.reason === 'string' && /abort/i.test(ev.reason);
+        const canonicalStatus = isAbort ? 'aborted' : ev.status;
+        terminalStatus = canonicalStatus;
         // `stream_complete.usage` carries the LAST turn's usage. The
         // Anthropic side reads per-turn usage off the final assistant
         // message (NOT cumulative `result.usage`), so both sides agree at
@@ -176,8 +185,8 @@ export function canonicalizeOr(
         // asymmetric between the two SDKs and trying to compare cumulatively
         // would force divergence the comparator can't actually assert.
         const usage = ev.usage ? orUsageToCanon(ev.usage) : tokenUsage;
-        events.push({ type: 'terminal', status: ev.status, usage });
-        hookOrder.push(`terminal:${ev.status}`);
+        events.push({ type: 'terminal', status: canonicalStatus, usage });
+        hookOrder.push(`terminal:${canonicalStatus}`);
         tokenUsage = usage;
         break;
       }
@@ -325,6 +334,36 @@ export function canonicalizeAnthropic(
       continue;
     }
 
+    // Phase 6.5b: project `stream_event` (partial-message) deltas the SAME
+    // way OR's per-chunk `text_delta` projects — open a bracket on first
+    // content delta, emit one `text` per content_block_delta, no hookOrder
+    // push for individual deltas (matches OR's text_delta projection which
+    // doesn't push hookOrder either). Without this projection, cancellation
+    // scenarios with `includePartialMessages: true` would emit only
+    // [session_start] on the Anthropic side while OR emits a full
+    // [session_start, turn_start, ..., turn_end, terminal:error] sequence
+    // — the comparator's exact hookOrder check can't pass on that asymmetry.
+    // Non-cancellation scenarios don't enable partial messages, so this path
+    // is a no-op for the happy-path scenarios #1-#5/#7/#8.
+    if (type === 'stream_event') {
+      const event = msg.event as Record<string, unknown> | undefined;
+      const eventType = event?.type as string | undefined;
+      if (eventType === 'content_block_delta') {
+        const delta = event!.delta as Record<string, unknown> | undefined;
+        if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+          if (!turnOpen) {
+            const turnNumber = events.filter((e) => e.type === 'turn_start').length;
+            events.push({ type: 'turn_start', turnNumber });
+            hookOrder.push('turn_start');
+            turnOpen = true;
+          }
+          textParts.push(delta.text);
+          events.push({ type: 'text', text: delta.text });
+        }
+      }
+      continue;
+    }
+
     if (type === 'result') {
       closeTurn();
       const subtype = (msg.subtype as string | undefined) ?? 'success';
@@ -360,6 +399,17 @@ export function canonicalizeAnthropic(
   // open turn so the projection's event count is well-formed for the
   // comparator.
   closeTurn();
+
+  // Phase 6.5b: when the SDK threw (cancellation) and no `result` message
+  // arrived, synthesize a terminal:aborted event so the canonical stream
+  // ends with a terminal entry. The OR side emits `terminal:error` from its
+  // `stream_complete` event on abort; we project both to `terminal:aborted`
+  // for parity (see `canonicalizeOr` below for the matching map).
+  if (transcript.thrown && terminalStatus === null) {
+    terminalStatus = 'aborted';
+    events.push({ type: 'terminal', status: 'aborted', usage: tokenUsage });
+    hookOrder.push('terminal:aborted');
+  }
 
   return {
     events,

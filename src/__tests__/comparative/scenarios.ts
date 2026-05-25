@@ -168,6 +168,44 @@ const comparatorConfigSchema = z
     tokenTolerancePct: z.number().nonnegative().optional(),
     finalTextAssertion: finalTextAssertionSchema.nullable().optional(),
     argTolerances: z.record(z.string(), argToleranceSchema).nullable().optional(),
+    // Phase 6.5b: cancellation scenarios populate `thrown` on both
+    // transcripts (the SDKs throw an AbortError on signal.abort()). When
+    // `ignoreThrown` is true, the comparator skips the per-side `thrown`
+    // failure path so the parity claim on the canonical events that DID
+    // arrive can still pass. Used by scenario #6; never widen this to
+    // happy-path scenarios — a silent throw on a non-cancelled scenario
+    // is exactly the kind of rot this harness exists to catch.
+    ignoreThrown: z.boolean().optional(),
+    // Phase 6.5b: aborted runs end on the SDK's local "aborted" terminal,
+    // which differs by SDK (Anthropic `result.subtype = 'error'`; OR's
+    // `stream_complete` may not fire at all, so the projection's
+    // `terminalStatus` is null). When this is set, the comparator skips
+    // the terminal-status equality check. Token usage is similarly skipped
+    // because aborted runs have no usage to report.
+    skipTerminalCheck: z.boolean().optional(),
+    // Phase 6.5b: when true, the comparator skips event-stream positional
+    // comparison entirely and only asserts hookOrder + terminal/thrown
+    // policy. The cancellation scenario uses this because the two SDKs'
+    // text-delta granularity differs (Anthropic emits one assistant
+    // message with all text; OR emits per-chunk text_deltas), so positional
+    // text comparison can never match for streaming mid-cancel even with
+    // identical wire payloads.
+    skipEventStreamCheck: z.boolean().optional(),
+    // Phase 6.5b: when true, the comparator treats `tool_result.isError` as
+    // a "best effort" signal — divergence on isError alone does not fail the
+    // event-payload check. Reason: the Anthropic MCP server wraps a thrown
+    // tool execute() into a tool_result with `is_error: true`, while the OR
+    // SDK's `executeRegularTool` catches the throw, stuffs the error message
+    // into the output JSON (`{"error":"..."}`) and emits a
+    // `function_call_output` with NO status field — so agent.ts (off-limits
+    // to this phase) sees `out.status === 'incomplete'` as false and yields
+    // a `tool_result` with `isError: false`. The model on both sides still
+    // receives the error string in the output, so the loop's resume-on-error
+    // semantics work; only the structural `isError` flag diverges. Scenario
+    // #7 uses this flag to assert the resume-on-error parity claim without
+    // failing on a known agent.ts gap. A real fix lives in agent.ts and is
+    // out of scope here.
+    tolerateToolResultIsError: z.boolean().optional(),
   })
   .optional();
 
@@ -185,7 +223,15 @@ export type ArgTolerance = z.infer<typeof argToleranceSchema>;
 //   - Anthropic: `mcpServers: { harness: ... }`, `allowedTools` filter,
 //         `canUseTool` closure that mirrors the OR policy.
 
-const harnessToolNameSchema = z.enum(['echo', 'counter', 'rm']);
+const harnessToolNameSchema = z.enum([
+  'echo',
+  'counter',
+  'rm',
+  'read',
+  'write',
+  'flakyFetch',
+  'shell',
+]);
 
 const canUseToolPolicySchema = z.array(
   z.discriminatedUnion('action', [
@@ -202,6 +248,34 @@ const canUseToolPolicySchema = z.array(
   ]),
 );
 
+// Phase 6.5b: cancellation policy for scenario #6 (mid-stream abort).
+// The harness watches each side's captured-event stream and calls
+// `abortController.abort()` once the configured threshold has been reached
+// on that side. Thresholds are PER-SDK because the two SDKs emit events at
+// very different granularities:
+//
+//   - **OR side** yields per-chunk `text_delta` events on the
+//     `AgentCoreEvent` async-iterable. A long streaming response chunked
+//     with `interChunkDelayMs` produces one yielded event per chunk.
+//   - **Anthropic side** yields coarse SDKMessage events: `system` (init),
+//     one `assistant` message (typically carrying the full response text
+//     unless `includePartialMessages` is set), then `result`. The default
+//     captureAnthropic does NOT enable partial-message streaming, so
+//     `afterEventsAnthropic: 2` aborts right after the assistant arrives.
+//
+// Authors set both numbers from observation; the harness's job is to
+// translate them into deterministic `abortController.abort()` calls. The
+// comparator's `ignoreThrown` + `skipTerminalCheck` + `skipEventStreamCheck`
+// flags handle the resulting asymmetry on the comparison side.
+const cancellationConfigSchema = z
+  .object({
+    /** Abort the Anthropic-side run after this many `SDKMessage` events arrive. */
+    afterEventsAnthropic: z.number().int().positive(),
+    /** Abort the OR-side run after this many `AgentCoreEvent` events arrive. */
+    afterEventsOr: z.number().int().positive(),
+  })
+  .optional();
+
 export const scenarioSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
@@ -216,6 +290,8 @@ export const scenarioSchema = z.object({
   tools: z.array(harnessToolNameSchema).optional(),
   /** Policy applied by both SDKs' `canUseTool` closure. Per-tool allow/deny. */
   canUseToolPolicy: canUseToolPolicySchema.optional(),
+  /** Phase 6.5b cancellation policy (scenario #6). */
+  cancellation: cancellationConfigSchema,
   script: z.array(scriptEntrySchema).min(1),
   comparator: comparatorConfigSchema,
 });

@@ -216,6 +216,18 @@ async function captureAnthropic(
         settingSources: [],
         ...(scenario.model && { model: scenario.model }),
         ...(scenario.systemPrompt && { systemPrompt: scenario.systemPrompt }),
+        // Phase 6.5b: enable per-chunk message events when a cancellation
+        // policy is set. The Anthropic SDK normally buffers the streaming
+        // response and emits ONE coalesced `assistant` message; without
+        // partial events the harness can only observe the request after it
+        // completes, so an `afterEventsAnthropic` abort fires post-stream
+        // instead of mid-stream and the scenario can't exercise its target
+        // behavior. `includePartialMessages: true` opts into per-chunk
+        // `stream_event`/`partial_assistant` messages so the abort lands at
+        // the intended chunk boundary. The wire request body is unaffected
+        // — partial-messages is a client-side toggle — so canonical hashes
+        // stay stable.
+        ...(scenario.cancellation && { includePartialMessages: true }),
         ...(tools.anthropicMcpServer && {
           mcpServers: { [tools.anthropicMcpServer.name]: tools.anthropicMcpServer },
         }),
@@ -225,8 +237,19 @@ async function captureAnthropic(
         ...(canUseTool && { canUseTool }),
       },
     });
+    const cancelAfter = scenario.cancellation?.afterEventsAnthropic;
     for await (const msg of q) {
       messages.push(maskNondeterminism(msg as unknown as Record<string, unknown>));
+      // Phase 6.5b: mid-stream cancellation. We trigger the abort from the
+      // capture loop AFTER the Nth message has been pushed — so the
+      // transcript captures the trigger-point event, the SDK observes the
+      // signal on its next read, and the iterator surfaces an AbortError.
+      // Per-SDK threshold (not shared) so each side cancels at its own
+      // observable boundary; see the cancellation block on `scenarioSchema`
+      // for why event granularity differs between SDKs.
+      if (cancelAfter !== undefined && messages.length >= cancelAfter) {
+        abortController.abort();
+      }
     }
   } catch (err) {
     if (timeoutHit) {
@@ -299,8 +322,17 @@ async function captureOpenRouter(
       ...(scenario.systemPrompt && { instructions: scenario.systemPrompt }),
       ...(canUseTool && { canUseTool }),
     });
+    const cancelAfter = scenario.cancellation?.afterEventsOr;
     for await (const event of run) {
       events.push(maskNondeterminism(event));
+      // Phase 6.5b: same per-SDK abort-after-N-events pattern as the
+      // Anthropic side (see captureAnthropic). Each side cancels at its own
+      // observable boundary; thresholds in the JSON are independent because
+      // OR emits per-chunk `text_delta` events while Anthropic batches text
+      // into one `assistant` message.
+      if (cancelAfter !== undefined && events.length >= cancelAfter) {
+        abortController.abort();
+      }
     }
   } catch (err) {
     if (timeoutHit) {
