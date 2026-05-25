@@ -3,6 +3,12 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['src/**/*.test.ts'],
+    // The comparative-parity suite (Phase 6.3+) lives under
+    // `src/__tests__/comparative/` and uses the `.comparative.test.ts` suffix.
+    // It spawns the @anthropic-ai/claude-agent-sdk subprocess (cold-start +
+    // internal retry loop) so it is deliberately excluded from the default
+    // unit-test run and exercised via `vitest.comparative.config.ts`.
+    exclude: ['node_modules', 'dist', 'src/__tests__/comparative/**/*.comparative.test.ts'],
     testTimeout: 10_000,
     fileParallelism: false,
     coverage: {
