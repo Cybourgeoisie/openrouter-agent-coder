@@ -54,6 +54,12 @@ jobs:
     # than ~10 minutes of compute before we yank it.
     timeout-minutes: 15
     permissions:
+      # `contents: read` is required by `actions/checkout@v4`. Setting any
+      # `permissions:` block scopes GITHUB_TOKEN to ONLY the listed keys —
+      # omitting `contents: read` causes checkout to fail with
+      # `Repository not found` at git fetch (auth-layer rejection, not a
+      # real "repo missing" error).
+      contents: read
       # Needed by `peter-evans/create-or-update-comment@v4` to leave a
       # comment on the PR with the cost report.
       pull-requests: write
