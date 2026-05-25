@@ -34,18 +34,42 @@ const scenarios = readdirSync(SCENARIO_DIR)
 
 describe.each(scenarios)('comparative scenario: $name', ({ path }) => {
   it('passes the comparator in emulated mode', async () => {
+    const scenario = await loadScenario(path);
     const { anthropicTranscript, orTranscript } = await runScenario(path, 'emulated');
 
     // Surface harness-level throws as a test failure with the captured
     // `thrown` text so the developer doesn't have to dig through the
-    // failure dump to figure out what crashed.
-    expect(
-      anthropicTranscript.thrown,
-      `Anthropic side threw:\n${anthropicTranscript.thrown}`,
-    ).toBeUndefined();
-    expect(orTranscript.thrown, `OR side threw:\n${orTranscript.thrown}`).toBeUndefined();
+    // failure dump to figure out what crashed. Phase 6.5b cancellation
+    // scenarios (#6) deliberately abort both SDKs mid-stream, populating
+    // `thrown` with an AbortError; the comparator's `ignoreThrown` carries
+    // the parity claim. For those scenarios we still inspect the throw
+    // payload so a non-abort error (which would indicate genuine plumbing
+    // breakage) still fails the test, but a benign abort path is allowed.
+    const cancelling = scenario.comparator?.ignoreThrown === true;
+    if (!cancelling) {
+      expect(
+        anthropicTranscript.thrown,
+        `Anthropic side threw:\n${anthropicTranscript.thrown}`,
+      ).toBeUndefined();
+      expect(orTranscript.thrown, `OR side threw:\n${orTranscript.thrown}`).toBeUndefined();
+    } else {
+      // Defensive: confirm the throw, if any, looks abort-flavored — guards
+      // against a future regression where the SDK starts throwing for a
+      // different reason and the comparator's ignoreThrown silently masks it.
+      const ABORT_PATTERN = /abort|cancel/i;
+      if (anthropicTranscript.thrown) {
+        expect(
+          anthropicTranscript.thrown,
+          `Anthropic threw a non-abort error:\n${anthropicTranscript.thrown}`,
+        ).toMatch(ABORT_PATTERN);
+      }
+      if (orTranscript.thrown) {
+        expect(orTranscript.thrown, `OR threw a non-abort error:\n${orTranscript.thrown}`).toMatch(
+          ABORT_PATTERN,
+        );
+      }
+    }
 
-    const scenario = await loadScenario(path);
     const result = await compareTranscriptsFromScenario(
       scenario,
       anthropicTranscript,
@@ -108,5 +132,106 @@ describe('comparative scenario: 04-permission-denial — hook order', () => {
 
     expect(anthHook).toEqual(expected);
     expect(orHook).toEqual(expected);
+  });
+});
+
+// ----- Phase 6.5b: exact hook-order pins for canonical scenarios #5–#8 ----
+//
+// Per the plan doc + issue body, hook firing order is the load-bearing parity
+// claim and MUST be asserted exactly on every scenario in the canonical set
+// — the comparator's hook_order check already does this, but pinning the
+// expected sequences here in addition prevents a future weakening of the
+// comparator from silently rotting the contract.
+
+describe('comparative scenario: 05-plan-mode-readonly — hook order', () => {
+  it('emits the plan-mode (read passes / write denied) hook sequence in EXACT order on both SDKs', async () => {
+    const scenarioPath = join(SCENARIO_DIR, '05-plan-mode-readonly.json');
+    const { anthropicTranscript, orTranscript } = await runScenario(scenarioPath, 'emulated');
+    const { canonicalizeAnthropic, canonicalizeOr } = await import('./canonicalize.js');
+    const expected = [
+      'session_start',
+      'turn_start',
+      'tool_call:read', // read passes the filter, dispatches
+      'turn_end',
+      'tool_result',
+      'turn_start',
+      'tool_call:write', // write filtered, short-circuited
+      'turn_end',
+      'tool_result',
+      'turn_start',
+      'turn_end',
+      'terminal:success',
+    ];
+    expect(canonicalizeAnthropic(anthropicTranscript).hookOrder).toEqual(expected);
+    expect(canonicalizeOr(orTranscript).hookOrder).toEqual(expected);
+  });
+});
+
+describe('comparative scenario: 06-cancel-mid-stream — hook order', () => {
+  it('emits the cancellation hook sequence in EXACT order on both SDKs', async () => {
+    const scenarioPath = join(SCENARIO_DIR, '06-cancel-mid-stream.json');
+    const { anthropicTranscript, orTranscript } = await runScenario(scenarioPath, 'emulated');
+    const { canonicalizeAnthropic, canonicalizeOr } = await import('./canonicalize.js');
+    // Both sides: session → opened-turn (synthesized) → closed-turn (synthesized)
+    // → synthetic terminal:aborted. Anthropic's terminal:aborted is emitted by
+    // canonicalizeAnthropic when transcript.thrown is set and no `result`
+    // arrived; OR's comes from canonicalizeOr's stream_complete{status:error,
+    // reason:aborted} → 'aborted' remap.
+    const expected = ['session_start', 'turn_start', 'turn_end', 'terminal:aborted'];
+    expect(canonicalizeAnthropic(anthropicTranscript).hookOrder).toEqual(expected);
+    expect(canonicalizeOr(orTranscript).hookOrder).toEqual(expected);
+  });
+});
+
+describe('comparative scenario: 07-tool-error-resume — hook order', () => {
+  it('emits the throw-and-retry hook sequence in EXACT order on both SDKs', async () => {
+    const scenarioPath = join(SCENARIO_DIR, '07-tool-error-resume.json');
+    const { anthropicTranscript, orTranscript } = await runScenario(scenarioPath, 'emulated');
+    const { canonicalizeAnthropic, canonicalizeOr } = await import('./canonicalize.js');
+    // Turn 0: tool_call(flakyFetch) → tool_result(isError=true on Anthropic,
+    // false on OR per known agent.ts gap documented on the comparator's
+    // `tolerateToolResultIsError` flag).
+    // Turn 1: retry tool_call → tool_result(isError=false on both).
+    // Turn 2: text summary → terminal:success.
+    const expected = [
+      'session_start',
+      'turn_start',
+      'tool_call:flakyFetch',
+      'turn_end',
+      'tool_result',
+      'turn_start',
+      'tool_call:flakyFetch',
+      'turn_end',
+      'tool_result',
+      'turn_start',
+      'turn_end',
+      'terminal:success',
+    ];
+    expect(canonicalizeAnthropic(anthropicTranscript).hookOrder).toEqual(expected);
+    expect(canonicalizeOr(orTranscript).hookOrder).toEqual(expected);
+  });
+});
+
+describe('comparative scenario: 08-hook-block-modify — hook order', () => {
+  it('emits the hook-block (shell denied before dispatch) sequence in EXACT order on both SDKs', async () => {
+    const scenarioPath = join(SCENARIO_DIR, '08-hook-block-modify.json');
+    const { anthropicTranscript, orTranscript } = await runScenario(scenarioPath, 'emulated');
+    const { canonicalizeAnthropic, canonicalizeOr } = await import('./canonicalize.js');
+    // PreToolUse fires (tool_call observed in the stream), dispatch never
+    // happens (no execute() entry — the denial short-circuits at canUseTool),
+    // tool_result returns isError=true with the canon denial message, model
+    // adapts in the next turn.
+    const expected = [
+      'session_start',
+      'turn_start',
+      'tool_call:shell',
+      'turn_end',
+      'tool_result',
+      'turn_start',
+      'turn_end',
+      'terminal:success',
+    ];
+    expect(canonicalizeAnthropic(anthropicTranscript).hookOrder).toEqual(expected);
+    expect(canonicalizeOr(orTranscript).hookOrder).toEqual(expected);
   });
 });

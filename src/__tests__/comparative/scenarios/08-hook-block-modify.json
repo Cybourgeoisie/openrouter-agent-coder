@@ -1,0 +1,138 @@
+{
+  "name": "08-hook-block-modify",
+  "description": "Canonical scenario #8: hook block-and-modify. Phase 3.7 parity — a host-side filter denies the shell tool before dispatch. Modeled via canUseToolPolicy (same mechanism as scenarios #4 and #5) with the shell tool unconditionally denied for this scenario; the canon shell invocation is `rm foo.txt` so the effective behavior matches the issue body's 'denies any cmd starting with rm'. Hook firing order: PreToolUse fires (the deny decision is observable as the tool_call event), dispatch never happens (the tool's execute is never reached), tool_result returns is_error=true with the canon denial message, and the model adapts in the next text turn.",
+  "prompt": "Use shell to remove the file foo.txt.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Use the tools provided.",
+  "tools": ["shell"],
+  "canUseToolPolicy": [
+    {
+      "tool": "shell",
+      "action": "deny",
+      "message": "Shell commands starting with rm are denied by policy."
+    }
+  ],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:15840b56b5d3253a078293c5fc9efbfe884b09abd2c4bbebc5276aa90e1cac22",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"Shell rm foo.txt request\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 10
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:19b306d0f9036ea4ea91d49c5d1b6963ce65d667da23ca86261854875b762624",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "tool_use",
+        "content": [
+          {
+            "type": "text",
+            "text": "Removing foo.txt."
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_08a",
+            "name": "mcp__harness__shell",
+            "input": {
+              "cmd": "rm foo.txt"
+            }
+          }
+        ],
+        "usage": {
+          "input_tokens": 55,
+          "output_tokens": 18
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:93849cc6bf0239d27ce18d267360f366c0512fe825fa343339ca51c0e6cc2a98",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "I cannot run that — shell rm commands are denied by policy."
+          }
+        ],
+        "usage": {
+          "input_tokens": 90,
+          "output_tokens": 16
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:e5af1da8f3612358b7a009bb5f8ac082c3b62e1ae8724eb14aea3462964ce07d",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-08-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Removing foo.txt."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_shell_0",
+            "name": "shell",
+            "arguments": "{\"cmd\":\"rm foo.txt\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 55,
+          "output_tokens": 18,
+          "total_tokens": 73
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:9a36738685409d874596733353a120093932d687aa364dd58a7a92200331b741",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-08-1",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "I cannot run that — shell rm commands are denied by policy."
+          }
+        ],
+        "usage": {
+          "input_tokens": 90,
+          "output_tokens": 16,
+          "total_tokens": 106
+        }
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact"
+  }
+}

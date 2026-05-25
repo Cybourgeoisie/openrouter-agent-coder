@@ -1,6 +1,7 @@
 // Shared tool fixtures for the canonical comparative-parity scenarios
 // (Phase 6.5a). Recommended ambiguity call #3: one file, three tool shapes,
-// reused across scenarios — `echo`, `counter`, `rm`.
+// reused across scenarios — `echo`, `counter`, `rm`. Phase 6.5b extends the
+// registry with `read`, `write`, `flakyFetch`, `shell` for scenarios #5–#8.
 //
 // Each tool ships TWO definitions because the SDKs declare tools through
 // different surfaces:
@@ -94,6 +95,72 @@ function orRm(): OrTool {
   });
 }
 
+// Phase 6.5b additions: read / write / flakyFetch / shell. All scripted-only
+// — they never touch the real filesystem or network. `flakyFetch` is the only
+// one with per-scenario state; the rest are pure stubs.
+
+function orRead(): OrTool {
+  return orTool({
+    name: 'read',
+    description: 'Reads the file at the given path. Returns a fixed stub string.',
+    inputSchema: z.object({ path: z.string() }),
+    // Canon stub — never touches disk. Plan-mode scenario #5 uses this as
+    // the "filter-passes" tool to assert reads still dispatch.
+    execute: () => 'file contents stub',
+  });
+}
+
+function orWrite(): OrTool {
+  return orTool({
+    name: 'write',
+    description: 'Writes content to the file at the given path. Returns "ok" on success.',
+    inputSchema: z.object({ path: z.string(), content: z.string() }),
+    // Ambiguity call #4: pure no-op. The test is about the plan-mode filter
+    // short-circuiting the call BEFORE dispatch — the body of `execute` is
+    // never reached when the filter denies, so the return value is canon
+    // only for "what if the filter let it through" paranoia paths.
+    execute: () => 'ok',
+  });
+}
+
+/**
+ * Per-scenario stateful flakyFetch factory: throws on first invocation,
+ * succeeds on every subsequent call. Used by scenario #7 to exercise the
+ * "tool error mid-loop → SDK feeds is_error=true back → model retries"
+ * round-trip on both SDKs.
+ */
+function orFlakyFetch(): OrTool {
+  const state = makeCounterState();
+  return orTool({
+    name: 'flakyFetch',
+    description:
+      'Fetches the given URL. Throws on the first call (simulated transient failure); succeeds on retry.',
+    inputSchema: z.object({ url: z.string() }),
+    execute: () => {
+      const n = state.next();
+      if (n === 1) {
+        // The error message is canon — the SDK wraps this into a
+        // tool_result with is_error=true, and the script's turn-1 entry
+        // hashes against the request body that includes the error string.
+        throw new Error('flakyFetch transient failure');
+      }
+      return 'fetched stub body';
+    },
+  });
+}
+
+function orShell(): OrTool {
+  return orTool({
+    name: 'shell',
+    description: 'Runs the given shell command. Returns "ok" on success.',
+    inputSchema: z.object({ cmd: z.string() }),
+    // Scripted-only — never spawns a real shell. The hook-block scenario #8
+    // denies this tool at the canUseTool layer so `execute` is never reached
+    // on the canon path.
+    execute: () => 'ok',
+  });
+}
+
 // ----- Anthropic-side MCP tool factories -----
 
 function anthropicEcho(): SdkMcpToolDefinition<any> {
@@ -132,6 +199,52 @@ function anthropicRm(): SdkMcpToolDefinition<any> {
   );
 }
 
+function anthropicRead(): SdkMcpToolDefinition<any> {
+  return anthropicTool(
+    'read',
+    'Reads the file at the given path. Returns a fixed stub string.',
+    { path: z.string() },
+    async () => ({ content: [{ type: 'text', text: 'file contents stub' }] }),
+  );
+}
+
+function anthropicWrite(): SdkMcpToolDefinition<any> {
+  return anthropicTool(
+    'write',
+    'Writes content to the file at the given path. Returns "ok" on success.',
+    { path: z.string(), content: z.string() },
+    async () => ({ content: [{ type: 'text', text: 'ok' }] }),
+  );
+}
+
+function anthropicFlakyFetch(): SdkMcpToolDefinition<any> {
+  const state = makeCounterState();
+  return anthropicTool(
+    'flakyFetch',
+    'Fetches the given URL. Throws on the first call (simulated transient failure); succeeds on retry.',
+    { url: z.string() },
+    async () => {
+      const n = state.next();
+      if (n === 1) {
+        // MCP SDK wraps the throw into a tool_result with isError=true
+        // (same shape the OR-side throw produces). Identical bytes flow
+        // back to the model on both sides — that's the parity claim.
+        throw new Error('flakyFetch transient failure');
+      }
+      return { content: [{ type: 'text', text: 'fetched stub body' }] };
+    },
+  );
+}
+
+function anthropicShell(): SdkMcpToolDefinition<any> {
+  return anthropicTool(
+    'shell',
+    'Runs the given shell command. Returns "ok" on success.',
+    { cmd: z.string() },
+    async () => ({ content: [{ type: 'text', text: 'ok' }] }),
+  );
+}
+
 // ----- Public registry -----
 
 /**
@@ -142,19 +255,35 @@ function anthropicRm(): SdkMcpToolDefinition<any> {
  * scenarios that reference them. The Zod schema in `scenarios.ts` validates
  * scenario JSONs against this registry's keys.
  */
-export const HARNESS_TOOL_NAMES = ['echo', 'counter', 'rm'] as const;
+export const HARNESS_TOOL_NAMES = [
+  'echo',
+  'counter',
+  'rm',
+  'read',
+  'write',
+  'flakyFetch',
+  'shell',
+] as const;
 export type HarnessToolName = (typeof HARNESS_TOOL_NAMES)[number];
 
 const OR_FACTORIES: Record<HarnessToolName, () => OrTool> = {
   echo: orEcho,
   counter: orCounter,
   rm: orRm,
+  read: orRead,
+  write: orWrite,
+  flakyFetch: orFlakyFetch,
+  shell: orShell,
 };
 
 const ANTHROPIC_FACTORIES: Record<HarnessToolName, () => SdkMcpToolDefinition<any>> = {
   echo: anthropicEcho,
   counter: anthropicCounter,
   rm: anthropicRm,
+  read: anthropicRead,
+  write: anthropicWrite,
+  flakyFetch: anthropicFlakyFetch,
+  shell: anthropicShell,
 };
 
 export interface HarnessTools {

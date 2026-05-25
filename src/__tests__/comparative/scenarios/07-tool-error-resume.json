@@ -1,0 +1,188 @@
+{
+  "name": "07-tool-error-resume",
+  "description": "Canonical scenario #7: tool error mid-loop. The flakyFetch tool throws on its first call (stateful per-SDK closure) and succeeds on retry. The SDK feeds the error back to the model as a tool_result with is_error=true; the model retries with the same args (ambiguity call: same args matches the canon 'retry exact' path most agents take), the second call succeeds, the model summarizes. Hook firing order parity is the load-bearing claim — both SDKs must emit tool_call → tool_result(isError=true) → tool_call → tool_result(isError=false) → text in IDENTICAL order.",
+  "prompt": "Fetch https://example.com — retry once if it fails.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Use the tools provided.",
+  "tools": ["flakyFetch"],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:f1e58a7b8ea82ecb2dcc0601bbda5c47b796986a02ed4903f18e8a2a444bb102",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"Fetch example.com with retry\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 10
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:7bfb7d96b5703264404879da4a5d5d7ffeb5e8e974ea8317b4f25258df7d0651",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "tool_use",
+        "content": [
+          {
+            "type": "text",
+            "text": "Fetching https://example.com."
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_07a",
+            "name": "mcp__harness__flakyFetch",
+            "input": {
+              "url": "https://example.com"
+            }
+          }
+        ],
+        "usage": {
+          "input_tokens": 60,
+          "output_tokens": 16
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:c760cd1f6187b7129bb0e43fe6a67729258c5f1bc83aa96ed76ec6d462723b85",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "tool_use",
+        "content": [
+          {
+            "type": "text",
+            "text": "First call failed; retrying."
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_07b",
+            "name": "mcp__harness__flakyFetch",
+            "input": {
+              "url": "https://example.com"
+            }
+          }
+        ],
+        "usage": {
+          "input_tokens": 95,
+          "output_tokens": 18
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:faaa94c7a4d2160e65556b2537c22634994466f0e23ef8041e7d8cf1726fa08e",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "Fetched https://example.com on the retry."
+          }
+        ],
+        "usage": {
+          "input_tokens": 130,
+          "output_tokens": 14
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:b4a15984afdafb789c4a7bced14535d060f3e324698328fe766c9360a7057c0b",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-07-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Fetching https://example.com."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_flakyfetch_0",
+            "name": "flakyFetch",
+            "arguments": "{\"url\":\"https://example.com\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 60,
+          "output_tokens": 16,
+          "total_tokens": 76
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:4222ca2e3b991594ca43a8ff125e8aa740acb995fb8db58dd5c4480133f669e1",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-07-1",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "First call failed; retrying."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_flakyfetch_1",
+            "name": "flakyFetch",
+            "arguments": "{\"url\":\"https://example.com\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 95,
+          "output_tokens": 18,
+          "total_tokens": 113
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:ce08743bc159a7a32bd73c1c02616b6b00145e4060a46191daf41c879702d38d",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-07-2",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Fetched https://example.com on the retry."
+          }
+        ],
+        "usage": {
+          "input_tokens": 130,
+          "output_tokens": 14,
+          "total_tokens": 144
+        }
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact",
+    "tolerateToolResultIsError": true
+  }
+}

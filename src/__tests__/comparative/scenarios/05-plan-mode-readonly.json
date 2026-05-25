@@ -1,0 +1,199 @@
+{
+  "name": "05-plan-mode-readonly",
+  "description": "Canonical scenario #5: plan-mode read-only filter. Phase 3.3 parity — write tools are blocked by a host-side filter, reads pass through. Modeled via canUseToolPolicy (same mechanism as scenario #4): `read` allowed, `write` denied with a canon plan-mode message. The model emits a read tool_use (dispatches), then a write tool_use (filtered, short-circuited), then a text response acknowledging the constraint. Hook firing order on the deny side mirrors scenario #4: tool_call → tool_result(isError=true) → adapt-turn text.",
+  "prompt": "Read foo.txt and then write bar.txt with the same content.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Use the tools provided.",
+  "tools": ["read", "write"],
+  "canUseToolPolicy": [
+    {
+      "tool": "read",
+      "action": "allow"
+    },
+    {
+      "tool": "write",
+      "action": "deny",
+      "message": "Plan mode is active: write tools are not permitted. Only read-only tools may be invoked."
+    }
+  ],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:24ff1194eb7ec3186b7abc207d756f2d2a452d20eb6fd3e90c2d6d3c501e8083",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"Read foo.txt then write bar.txt\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 12
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:7475f550d4661871a30ba5439e59dedcbc8cfd1d9001a96ba0ab12308336539a",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "tool_use",
+        "content": [
+          {
+            "type": "text",
+            "text": "Reading foo.txt."
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_05a",
+            "name": "mcp__harness__read",
+            "input": {
+              "path": "foo.txt"
+            }
+          }
+        ],
+        "usage": {
+          "input_tokens": 60,
+          "output_tokens": 16
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:81fc012c80e250d30ff4d8238735458665819df38d72c47a036eb686b674270e",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "tool_use",
+        "content": [
+          {
+            "type": "text",
+            "text": "Writing bar.txt."
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_05b",
+            "name": "mcp__harness__write",
+            "input": {
+              "path": "bar.txt",
+              "content": "file contents stub"
+            }
+          }
+        ],
+        "usage": {
+          "input_tokens": 95,
+          "output_tokens": 20
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:c1ad94b1b373817a6ed592a234e55acbb0a270bbb6e112317985a8f21032474e",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "I read foo.txt but cannot write bar.txt — plan mode blocks write tools."
+          }
+        ],
+        "usage": {
+          "input_tokens": 130,
+          "output_tokens": 18
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:c83ec5e7703b01d23b172438965efebb460d827980b41be339b4a4d8973f0533",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-05-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Reading foo.txt."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_read_0",
+            "name": "read",
+            "arguments": "{\"path\":\"foo.txt\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 60,
+          "output_tokens": 16,
+          "total_tokens": 76
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:c77f7a576d25ec570eae427025f6f1ec444df803389d9d0acf248f30841044bf",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-05-1",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Writing bar.txt."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_write_0",
+            "name": "write",
+            "arguments": "{\"path\":\"bar.txt\",\"content\":\"file contents stub\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 95,
+          "output_tokens": 20,
+          "total_tokens": 115
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:5323f7b8fcd4137c555ca447e27258ed5e5792a517b8116e8a0ab15ab56c4489",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-05-2",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "I read foo.txt but cannot write bar.txt — plan mode blocks write tools."
+          }
+        ],
+        "usage": {
+          "input_tokens": 130,
+          "output_tokens": 18,
+          "total_tokens": 148
+        }
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact"
+  }
+}
