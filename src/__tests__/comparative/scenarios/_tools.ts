@@ -2,6 +2,7 @@
 // (Phase 6.5a). Recommended ambiguity call #3: one file, three tool shapes,
 // reused across scenarios — `echo`, `counter`, `rm`. Phase 6.5b extends the
 // registry with `read`, `write`, `flakyFetch`, `shell` for scenarios #5–#8.
+// Phase 6.5c extends with `lookup` for scenario #11 (malformed tool args).
 //
 // Each tool ships TWO definitions because the SDKs declare tools through
 // different surfaces:
@@ -161,6 +162,21 @@ function orShell(): OrTool {
   });
 }
 
+function orLookup(): OrTool {
+  return orTool({
+    name: 'lookup',
+    description: 'Looks up the meaning of a given word or term. Returns a fixed stub string.',
+    inputSchema: z.object({ query: z.string() }),
+    // Scripted-only stub for scenario #11 (malformed tool args). On the canon
+    // happy path the SDK successfully reassembles the streamed args JSON and
+    // invokes this with `{ query: 'parity' }`; the malformed-args failure
+    // mode (when wired) makes the SDK's args parser surface a typed error
+    // before this is reached. The return string is canon for the post-error
+    // recovery turn where the model retries with valid args.
+    execute: ({ query }) => `definition of ${query}: stub meaning`,
+  });
+}
+
 // ----- Anthropic-side MCP tool factories -----
 
 function anthropicEcho(): SdkMcpToolDefinition<any> {
@@ -245,6 +261,17 @@ function anthropicShell(): SdkMcpToolDefinition<any> {
   );
 }
 
+function anthropicLookup(): SdkMcpToolDefinition<any> {
+  return anthropicTool(
+    'lookup',
+    'Looks up the meaning of a given word or term. Returns a fixed stub string.',
+    { query: z.string() },
+    async ({ query }) => ({
+      content: [{ type: 'text', text: `definition of ${query}: stub meaning` }],
+    }),
+  );
+}
+
 // ----- Public registry -----
 
 /**
@@ -263,6 +290,7 @@ export const HARNESS_TOOL_NAMES = [
   'write',
   'flakyFetch',
   'shell',
+  'lookup',
 ] as const;
 export type HarnessToolName = (typeof HARNESS_TOOL_NAMES)[number];
 
@@ -274,6 +302,7 @@ const OR_FACTORIES: Record<HarnessToolName, () => OrTool> = {
   write: orWrite,
   flakyFetch: orFlakyFetch,
   shell: orShell,
+  lookup: orLookup,
 };
 
 const ANTHROPIC_FACTORIES: Record<HarnessToolName, () => SdkMcpToolDefinition<any>> = {
@@ -284,6 +313,7 @@ const ANTHROPIC_FACTORIES: Record<HarnessToolName, () => SdkMcpToolDefinition<an
   write: anthropicWrite,
   flakyFetch: anthropicFlakyFetch,
   shell: anthropicShell,
+  lookup: anthropicLookup,
 };
 
 export interface HarnessTools {

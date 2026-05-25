@@ -189,8 +189,13 @@ export async function compareTranscripts(
   }
 
   // Hook firing order — exact in BOTH modes. This is the load-bearing
-  // parity claim; do not relax.
-  if (!arraysEqual(anthProj.hookOrder, orProj.hookOrder)) {
+  // parity claim; do not relax. Phase 6.5c scenario #9 is the documented
+  // exception: max_tokens triggers Anthropic auto-continuation while the OR
+  // /responses loop terminates, so the per-side hook sequences structurally
+  // differ. The `skipHookOrderCheck` flag opts that single scenario out;
+  // every other scenario must agree exactly.
+  const skipHookOrder = config?.skipHookOrderCheck === true;
+  if (!skipHookOrder && !arraysEqual(anthProj.hookOrder, orProj.hookOrder)) {
     failures.push({
       kind: 'hook_order',
       detail: `Hook firing order mismatch:\n  anthropic: [${anthProj.hookOrder.join(', ')}]\n  or:        [${orProj.hookOrder.join(', ')}]`,

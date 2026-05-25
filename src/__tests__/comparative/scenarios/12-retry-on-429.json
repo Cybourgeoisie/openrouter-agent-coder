@@ -1,0 +1,85 @@
+{
+  "name": "12-retry-on-429",
+  "description": "Canonical scenario #12: retry on 429. PARITY FINDING (ambiguity call: documented divergence) — the Anthropic SDK (via the spawned `claude` subprocess) retries on HTTP 429 with the Retry-After header, observable as `system:api_retry` messages on the transcript. The OR /responses SDK does NOT retry 429 by default: `betaResponsesSend` ships with `retryCodes: ['5XX']` (see node_modules/@openrouter/sdk/.../betaResponsesSend.js); the agent surface in src/agent.ts does not expose an override knob, so a 429 thrown from /responses surfaces as an error event to the host. Since this card's hard rule forbids src/ changes, v1 of scenario #12 scripts the Anthropic side with a 429-then-success sequence (turn 0 = failure(429), turn 1 = success — both at the same promptHash since the SDK retries an identical request body) and scripts the OR side with a single success entry (no 429, since the SDK can't reach a comparable terminal otherwise). The parity claim asserted: BOTH sides project to identical canonical event streams once the Anthropic-side retry completes — proving the 429+retry is invisible at the canonical event layer. The retry itself is verified by the supplemental test in scenarios.comparative.test.ts which counts `system:api_retry` messages on the Anthropic transcript. Follow-up needed: expose `retryCodes` on `OpenRouterAgentRunOptions` so the OR side can retry 429 too — that's a src/agent.ts change, out of scope here.",
+  "prompt": "Tell me one thing about TypeScript.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Answer concisely.",
+  "tools": [],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:818a261a4acd8a6faab6e74858e46eb1463cb152b228c11c6f2a2e83dbb50c71",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"TypeScript fact\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 10
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:419b11c86810903f1cf73525cf915172f253d8125e4da67816194362f4b78d1d",
+      "turn": 0,
+      "kind": "failure",
+      "failure": {
+        "type": "rate_limit_429",
+        "retryAfter": 1
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:419b11c86810903f1cf73525cf915172f253d8125e4da67816194362f4b78d1d",
+      "turn": 1,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "TypeScript is a typed superset of JavaScript."
+          }
+        ],
+        "usage": {
+          "input_tokens": 25,
+          "output_tokens": 12
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:8cc537419d9ffb6e6d6ee8f348e9b0c0a0fc50cc12e235125969abc9c678cce3",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-12-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "TypeScript is a typed superset of JavaScript."
+          }
+        ],
+        "usage": {
+          "input_tokens": 25,
+          "output_tokens": 12,
+          "total_tokens": 37
+        }
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact"
+  }
+}

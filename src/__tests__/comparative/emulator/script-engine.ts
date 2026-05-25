@@ -263,7 +263,28 @@ type OpenResponsesSuccessOutcome = {
   stream?: StreamControl;
 };
 
-export type OpenResponsesScriptEntry = OpenResponsesScriptEntryBase & OpenResponsesSuccessOutcome;
+// Phase 6.5c: minimal failure-mode set on the OpenResponses wire. v1 ships
+// only `rate_limit_429` (for scenario #12's retry-on-429 parity claim) — that
+// is the smallest extension that lets the OR SDK's built-in retry sequencing
+// be exercised against the emulator. Other failure modes (mid-stream errors,
+// truncation, malformed payloads, etc.) are deferred to 6.6's failure-injection
+// pass; the OpenResponses event vocabulary differs from chat-completions enough
+// that copying that adapter's full failure surface 1:1 would be a re-think,
+// not a port. See the file header for the "v1 success-mode only" carve-out
+// being relaxed here.
+export type OpenResponsesFailureMode = {
+  type: 'rate_limit_429';
+  retryAfter: string | number;
+};
+
+type OpenResponsesFailureOutcome = {
+  kind: 'failure';
+  failure: OpenResponsesFailureMode;
+  stream?: StreamControl;
+};
+
+export type OpenResponsesScriptEntry = OpenResponsesScriptEntryBase &
+  (OpenResponsesSuccessOutcome | OpenResponsesFailureOutcome);
 
 export type ScriptEntry = AnthropicScriptEntry | OpenAIScriptEntry | OpenResponsesScriptEntry;
 

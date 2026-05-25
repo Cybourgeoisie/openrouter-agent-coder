@@ -91,7 +91,7 @@ const streamControlSchema = z
   })
   .optional();
 
-const anthropicEntrySchema = z.object({
+const anthropicSuccessEntrySchema = z.object({
   wire: z.literal('anthropic').optional(),
   promptHash: z.string(),
   turn: z.number().int().nonnegative(),
@@ -99,6 +99,28 @@ const anthropicEntrySchema = z.object({
   response: anthropicResponseSchema,
   stream: streamControlSchema,
 });
+
+// Phase 6.5c: scenario #12 needs to script a 429 on the Anthropic wire so the
+// SDK exercises its built-in backoff. The adapter already supports the failure
+// mode; this is the schema half (carries kind=failure, retry-after, no
+// response payload). Other Anthropic failure modes (mid_stream_error,
+// malformed_delta, etc.) are NOT exposed via the scenario schema yet — 6.6's
+// failure-injection pass will broaden the surface.
+const anthropicFailureModeSchema = z.object({
+  type: z.literal('rate_limit_429'),
+  retryAfter: z.union([z.string(), z.number()]),
+});
+
+const anthropicFailureEntrySchema = z.object({
+  wire: z.literal('anthropic').optional(),
+  promptHash: z.string(),
+  turn: z.number().int().nonnegative(),
+  kind: z.literal('failure'),
+  failure: anthropicFailureModeSchema,
+  stream: streamControlSchema,
+});
+
+const anthropicEntrySchema = z.union([anthropicSuccessEntrySchema, anthropicFailureEntrySchema]);
 
 const openaiEntrySchema = z.object({
   wire: z.literal('openai'),
@@ -109,7 +131,15 @@ const openaiEntrySchema = z.object({
   stream: streamControlSchema,
 });
 
-const openResponsesEntrySchema = z.object({
+// Phase 6.5c: failure-mode subset on the OpenResponses wire. v1 ships only
+// `rate_limit_429` for scenario #12. The success branch stays the canonical
+// shape; failure entries omit `response` (the 429 doesn't carry one).
+const openResponsesFailureModeSchema = z.object({
+  type: z.literal('rate_limit_429'),
+  retryAfter: z.union([z.string(), z.number()]),
+});
+
+const openResponsesSuccessEntrySchema = z.object({
   wire: z.literal('openresponses'),
   promptHash: z.string(),
   turn: z.number().int().nonnegative(),
@@ -117,6 +147,20 @@ const openResponsesEntrySchema = z.object({
   response: openResponsesResponseSchema,
   stream: streamControlSchema,
 });
+
+const openResponsesFailureEntrySchema = z.object({
+  wire: z.literal('openresponses'),
+  promptHash: z.string(),
+  turn: z.number().int().nonnegative(),
+  kind: z.literal('failure'),
+  failure: openResponsesFailureModeSchema,
+  stream: streamControlSchema,
+});
+
+const openResponsesEntrySchema = z.union([
+  openResponsesSuccessEntrySchema,
+  openResponsesFailureEntrySchema,
+]);
 
 const scriptEntrySchema = z.union([
   anthropicEntrySchema,
@@ -206,6 +250,22 @@ const comparatorConfigSchema = z
     // failing on a known agent.ts gap. A real fix lives in agent.ts and is
     // out of scope here.
     tolerateToolResultIsError: z.boolean().optional(),
+    // Phase 6.5c: when true, the comparator skips hook firing order equality.
+    // Used by scenario #9 (max_tokens) where the two SDKs structurally diverge
+    // on auto-continuation: the Anthropic Agent SDK injects a synthetic
+    // "Output token limit hit. Resume directly…" user message and fires a 2nd
+    // turn automatically when stop_reason=max_tokens arrives, whereas the OR
+    // /responses agent loop terminates after one response on status=completed/
+    // incomplete with no continuation. The resulting per-side hook sequences
+    // therefore differ in turn-bracket count. This flag opts that single
+    // scenario out of the strict hook-order check so the parity claim that
+    // CAN be made (both sides reach a terminal:success state without
+    // throwing) is still asserted. Do NOT widen this flag to other scenarios
+    // — a hook-order asymmetry on a non-max-tokens scenario is the kind of
+    // rot this harness exists to catch. See PR body for the full divergence
+    // finding + follow-up issue for emulator `response.incomplete` support
+    // that would let this scenario tighten its assertion later.
+    skipHookOrderCheck: z.boolean().optional(),
   })
   .optional();
 
@@ -231,6 +291,7 @@ const harnessToolNameSchema = z.enum([
   'write',
   'flakyFetch',
   'shell',
+  'lookup',
 ]);
 
 const canUseToolPolicySchema = z.array(
