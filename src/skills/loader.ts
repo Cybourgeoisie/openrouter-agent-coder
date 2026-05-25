@@ -46,8 +46,14 @@ export interface SkillLoaderOptions {
   cwd: string;
   /** Override for the user scope root. Defaults to `os.homedir()`. */
   home?: string;
-  /** Optional plugin roots (5.8 will populate; no-op when empty / undefined). */
-  pluginRoots?: ReadonlyArray<{ name: string; root: string }>;
+  /**
+   * Optional plugin roots (5.8 populates). Each entry contributes one
+   * discovery root namespaced by `name`. By default the walker scans
+   * `<root>/skills/`; pass `skillsDir` to override the location of the
+   * discovery directory (used when a plugin manifest declares additional
+   * `skills:` paths under {@link PluginManifest}).
+   */
+  pluginRoots?: ReadonlyArray<{ name: string; root: string; skillsDir?: string }>;
   /** When `true`, the user scope is skipped entirely. */
   disableUserSkills?: boolean;
   /** When `true`, the project scope is skipped entirely. */
@@ -150,9 +156,9 @@ async function discoverSkills(opts: SkillLoaderOptions): Promise<Map<string, Ski
     }
   }
   if (opts.pluginRoots && opts.pluginRoots.length > 0) {
-    for (const { name: pluginName, root } of opts.pluginRoots) {
+    for (const { name: pluginName, root, skillsDir } of opts.pluginRoots) {
       for (const skill of await discoverScopedSkills(
-        join(root, 'skills'),
+        skillsDir ?? join(root, 'skills'),
         'plugin',
         opts.logger,
         pluginName,

@@ -47,7 +47,9 @@ export type HookEvent =
   | 'SubagentEnd'
   | 'PreCompact'
   | 'McpServerStart'
-  | 'McpServerStop';
+  | 'McpServerStop'
+  | 'PluginStart'
+  | 'PluginStop';
 
 /**
  * Summary of a finished subagent run. Mirrors the fields of a `stream_complete`
@@ -221,6 +223,51 @@ export type HookPayload =
       serverName: string;
       durationMs: number;
       reason: 'closed' | 'error' | 'aborted';
+    }
+  /**
+   * Phase 5.8: fires once per loaded plugin after its {@link LoadedPlugin}
+   * contributions are folded into the agent's skill / command / MCP / hook
+   * registries. Mirrors the {@link McpServerStart} pattern: payloads carry
+   * COUNTS (not the raw arrays) so logging is cheap and PII-safe.
+   *
+   * `contributions.skills` / `commands` / `mcpServers` / `hooks` are the number
+   * of entries the loader resolved for the plugin. A plugin that ships only a
+   * single skill reports `{ skills: 1, commands: 0, mcpServers: 0, hooks: 0 }`.
+   * Auto-discovered plugins (no manifest) still emit a payload — counts come
+   * from the default-path scan, not the manifest.
+   *
+   * Audit-only — the hook's return value is ignored and thrown errors are
+   * logged + swallowed (the run continues).
+   */
+  | {
+      event: 'PluginStart';
+      pluginName: string;
+      root: string;
+      contributions: {
+        skills: number;
+        commands: number;
+        mcpServers: number;
+        hooks: number;
+      };
+    }
+  /**
+   * Phase 5.8: fires once per loaded plugin when the agent run finalizes
+   * (`finally` block in `iterate()`). Always paired 1:1 with the preceding
+   * {@link PluginStart} for the same `pluginName`. `durationMs` measures from
+   * the matching `PluginStart` fire-time.
+   *
+   * `reason: 'closed'` is the happy path. `'error'` is reserved for future
+   * cleanup-failure paths (v1 has no per-plugin teardown action that can
+   * throw, so it never fires today — declared for forward compatibility
+   * with the v2 `${CLAUDE_PLUGIN_DATA}` lifecycle work).
+   *
+   * Audit-only — same swallow-on-throw convention as the rest of the hooks.
+   */
+  | {
+      event: 'PluginStop';
+      pluginName: string;
+      durationMs: number;
+      reason: 'closed' | 'error';
     };
 
 /**

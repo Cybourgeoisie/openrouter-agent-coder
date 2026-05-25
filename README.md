@@ -1212,6 +1212,127 @@ const menu = await commands.list();
 
 `resolve(input, ctx?)` accepts an optional `ctx` with `sessionId` / `named` / `userConfig` / `env` / `signal` / `cwd` to thread through the substitution context (mirrors the skill loader's substitution shape).
 
+### Plugins (`.claude-plugin/plugin.json`)
+
+A plugin is a directory that bundles additional skills, slash commands, MCP servers, and hook configs for an `OpenRouterAgentRun`. Plugin discovery is **path-based**: the host passes a list of plugin directories to `loadPlugins`, gets back a `LoadedPlugin[]`, and threads that array into the agent constructor via `plugins`. No marketplace fetcher is involved in v1.
+
+#### Quick start
+
+Plugin layout (matches the Claude Code docs reference):
+
+```
+my-plugin/
+├── .claude-plugin/
+│   └── plugin.json       # optional — auto-discovery uses the dir name when absent
+├── skills/
+│   └── greet/
+│       └── SKILL.md
+├── commands/
+│   └── deploy.md
+├── hooks/
+│   └── hooks.json        # optional
+└── .mcp.json             # optional
+```
+
+`.claude-plugin/plugin.json` — only `name` is required:
+
+```json
+{
+  "name": "my-plugin",
+  "version": "1.0.0",
+  "description": "Example plugin",
+  "author": { "name": "Cybourgeoisie", "email": "ben@cybourgeoisie.com" }
+}
+```
+
+Wire it into a run:
+
+```ts
+import { OpenRouterAgentRun, loadPlugins } from 'openrouter-agent-coder';
+
+const plugins = await loadPlugins({
+  pluginDirs: ['/path/to/my-plugin', '/path/to/another-plugin'],
+});
+
+const run = new OpenRouterAgentRun({
+  apiKey: process.env.OPENROUTER_API_KEY!,
+  sessionId: 'demo',
+  prompt: 'Use the greet skill from my-plugin',
+  plugins,
+});
+
+for await (const event of run) {
+  /* … */
+}
+```
+
+The agent fires `PluginStart` once per loaded plugin (carrying contribution counts) and `PluginStop` at run finalization with `durationMs`.
+
+#### Manifest reference
+
+| Field          | v1 behavior                                                                                     |
+| -------------- | ----------------------------------------------------------------------------------------------- |
+| `name`         | **Required.** Lowercase letters/digits/hyphens, 1–64 chars. Namespaces every contribution.      |
+| `displayName`  | Optional.                                                                                       |
+| `version`      | Optional.                                                                                       |
+| `description`  | Optional.                                                                                       |
+| `author`       | Optional. `string` or `{ name?, email?, url? }`.                                                |
+| `homepage`     | Optional.                                                                                       |
+| `repository`   | Optional.                                                                                       |
+| `license`      | Optional.                                                                                       |
+| `keywords`     | Optional. `string[]`.                                                                           |
+| `skills`       | Optional. `string \| string[]`. **Adds to** the default `<root>/skills/` discovery root.        |
+| `commands`     | Optional. `string \| string[]`. **Replaces** the default `<root>/commands/`.                    |
+| `agents`       | Optional. Same replace semantics. v1: parsed but not consumed by the agent runner.              |
+| `hooks`        | Optional. `string` (path) or inline object. **Replaces** the default `<root>/hooks/hooks.json`. |
+| `mcpServers`   | Optional. `string` (path) or inline object. **Replaces** the default `<root>/.mcp.json`.        |
+| `outputStyles` | Accepted in schema, **not consumed in v1**.                                                     |
+| `lspServers`   | Accepted in schema, **not consumed in v1**.                                                     |
+| `userConfig`   | Accepted in schema, **not consumed in v1** (v2 — keychain integration).                         |
+| `dependencies` | Accepted in schema, **not consumed in v1** (v2 — transitive resolver).                          |
+| `experimental` | Accepted in schema, **not consumed in v1** (v2 — themes / monitors).                            |
+
+Unknown top-level keys are passed through (forward-compat with manifests written against newer Claude Code builds).
+
+#### Namespacing
+
+- **Skills**: `<pluginName>:<skillName>` (e.g. `my-plugin:greet`).
+- **Commands**: `<pluginName>:<commandName>` — subdirs add further `:` segments.
+- **MCP servers**: `<pluginName>:<serverName>` — composes with the bridge's `<serverName>__<toolName>` to yield tool names like `my-plugin:db__query`.
+
+Auto-discovery: when `.claude-plugin/plugin.json` is missing, the plugin's `name` is derived from the directory's base name. Useful for ad-hoc local plugins ("drop it in `~/.claude/plugins/foo/`, done").
+
+#### v1 deferrals
+
+The following are accepted by the manifest schema but NOT implemented at runtime in v1:
+
+- `userConfig` prompt-on-enable + keychain storage.
+- `dependencies` install lifecycle.
+- `experimental.themes`, `experimental.monitors`.
+- `lspServers` spawning (LSP not on the parity roadmap).
+- Plugin hook command execution — `LoadedPlugin.hookConfigs` exposes parsed configs; the agent does not spawn hook command children. Hosts that need it can read the field and dispatch themselves.
+- Marketplace fetcher (`marketplace.json` → install/update/uninstall).
+- `${CLAUDE_PLUGIN_DATA}` directory auto-creation + cleanup.
+- `bin/` directory PATH injection.
+- `channels` — deferred pending channel ↔ MCP server binding design.
+
+`${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_DATA}` ARE resolved inside plugin-shipped skill bodies — the substitution helper threads the owning plugin's `root` / `dataDir` into the context at render time.
+
+#### Composing with a pre-built skills loader
+
+If you supply your own `skills` loader, the agent does NOT auto-wire the plugin skill roots into it (a `'warn'`-level log fires to flag the silent skip). Wire them yourself:
+
+```ts
+const plugins = await loadPlugins({ pluginDirs });
+const skills = createSkillLoader({
+  cwd: '/path/to/project',
+  pluginRoots: plugins.flatMap((p) =>
+    p.skillRoots.map((skillsDir) => ({ name: p.manifest.name, root: p.root, skillsDir })),
+  ),
+});
+const run = new OpenRouterAgentRun({ /* … */ skills, plugins });
+```
+
 ## Tools shipped with the library
 
 Client tools (execute in the host process):
