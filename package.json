@@ -25,6 +25,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:comparative": "vitest run --config vitest.comparative.config.ts",
+    "test:comparative:live": "vitest run --config vitest.comparative-live.config.ts",
     "record:fixture": "tsx scripts/record-fixture.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

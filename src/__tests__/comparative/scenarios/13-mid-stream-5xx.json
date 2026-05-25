@@ -98,5 +98,6 @@
     "skipTerminalCheck": true,
     "skipEventStreamCheck": true,
     "skipHookOrderCheck": true
-  }
+  },
+  "harnessTimeoutMs": 60000
 }

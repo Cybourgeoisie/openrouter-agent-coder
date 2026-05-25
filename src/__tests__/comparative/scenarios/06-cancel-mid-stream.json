@@ -91,5 +91,6 @@
     "skipTerminalCheck": true,
     "skipEventStreamCheck": true,
     "finalTextAssertion": null
-  }
+  },
+  "liveSmoke": true
 }

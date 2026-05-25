@@ -425,6 +425,30 @@ export const scenarioSchema = z.object({
   cancellation: cancellationConfigSchema,
   script: z.array(scriptEntrySchema).min(1),
   comparator: comparatorConfigSchema,
+  // Phase 6.7: per-scenario budget cap for live mode. Sum of costUsd across
+  // BOTH SDKs (Anthropic `result.total_cost_usd` + OR `session_end.costUsd`).
+  // Default in the harness is $0.50; per-scenario override here when a flow
+  // is known-pricier (multi-turn, long context). On breach the harness aborts
+  // the run and emits a "flaky-scenario" warning — not a hard fail; live mode
+  // is best-effort and budget breach is a signal to refresh the scenario, not
+  // a merge blocker. Emulated-mode runs always report costUsd=0 so this knob
+  // is a no-op in that mode.
+  maxCostUsd: z.number().positive().optional(),
+  // Phase 6.7: per-scenario harness-level timeout override. Default in the
+  // harness is 30_000ms. Bump on a per-scenario basis when a SCRIPTED failure
+  // path (e.g. scenarios #13/#15 — mid-stream 5xx and truncated stream) is
+  // known to push past the default because the Anthropic SDK's internal retry
+  // loop on `invalid_request_error` adds ~2-4s wall time on cold cache. DO NOT
+  // widen the global default — keep the 30s ceiling so other slow scenarios
+  // surface as failures rather than silently slowing CI.
+  harnessTimeoutMs: z.number().int().positive().optional(),
+  // Phase 6.7: include this scenario in the live-mode smoke subset that runs
+  // on every non-draft, non-fork PR. The smoke set is intentionally small
+  // (3-4 scenarios) and must fit under the $0.25/PR aggregate cap enforced
+  // at the workflow level. Flag a scenario as `liveSmoke: true` only when
+  // it covers a meaningfully distinct slice of the parity surface; everything
+  // else stays nightly-only.
+  liveSmoke: z.boolean().optional(),
 });
 
 export type Scenario = z.infer<typeof scenarioSchema>;

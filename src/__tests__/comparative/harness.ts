@@ -62,10 +62,12 @@ export type HarnessMode = 'emulated' | 'live';
 
 export type RunScenarioOptions = {
   /**
-   * Per-run timeout for each SDK. Defaults to 30s — generous enough to absorb
-   * the agent SDK's subprocess cold-start (~1-2s on Linux per 6.S1) plus
-   * a few SSE turns; tight enough to surface real hangs as test failures
-   * rather than CI timeouts.
+   * Per-run timeout for each SDK. Defaults to 30s (or the scenario's
+   * `harnessTimeoutMs` field if set). Generous enough to absorb the agent
+   * SDK's subprocess cold-start (~1-2s on Linux per 6.S1) plus a few SSE
+   * turns; tight enough to surface real hangs as test failures rather than
+   * CI timeouts. An explicit value here overrides BOTH the default and the
+   * scenario field.
    */
   timeoutMs?: number;
   /**
@@ -74,9 +76,20 @@ export type RunScenarioOptions = {
    * `tmp/` during the env-leakage and self-test runs.
    */
   failureDumpRoot?: string;
+  /**
+   * Phase 6.7 live-mode cost cap. Sum of costUsd across BOTH SDKs is
+   * monitored during the run; if the sum exceeds this number, the harness
+   * aborts BOTH AbortControllers and records the breach on the returned
+   * `costReport`. An explicit value here overrides BOTH the default and the
+   * scenario's `maxCostUsd` field. Defaults: scenario.maxCostUsd ?? 0.50.
+   * In emulated mode the SDKs always report costUsd=0 so this knob is a
+   * no-op there.
+   */
+  maxCostUsd?: number;
 };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_COST_USD = 0.5;
 
 /**
  * Run a scenario through both SDKs concurrently and capture their transcripts.
@@ -88,9 +101,16 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  * for isolation: a multi-turn scenario that races concurrent requests cannot
  * cross-pollute turn cursors.
  *
- * `mode: 'live'` — not implemented in 6.3. The function throws so the test
- * surfaces the gap clearly. 6.7 wires live mode with API keys from
- * `.env.local`.
+ * `mode: 'live'` — Phase 6.7. Skips emulator setup entirely; both SDKs hit
+ * real provider endpoints using `OPENROUTER_API_KEY` + `ANTHROPIC_API_KEY`
+ * from the calling environment. The harness tracks the SUM of `costUsd` across
+ * both SDKs against the resolved budget cap (scenario `maxCostUsd` field or
+ * `DEFAULT_MAX_COST_USD`); on breach, BOTH abortControllers fire and
+ * `costBreach: true` is set on the return — captured-so-far transcripts are
+ * returned for inspection. Skipping the run when API keys are absent is the
+ * caller's responsibility (see the live-smoke driver) — the harness does NOT
+ * silently fall back to emulated; a missing key surfaces as the SDK's own
+ * authentication error.
  *
  * Failure handling: if either SDK throws (vs. emitting an `error` event), the
  * transcripts captured so far are dumped to disk under
@@ -107,32 +127,37 @@ export async function runScenario(
   mode: HarnessMode,
   options: RunScenarioOptions = {},
 ): Promise<ScenarioTranscripts> {
-  if (mode === 'live') {
-    // TODO(6.7): live mode requires `.env.local` API-key loading + budget
-    // guards. Out of scope for 6.3.
-    throw new Error('Live mode is not implemented in Phase 6.3. See TODO(6.7).');
-  }
-
   const scenario = await loadScenario(scenarioPath);
   const failureDumpRoot =
     options.failureDumpRoot ?? join(process.cwd(), 'tmp', 'comparative-failures');
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? scenario.harnessTimeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const maxCostUsd = options.maxCostUsd ?? scenario.maxCostUsd ?? DEFAULT_MAX_COST_USD;
+  const budget = createBudgetMonitor(maxCostUsd);
 
-  // One emulator per SDK so script cursors don't cross-pollinate. Each
-  // emulator binds to its own ephemeral port (`server.listen(0)`).
-  const anthropicEmulator = await startEmulator();
-  const orEmulator = await startEmulator();
+  let anthropicEmulator: EmulatorHandle | undefined;
+  let orEmulator: EmulatorHandle | undefined;
+  let anthropicBaseUrl: string | undefined;
+  let orBaseUrl: string | undefined;
 
-  // Seed each registry with only the entries that target its wire format.
-  // Entries that don't match are silently skipped (the wire-mismatch path is
-  // owned by the script-engine when a request actually arrives).
-  registerEntries(anthropicEmulator, entriesForWire(scenario, 'anthropic'));
-  // The OR SDK posts to `/responses` (OpenResponses wire) in production. The
-  // 6.2 `/v1/chat/completions` adapter is still registered into the OR
-  // emulator so scenarios that historically scripted `openai` entries don't
-  // break, but `openresponses` is the wire the SDK actually hits.
-  registerEntries(orEmulator, entriesForWire(scenario, 'openresponses'));
-  registerEntries(orEmulator, entriesForWire(scenario, 'openai'));
+  if (mode === 'emulated') {
+    // One emulator per SDK so script cursors don't cross-pollinate. Each
+    // emulator binds to its own ephemeral port (`server.listen(0)`).
+    anthropicEmulator = await startEmulator();
+    orEmulator = await startEmulator();
+    anthropicBaseUrl = anthropicEmulator.url;
+    orBaseUrl = orEmulator.url;
+
+    // Seed each registry with only the entries that target its wire format.
+    // Entries that don't match are silently skipped (the wire-mismatch path is
+    // owned by the script-engine when a request actually arrives).
+    registerEntries(anthropicEmulator, entriesForWire(scenario, 'anthropic'));
+    // The OR SDK posts to `/responses` (OpenResponses wire) in production. The
+    // 6.2 `/v1/chat/completions` adapter is still registered into the OR
+    // emulator so scenarios that historically scripted `openai` entries don't
+    // break, but `openresponses` is the wire the SDK actually hits.
+    registerEntries(orEmulator, entriesForWire(scenario, 'openresponses'));
+    registerEntries(orEmulator, entriesForWire(scenario, 'openai'));
+  }
 
   let transcripts: [AnthropicTranscript, OrTranscript];
   try {
@@ -140,17 +165,17 @@ export async function runScenario(
     // its own transcript; a throw on one side does NOT abort the other (we
     // wrap each in its own catch so we can dump partial transcripts from
     // BOTH on a single side's failure).
-    const anthropicPromise = captureAnthropic(scenario, anthropicEmulator.url, timeoutMs).catch(
+    const anthropicPromise = captureAnthropic(scenario, anthropicBaseUrl, timeoutMs, budget).catch(
       (err) => failedAnthropicTranscript(err),
     );
-    const orPromise = captureOpenRouter(scenario, orEmulator.url, timeoutMs).catch((err) =>
+    const orPromise = captureOpenRouter(scenario, orBaseUrl, timeoutMs, budget).catch((err) =>
       failedOrTranscript(err),
     );
 
     transcripts = await Promise.all([anthropicPromise, orPromise]);
   } finally {
-    await anthropicEmulator.stop();
-    await orEmulator.stop();
+    if (anthropicEmulator) await anthropicEmulator.stop();
+    if (orEmulator) await orEmulator.stop();
   }
   const [anthropicTranscript, orTranscript] = transcripts;
 
@@ -158,11 +183,79 @@ export async function runScenario(
     await dumpFailure(failureDumpRoot, scenario, { anthropicTranscript, orTranscript });
   }
 
-  return { anthropicTranscript, orTranscript };
+  return {
+    anthropicTranscript,
+    orTranscript,
+    ...(budget.breached && { costBreach: true }),
+  };
 }
 
 function registerEntries(emulator: EmulatorHandle, entries: ScriptEntry[]): void {
   for (const entry of entries) emulator.registry.register(entry);
+}
+
+// ----- Budget monitor (Phase 6.7) -----
+//
+// Tracks the cumulative `costUsd` reported across BOTH SDKs and exposes a
+// shared breach signal so a single abort path collapses both runs. Used by
+// live mode; in emulated mode the SDKs never report cost so the monitor is
+// a no-op (`add(0)` calls are harmless and the cap is never breached).
+
+type BudgetMonitor = {
+  readonly maxCostUsd: number;
+  total: number;
+  breached: boolean;
+  /** Capture-side abort callbacks; both SDKs register their controllers. */
+  readonly abortCallbacks: Array<() => void>;
+  /** Accumulate a cost delta; fire abort callbacks once on first breach. */
+  add: (delta: number) => void;
+  /** Register an abort callback. Called immediately if breach already happened. */
+  registerAbort: (cb: () => void) => void;
+};
+
+function createBudgetMonitor(maxCostUsd: number): BudgetMonitor {
+  const monitor: BudgetMonitor = {
+    maxCostUsd,
+    total: 0,
+    breached: false,
+    abortCallbacks: [],
+    add(delta) {
+      if (!Number.isFinite(delta) || delta <= 0) return;
+      this.total += delta;
+      if (!this.breached && this.total > this.maxCostUsd) {
+        this.breached = true;
+        for (const cb of this.abortCallbacks) cb();
+      }
+    },
+    registerAbort(cb) {
+      this.abortCallbacks.push(cb);
+      if (this.breached) cb();
+    },
+  };
+  return monitor;
+}
+
+/**
+ * Sum `total_cost_usd` across Anthropic `result` SDKMessages. The masked
+ * transcript preserves cost fields verbatim (only timing/UUIDs are scrubbed).
+ */
+function extractAnthropicCost(message: Record<string, unknown>): number {
+  if (message.type !== 'result') return 0;
+  const cost = message.total_cost_usd;
+  return typeof cost === 'number' && Number.isFinite(cost) ? cost : 0;
+}
+
+/**
+ * Pull the latest `costUsd` from a captured OR `AgentCoreEvent`. The OR SDK
+ * reports cumulative cost on `turn_end`, `stream_complete`, and `session_end`
+ * — we use the DELTA from one observation to the next so the budget monitor
+ * sees an incremental update each event. The caller passes the previously
+ * observed running total; this returns the new total (NOT the delta), and
+ * the caller computes `new - prev` to feed the monitor.
+ */
+function extractOrCost(event: { type: string; costUsd?: number }): number | undefined {
+  if (typeof event.costUsd !== 'number' || !Number.isFinite(event.costUsd)) return undefined;
+  return event.costUsd;
 }
 
 // ----- Anthropic side capture -----
@@ -178,8 +271,9 @@ function registerEntries(emulator: EmulatorHandle, entries: ScriptEntry[]): void
  */
 async function captureAnthropic(
   scenario: Scenario,
-  emulatorUrl: string,
+  emulatorUrl: string | undefined,
   timeoutMs: number,
+  budget: BudgetMonitor,
 ): Promise<AnthropicTranscript> {
   const messages: Array<Record<string, unknown>> = [];
   const abortController = new AbortController();
@@ -189,6 +283,8 @@ async function captureAnthropic(
     abortController.abort();
   }, timeoutMs);
   timer.unref();
+  budget.registerAbort(() => abortController.abort());
+  let observedCost = 0;
 
   // Per-scenario tool wiring. Built INSIDE this function (not shared with
   // the OR side) so the `counter` fixture's closure state is independent
@@ -197,14 +293,26 @@ async function captureAnthropic(
   const tools = buildHarnessTools(scenario.tools ?? []);
   const canUseTool = buildAnthropicCanUseTool(scenario);
 
+  // Phase 6.7: in live mode (`emulatorUrl` undefined) we DON'T override
+  // ANTHROPIC_BASE_URL — the SDK hits Anthropic's production endpoint. The
+  // API key comes from the calling environment (`ANTHROPIC_API_KEY`). The
+  // spread of `process.env` preserves it; if absent, the SDK surfaces an
+  // authentication error which the test driver propagates.
+  const envOverrides: Record<string, string> =
+    emulatorUrl !== undefined
+      ? {
+          ANTHROPIC_BASE_URL: emulatorUrl,
+          ANTHROPIC_API_KEY: 'sk-ant-emulator-stub',
+        }
+      : {};
+
   try {
     const q = query({
       prompt: scenario.prompt,
       options: {
         env: {
           ...process.env,
-          ANTHROPIC_BASE_URL: emulatorUrl,
-          ANTHROPIC_API_KEY: 'sk-ant-emulator-stub',
+          ...envOverrides,
         },
         abortController,
         // `settingSources: []` puts the SDK in isolation mode — no
@@ -239,7 +347,17 @@ async function captureAnthropic(
     });
     const cancelAfter = scenario.cancellation?.afterEventsAnthropic;
     for await (const msg of q) {
-      messages.push(maskNondeterminism(msg as unknown as Record<string, unknown>));
+      const cloned = maskNondeterminism(msg as unknown as Record<string, unknown>);
+      messages.push(cloned);
+      // Phase 6.7: accumulate observed cost (only `result` SDKMessages carry
+      // `total_cost_usd`; everything else returns 0 here). On budget breach
+      // the BudgetMonitor will fire abort on our controller via the
+      // `registerAbort` callback above — we don't need to do anything else.
+      const cost = extractAnthropicCost(cloned);
+      if (cost > observedCost) {
+        budget.add(cost - observedCost);
+        observedCost = cost;
+      }
       // Phase 6.5b: mid-stream cancellation. We trigger the abort from the
       // capture loop AFTER the Nth message has been pushed — so the
       // transcript captures the trigger-point event, the SDK observes the
@@ -257,21 +375,23 @@ async function captureAnthropic(
         wire: 'anthropic',
         messages,
         thrown: `Anthropic-side capture timed out after ${timeoutMs}ms`,
+        costUsd: observedCost,
       };
     }
     return {
       wire: 'anthropic',
       messages,
       thrown: formatThrown(err),
+      costUsd: observedCost,
     };
   } finally {
     clearTimeout(timer);
   }
-  return { wire: 'anthropic', messages };
+  return { wire: 'anthropic', messages, costUsd: observedCost };
 }
 
 function failedAnthropicTranscript(err: unknown): AnthropicTranscript {
-  return { wire: 'anthropic', messages: [], thrown: formatThrown(err) };
+  return { wire: 'anthropic', messages: [], thrown: formatThrown(err), costUsd: 0 };
 }
 
 // ----- OpenRouter side capture -----
@@ -292,8 +412,9 @@ function failedAnthropicTranscript(err: unknown): AnthropicTranscript {
  */
 async function captureOpenRouter(
   scenario: Scenario,
-  emulatorUrl: string,
+  emulatorUrl: string | undefined,
   timeoutMs: number,
+  budget: BudgetMonitor,
 ): Promise<OrTranscript> {
   const events: AgentEventCapture[] = [];
   const abortController = new AbortController();
@@ -303,18 +424,28 @@ async function captureOpenRouter(
     abortController.abort();
   }, timeoutMs);
   timer.unref();
+  budget.registerAbort(() => abortController.abort());
+  let observedCost = 0;
 
   // Per-scenario tool wiring (independent state — see captureAnthropic).
   const tools = buildHarnessTools(scenario.tools ?? []);
   const canUseTool = buildOrCanUseTool(scenario);
 
+  // Phase 6.7: in live mode (`emulatorUrl` undefined) read the real
+  // `OPENROUTER_API_KEY` from the environment. In emulated mode the stub
+  // key is sufficient — the emulator ignores Authorization.
+  const apiKey =
+    emulatorUrl !== undefined
+      ? 'sk-or-emulator-stub'
+      : (process.env.OPENROUTER_API_KEY ?? 'sk-or-emulator-stub');
+
   let run: OpenRouterAgentRun | undefined;
   try {
     run = new OpenRouterAgentRun({
-      apiKey: 'sk-or-emulator-stub',
+      apiKey,
       sessionId: `comparative-${scenario.name}`,
       prompt: scenario.prompt,
-      baseUrl: emulatorUrl,
+      ...(emulatorUrl !== undefined && { baseUrl: emulatorUrl }),
       persistSession: false,
       signal: abortController.signal,
       tools: tools.orTools,
@@ -324,7 +455,17 @@ async function captureOpenRouter(
     });
     const cancelAfter = scenario.cancellation?.afterEventsOr;
     for await (const event of run) {
-      events.push(maskNondeterminism(event));
+      const masked = maskNondeterminism(event);
+      events.push(masked);
+      // Phase 6.7: track cumulative cost from any event that carries it.
+      // The OR SDK reports a monotonically-growing `costUsd` on `turn_end`,
+      // `stream_complete`, and `session_end`. We feed the budget monitor
+      // the DELTA so back-to-back observations don't double-count.
+      const cost = extractOrCost(masked as { type: string; costUsd?: number });
+      if (cost !== undefined && cost > observedCost) {
+        budget.add(cost - observedCost);
+        observedCost = cost;
+      }
       // Phase 6.5b: same per-SDK abort-after-N-events pattern as the
       // Anthropic side (see captureAnthropic). Each side cancels at its own
       // observable boundary; thresholds in the JSON are independent because
@@ -340,21 +481,23 @@ async function captureOpenRouter(
         wire: 'openrouter',
         events,
         thrown: `OpenRouter-side capture timed out after ${timeoutMs}ms`,
+        costUsd: observedCost,
       };
     }
     return {
       wire: 'openrouter',
       events,
       thrown: formatThrown(err),
+      costUsd: observedCost,
     };
   } finally {
     clearTimeout(timer);
   }
-  return { wire: 'openrouter', events };
+  return { wire: 'openrouter', events, costUsd: observedCost };
 }
 
 function failedOrTranscript(err: unknown): OrTranscript {
-  return { wire: 'openrouter', events: [], thrown: formatThrown(err) };
+  return { wire: 'openrouter', events: [], thrown: formatThrown(err), costUsd: 0 };
 }
 
 type AgentEventCapture = Parameters<

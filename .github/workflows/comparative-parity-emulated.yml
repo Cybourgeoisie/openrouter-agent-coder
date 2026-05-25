@@ -1,0 +1,37 @@
+# Comparative-parity EMULATED-mode merge gate (Phase 6.7).
+#
+# Runs the full canonical-16 scenario set against the in-process emulator on
+# every pull request. NO API keys required — the emulator serves scripted
+# responses, so fork PRs run this job identically to first-party PRs.
+#
+# Failure here IS a merge blocker. This is the primary parity gate: if the
+# Anthropic Agent SDK and `@openrouter/agent` diverge in behavior on the same
+# scripted input, that's exactly the kind of rot Phase 6 exists to surface.
+#
+# Runtime note: the suite is ~2-3 minutes on cold cache. The plan-doc's
+# original "<30s" target reflects the no-scenario-#13/#15 wall time; the two
+# failure-injection scenarios use a per-scenario `harnessTimeoutMs` of 60s
+# each to let the Anthropic SDK's `invalid_request_error` retry loop complete
+# without flaking under CI load (see scenarios/13-mid-stream-5xx.json +
+# scenarios/15-truncated-stream.json). DO NOT widen the harness's 30s default
+# — narrow per-scenario overrides surface slow scenarios; a global widening
+# would mask future regressions.
+name: Comparative parity (emulated)
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  comparative-emulated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build
+      - name: Run comparative-parity emulated suite
+        run: npm run test:comparative
