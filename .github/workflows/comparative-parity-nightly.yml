@@ -1,0 +1,373 @@
+# Comparative-parity NIGHTLY drift-detection workflow (Phase 6.8).
+#
+# Runs the canonical scenario set in BOTH modes (emulated AND live) against
+# real provider endpoints on a 07:00 UTC daily cron + `workflow_dispatch` for
+# on-demand runs. Compares the per-scenario pass/fail outcomes across modes
+# and classifies drift signals:
+#
+#   - emulated PASS + live PASS → green, no action.
+#   - emulated FAIL + live FAIL → `parity-bug` (the SDK plumbing or the
+#     scenario itself is broken; PR gate already caught the emulated fail).
+#   - emulated PASS + live FAIL → `parity-drift` (the emulator's script
+#     has drifted from real provider semantics; the failing scenario's
+#     script needs refreshing).
+#   - emulated FAIL + live PASS → noted but not an issue-worthy signal in
+#     v1 (the emulated fail is already a merge blocker — surfaced in the
+#     workflow summary, not auto-filed).
+#
+# v1 scope intentionally matches the live-smoke set (4 scenarios flagged
+# with `liveSmoke: true`). The remaining 12 canonical scenarios are
+# emulator-only (including the failure-injection #13–#16 which CAN'T run
+# live by definition). See PR body's ambiguity calls for why "full set in
+# both modes" reduces to "the live-runnable set."
+#
+# Failure posture: this workflow is NEVER a merge blocker. Live runs are
+# inherently flaky (provider latency, transient 5xx, model nondeterminism).
+# The drift signal is the artifact — not the workflow's red/green status.
+#
+# Cost posture:
+#   - Per-scenario `maxCostUsd` enforced by the harness (default $0.50).
+#   - Per-night aggregate sanity cap: $5. On breach a `budget-warning`
+#     issue is opened (idempotent — at most one open issue at a time).
+#   - Live tests use vitest's native `--retry=1` so a transient 5xx
+#     auto-retries once per scenario without YAML loop complexity.
+#
+# Fork safety: scheduled triggers and `workflow_dispatch` only run on the
+# default branch (and on workflow_dispatch's user-selected branch). There
+# is NO `pull_request` trigger here — fork PRs cannot dispatch this
+# workflow and cannot expose its secrets. If you ever add a
+# `pull_request` trigger for dev convenience, REMOVE it before merging.
+name: Comparative parity (nightly)
+
+on:
+  # 07:00 UTC daily — picked to align with Ben's morning (UTC-5 = 02:00
+  # local; results are settled by the time the workday starts). Bump this
+  # later if the timing's wrong; the cron expression is the only thing
+  # that needs to change.
+  schedule:
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+    inputs:
+      synthetic_drift:
+        description: 'Inject a synthetic drift signal (emulated PASS + live FAIL on a fake scenario) to dry-run the issue-filing path. Leave false in production.'
+        type: boolean
+        default: false
+        required: false
+
+jobs:
+  nightly-parity:
+    runs-on: ubuntu-latest
+    # Live mode + retries can run long; cap at 30 minutes as a defensive
+    # outer ceiling. The harness's per-scenario timeouts are the inner
+    # ceiling.
+    timeout-minutes: 30
+    permissions:
+      # `contents: read` required by `actions/checkout@v4` (without it,
+      # checkout fails at git-fetch as `Repository not found`).
+      contents: read
+      # `issues: write` required by the gh-CLI auto-filing steps below.
+      # The default GITHUB_TOKEN gets these scopes when explicitly listed
+      # in `permissions:`.
+      issues: write
+    env:
+      # Pin the report artifact paths so the classification step can
+      # locate them deterministically regardless of where vitest is
+      # invoked from.
+      COMPARATIVE_EMULATED_RESULT_REPORT: ${{ github.workspace }}/tmp
+      COMPARATIVE_LIVE_COST_REPORT: ${{ github.workspace }}/tmp
+      # Today's date in YYYY-MM-DD form — used in issue titles.
+      RUN_DATE: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build
+
+      - name: Capture run date
+        id: rundate
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure labels exist (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # `gh label create` errors if the label exists; `|| true` makes
+        # this idempotent. First run bootstraps the labels; subsequent
+        # runs no-op. Keeping label-bootstrap in the workflow (vs. a
+        # separate one-time setup step) means a fresh fork that runs the
+        # workflow gets the labels automatically.
+        run: |
+          gh label create parity-drift --color 'd73a4a' --description 'Emulator script drifted from real provider semantics' || true
+          gh label create parity-bug --color 'b60205' --description 'Comparative-parity failure in both emulated and live modes' || true
+          gh label create scenario-needs-refresh --color 'fbca04' --description 'Scenario crossed the 10%/7d flake threshold' || true
+          gh label create budget-warning --color 'e99695' --description 'Comparative-parity nightly exceeded the spend sanity cap' || true
+
+      - name: Run emulated suite (writes per-scenario JSONL)
+        id: emulated
+        continue-on-error: true
+        run: npm run test:comparative
+
+      - name: Run live suite with auto-retry-once
+        id: live
+        continue-on-error: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        # vitest's native `--retry=1` re-runs each failed test once. The
+        # live driver appends to the JSONL on each invocation, so the
+        # classification step's `jq` pipeline must dedupe by scenario
+        # name (last-write-wins).
+        run: npm run test:comparative:live -- --retry=1
+
+      - name: Inject synthetic drift signal (workflow_dispatch only)
+        # Dry-run hook for validating the issue-filing path without real
+        # API keys. Writes a JSONL pair that the classification step
+        # below will classify as drift (synth-drift) and bug (synth-bug),
+        # then exercises both gh-issue-create branches end-to-end. Only
+        # fires on a `workflow_dispatch` with `synthetic_drift=true`.
+        # Auto-files synthetic issues — close them with the comment
+        # "dry-run artifact" after the run completes.
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.synthetic_drift == 'true'
+        run: |
+          mkdir -p tmp
+          {
+            echo '{"scenario":"synth-drift","mode":"emulated","pass":true}'
+            echo '{"scenario":"synth-bug","mode":"emulated","pass":false}'
+          } >> tmp/comparative-emulated-result-report.jsonl
+          {
+            echo '{"scenario":"synth-drift","mode":"live","pass":false,"anthropicCostUsd":0,"orCostUsd":0,"totalCostUsd":0,"maxCostUsd":0.5,"costBreach":false,"anthropicThrew":true,"orThrew":false}'
+            echo '{"scenario":"synth-bug","mode":"live","pass":false,"anthropicCostUsd":0,"orCostUsd":0,"totalCostUsd":0,"maxCostUsd":0.5,"costBreach":false,"anthropicThrew":true,"orThrew":true}'
+          } >> tmp/comparative-live-cost-report.jsonl
+
+      - name: Aggregate spend + workflow summary
+        id: budget
+        if: always()
+        run: |
+          LIVE_REPORT="${COMPARATIVE_LIVE_COST_REPORT}/comparative-live-cost-report.jsonl"
+          {
+            echo "## Comparative parity nightly — ${{ steps.rundate.outputs.date }}"
+            echo ""
+            echo "**Emulated suite:** ${{ steps.emulated.outcome }}"
+            echo "**Live suite:** ${{ steps.live.outcome }}"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ ! -f "$LIVE_REPORT" ]; then
+            echo "::warning::No live cost report produced — skipping spend aggregation." >&2
+            echo "total_cost=0" >> "$GITHUB_OUTPUT"
+            echo "breach=false" >> "$GITHUB_OUTPUT"
+            echo "_No live cost report produced._" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Dedupe by scenario name (last-write-wins) to collapse vitest
+          # --retry=1 duplicate entries into one row per scenario.
+          DEDUPED=$(jq -s '
+            reduce .[] as $row ({}; .[$row.scenario] = $row)
+            | [.[]]
+          ' "$LIVE_REPORT")
+          TOTAL=$(echo "$DEDUPED" | jq '[.[].totalCostUsd] | add // 0')
+          echo "total_cost=$TOTAL" >> "$GITHUB_OUTPUT"
+          # Per-scenario breakdown rendered into the step summary.
+          {
+            echo "### Per-scenario cost (live mode)"
+            echo ""
+            echo "| scenario | anthropic | openrouter | total | cap | pass |"
+            echo "|---|---|---|---|---|---|"
+            echo "$DEDUPED" | jq -r '
+              .[] |
+              "| \(.scenario) | $\(.anthropicCostUsd) | $\(.orCostUsd) | $\(.totalCostUsd) | $\(.maxCostUsd) | \(.pass) |"
+            '
+            echo ""
+            echo "**Aggregate cost:** \$${TOTAL} (sanity cap: \$5/night)"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          # The $5/night sanity cap. Compare as a float via bc.
+          BREACH=$(echo "$TOTAL > 5" | bc -l)
+          echo "breach=$BREACH" >> "$GITHUB_OUTPUT"
+          if [ "$BREACH" = "1" ]; then
+            echo "::warning::Nightly aggregate cost \$$TOTAL exceeded the \$5 sanity cap."
+            echo "**:warning: Budget cap breached:** total \$${TOTAL} > \$5/night." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Open budget-warning issue (if cap breached, idempotent)
+        if: always() && steps.budget.outputs.breach == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXISTING=$(gh issue list --label budget-warning --state open --json number --jq 'length')
+          if [ "$EXISTING" -gt 0 ]; then
+            echo "Budget-warning issue already open; skipping create."
+            exit 0
+          fi
+          gh issue create \
+            --label budget-warning \
+            --title "[budget-warning] Nightly aggregate cost exceeded \$5 on ${{ steps.rundate.outputs.date }}" \
+            --body "Nightly comparative-parity workflow aggregate cost reached \$${{ steps.budget.outputs.total_cost }}, exceeding the \$5/night sanity cap. See workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Classify drift + auto-file issues
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EMULATED="${COMPARATIVE_EMULATED_RESULT_REPORT}/comparative-emulated-result-report.jsonl"
+          LIVE="${COMPARATIVE_LIVE_COST_REPORT}/comparative-live-cost-report.jsonl"
+          if [ ! -f "$EMULATED" ] || [ ! -f "$LIVE" ]; then
+            echo "::warning::Missing report artifact — emulated=$EMULATED live=$LIVE — skipping classification."
+            exit 0
+          fi
+          # Build dedupe-by-scenario maps for each mode. Vitest --retry=1
+          # produces multiple lines per scenario on retried tests; the
+          # reduce pass collapses to last-write-wins.
+          EMULATED_MAP=$(jq -s 'reduce .[] as $r ({}; .[$r.scenario] = $r.pass)' "$EMULATED")
+          LIVE_MAP=$(jq -s 'reduce .[] as $r ({}; .[$r.scenario] = $r.pass)' "$LIVE")
+          {
+            echo "### Drift classification"
+            echo ""
+            echo "| scenario | emulated | live | classification |"
+            echo "|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Iterate over live scenarios (the smaller, drift-relevant set);
+          # for each, look up emulated pass/fail and classify.
+          SCENARIOS=$(echo "$LIVE_MAP" | jq -r 'keys[]')
+          for scenario in $SCENARIOS; do
+            # NOTE: don't use jq's `// "missing"` alternative — it fires on
+            # both `null` AND `false`, so a `pass: false` value would be
+            # mis-read as "missing". `has(...)` distinguishes presence
+            # from a literal-false value.
+            E_PASS=$(echo "$EMULATED_MAP" | jq -r --arg s "$scenario" 'if has($s) then .[$s] else "missing" end')
+            L_PASS=$(echo "$LIVE_MAP" | jq -r --arg s "$scenario" 'if has($s) then .[$s] else "missing" end')
+            CLASS="green"
+            LABEL=""
+            TEMPLATE=""
+            TITLE=""
+            if [ "$E_PASS" = "true" ] && [ "$L_PASS" = "true" ]; then
+              CLASS="green"
+            elif [ "$E_PASS" = "true" ] && [ "$L_PASS" = "false" ]; then
+              CLASS="parity-drift"
+              LABEL="parity-drift"
+              TEMPLATE=".github/ISSUE_TEMPLATE/parity-drift.md"
+              TITLE="[parity-drift] ${scenario} diverged on ${{ steps.rundate.outputs.date }}"
+            elif [ "$E_PASS" = "false" ] && [ "$L_PASS" = "false" ]; then
+              CLASS="parity-bug"
+              LABEL="parity-bug"
+              TEMPLATE=".github/ISSUE_TEMPLATE/parity-bug.md"
+              TITLE="[parity-bug] ${scenario} failing in both modes on ${{ steps.rundate.outputs.date }}"
+            else
+              # emulated FAIL + live PASS — surfaced in summary, not auto-filed.
+              CLASS="emulated-only-fail"
+            fi
+            echo "| ${scenario} | ${E_PASS} | ${L_PASS} | ${CLASS} |" >> "$GITHUB_STEP_SUMMARY"
+            if [ -z "$LABEL" ]; then
+              continue
+            fi
+            # Idempotency: skip if there's already an open issue for this
+            # scenario+label combo. Match on label + scenario name in
+            # title; gh's --search is a string match against title+body.
+            EXISTING=$(gh issue list --label "$LABEL" --state open --search "$scenario in:title" --json number --jq 'length')
+            if [ "$EXISTING" -gt 0 ]; then
+              echo "Open $LABEL issue already exists for $scenario; skipping."
+              continue
+            fi
+            # Build body from the template, replacing the AUTOFILL block.
+            RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            AUTOFILL=$(printf -- "- **Scenario:** \`%s\`\n- **Workflow run:** %s\n- **Failure summary:** emulated=%s, live=%s" \
+              "$scenario" "$RUN_URL" "$E_PASS" "$L_PASS")
+            BODY_FILE=$(mktemp)
+            awk -v fill="$AUTOFILL" '
+              BEGIN { in_block = 0; printed_fill = 0 }
+              /<!-- AUTOFILL:START -->/ { print; in_block = 1; next }
+              /<!-- AUTOFILL:END -->/ {
+                if (!printed_fill) { print fill; printed_fill = 1 }
+                print; in_block = 0; next
+              }
+              !in_block { print }
+            ' "$TEMPLATE" > "$BODY_FILE"
+            # Strip the YAML frontmatter — gh issue create reads the body
+            # raw and we want to set the title via --title (the template's
+            # frontmatter title is a placeholder).
+            # Strip the YAML frontmatter — sed's `1,/^---$/d` deletes from
+            # line 1 through the FIRST `^---$` AFTER line 1, which IS the
+            # closing fence of the frontmatter (the opening `---` is on
+            # line 1 itself and is included in the deletion range).
+            sed -i '1,/^---$/d' "$BODY_FILE"
+            gh issue create --label "$LABEL" --title "$TITLE" --body-file "$BODY_FILE"
+          done
+
+      - name: Flake-threshold check (open scenario-needs-refresh, idempotent)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # For each scenario in this run's live report, count how many
+          # parity-drift OR parity-bug issues were created in the past 7
+          # days mentioning that scenario in the title. If >= 2 (i.e.,
+          # this scenario flaked on >10% of the past 7 daily runs — back-
+          # of-envelope: 7 runs × 10% ≈ 0.7, round up to 1 prior + this
+          # run = 2), open a scenario-needs-refresh issue. Idempotent:
+          # skips if there's already an open one for the scenario.
+          LIVE="${COMPARATIVE_LIVE_COST_REPORT}/comparative-live-cost-report.jsonl"
+          if [ ! -f "$LIVE" ]; then
+            echo "No live report — skipping flake-threshold check."
+            exit 0
+          fi
+          SCENARIOS=$(jq -s -r 'reduce .[] as $r ({}; .[$r.scenario] = true) | keys[]' "$LIVE")
+          # Compute "7 days ago" in ISO 8601 for gh's --search date qual.
+          SEVEN_DAYS_AGO=$(date -u -d '7 days ago' +%Y-%m-%d)
+          for scenario in $SCENARIOS; do
+            # Count drift+bug issues created in window mentioning scenario.
+            COUNT=$(gh issue list \
+              --state all \
+              --label parity-drift \
+              --search "${scenario} in:title created:>=${SEVEN_DAYS_AGO}" \
+              --json number --jq 'length')
+            BUG_COUNT=$(gh issue list \
+              --state all \
+              --label parity-bug \
+              --search "${scenario} in:title created:>=${SEVEN_DAYS_AGO}" \
+              --json number --jq 'length')
+            TOTAL=$((COUNT + BUG_COUNT))
+            if [ "$TOTAL" -lt 2 ]; then
+              continue
+            fi
+            EXISTING=$(gh issue list \
+              --label scenario-needs-refresh \
+              --state open \
+              --search "${scenario} in:title" \
+              --json number --jq 'length')
+            if [ "$EXISTING" -gt 0 ]; then
+              echo "Open scenario-needs-refresh issue already exists for $scenario; skipping."
+              continue
+            fi
+            TEMPLATE=".github/ISSUE_TEMPLATE/scenario-needs-refresh.md"
+            TITLE="[scenario-needs-refresh] ${scenario} exceeded 10% flake rate over 7 days"
+            RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            AUTOFILL=$(printf -- "- **Scenario:** \`%s\`\n- **Workflow run:** %s\n- **Flake rate:** %s parity-drift/parity-bug issues in past 7 days\n- **Recent failures:** see linked issues with the parity-drift or parity-bug label and \`%s\` in the title" \
+              "$scenario" "$RUN_URL" "$TOTAL" "$scenario")
+            BODY_FILE=$(mktemp)
+            awk -v fill="$AUTOFILL" '
+              BEGIN { in_block = 0; printed_fill = 0 }
+              /<!-- AUTOFILL:START -->/ { print; in_block = 1; next }
+              /<!-- AUTOFILL:END -->/ {
+                if (!printed_fill) { print fill; printed_fill = 1 }
+                print; in_block = 0; next
+              }
+              !in_block { print }
+            ' "$TEMPLATE" > "$BODY_FILE"
+            # Strip the YAML frontmatter — sed's `1,/^---$/d` deletes from
+            # line 1 through the FIRST `^---$` AFTER line 1, which IS the
+            # closing fence of the frontmatter (the opening `---` is on
+            # line 1 itself and is included in the deletion range).
+            sed -i '1,/^---$/d' "$BODY_FILE"
+            gh issue create --label scenario-needs-refresh --title "$TITLE" --body-file "$BODY_FILE"
+          done
+
+      - name: Upload report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: comparative-parity-nightly-reports
+          path: |
+            tmp/comparative-emulated-result-report.jsonl
+            tmp/comparative-live-cost-report.jsonl
+          if-no-files-found: warn

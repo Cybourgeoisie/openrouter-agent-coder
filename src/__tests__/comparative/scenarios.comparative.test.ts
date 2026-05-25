@@ -14,7 +14,8 @@
 // and the comparator-pass assertion makes the smoke's looser "transcripts
 // captured" check redundant.
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeAll, describe, it, expect } from 'vitest';
+import { appendFile, mkdir, writeFile } from 'node:fs/promises';
 import { readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,14 +27,52 @@ import { loadScenario } from './scenarios.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCENARIO_DIR = join(HERE, 'scenarios');
 
+// Phase 6.8: opt-in per-scenario pass/fail JSONL emission for the nightly
+// drift-detection workflow. Default off — local + PR runs don't pay the
+// I/O. The nightly workflow sets `COMPARATIVE_EMULATED_RESULT_REPORT` to a
+// directory; the driver writes one JSONL line per scenario test, last-
+// write-wins on retries (vitest --retry=1 re-invokes the test body, the
+// workflow's jq pass dedupes by scenario name). The file is wiped in
+// beforeAll so each run starts clean.
+const EMULATED_REPORT_DIR = process.env.COMPARATIVE_EMULATED_RESULT_REPORT;
+const EMULATED_REPORT_PATH = EMULATED_REPORT_DIR
+  ? join(EMULATED_REPORT_DIR, 'comparative-emulated-result-report.jsonl')
+  : null;
+
 const scenarios = readdirSync(SCENARIO_DIR)
   // Ignore authoring helpers (`_tools.ts`, `_helper.ts`, `README.md`).
   .filter((f) => f.endsWith('.json') && !f.startsWith('_'))
   .map((f) => ({ name: f.replace(/\.json$/, ''), path: join(SCENARIO_DIR, f) }))
   .sort((a, b) => a.name.localeCompare(b.name));
 
-describe.each(scenarios)('comparative scenario: $name', ({ path }) => {
+if (EMULATED_REPORT_PATH) {
+  // Reset the report artifact so each run starts clean. The nightly
+  // workflow reads this file after the test command exits.
+  beforeAll(async () => {
+    await mkdir(dirname(EMULATED_REPORT_PATH), { recursive: true });
+    await writeFile(EMULATED_REPORT_PATH, '', 'utf8');
+  });
+}
+
+describe.each(scenarios)('comparative scenario: $name', ({ name, path }) => {
+  // Track this scenario's pass-state across afterEach so we can emit the
+  // JSONL line whether the test threw or not. Vitest's --retry=1 re-runs
+  // the test body, so afterEach fires again on retry — last-write-wins
+  // semantics; the workflow's jq pass dedupes by scenario name.
+  let scenarioPassed = false;
+  afterEach(async () => {
+    if (!EMULATED_REPORT_PATH) return;
+    const line =
+      JSON.stringify({
+        scenario: name,
+        mode: 'emulated',
+        pass: scenarioPassed,
+      }) + '\n';
+    await appendFile(EMULATED_REPORT_PATH, line, 'utf8');
+  });
+
   it('passes the comparator in emulated mode', async () => {
+    scenarioPassed = false;
     const scenario = await loadScenario(path);
     const { anthropicTranscript, orTranscript } = await runScenario(path, 'emulated');
 
@@ -92,6 +131,10 @@ describe.each(scenarios)('comparative scenario: $name', ({ path }) => {
     // diagnostic appears in the test output without requiring a separate
     // dump-file inspection step.
     expect(result.pass, `Comparator failed:\n${result.report}`).toBe(true);
+
+    // Reached only if every expect above held — flag pass for the 6.8
+    // nightly JSONL emitted in afterEach.
+    scenarioPassed = true;
   });
 });
 
