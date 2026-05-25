@@ -1,0 +1,94 @@
+{
+  "name": "15-truncated-stream",
+  "description": "Canonical scenario #15: truncated stream (TCP close mid-event with no terminal marker). Distinct from #13's mid-stream 5xx: the emulator delivers a few well-formed events, writes the head of one more event (without the trailing `\\n\\n` separator and no `data: [DONE]` / `message_stop`), then calls socket.destroy() to forcibly close the TCP connection. The SDK's HTTP client must surface this as a 'connection closed mid-stream' / 'unexpected end of stream' typed error — distinct path from receiving a typed error chunk because there's no error chunk to receive, just a vanished socket. Ambiguity call: at the emulator layer, this is genuinely different from #13 (no error event written) but both #13 and #15 end with res.end() vs. res.socket.destroy() respectively; the SDK-observable difference is whether bytes for an error event arrive before the close. The comparator config matches #13/#14 since the SDK-level surfacing of 'stream ended unexpectedly' varies between the two SDKs in the same structural ways.",
+  "prompt": "Explain TLS in one sentence.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Answer concisely.",
+  "tools": [],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:a71057f45706ed5c8d3ca440bb654fce019bf5e3cca00fd628c9fb659e33b796",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"Explain TLS\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 10
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:cd018657118f711a22b15f83cc5307843c34861a8de357ecc4438a05d3e506b1",
+      "turn": 0,
+      "kind": "failure",
+      "failure": {
+        "type": "truncated_stream",
+        "eventsBeforeTruncation": 3
+      },
+      "partial": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "TLS encrypts data in transit using asymmetric handshakes."
+          }
+        ],
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 12
+        }
+      },
+      "stream": {
+        "chunkSize": 10
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:a6d88207320da950a09c3237b3e192cd31a843a650ef9c98e43686c4774f1e53",
+      "turn": 0,
+      "kind": "failure",
+      "failure": {
+        "type": "truncated_stream",
+        "eventsBeforeTruncation": 4
+      },
+      "partial": {
+        "id": "resp-15-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "TLS encrypts data in transit using asymmetric handshakes."
+          }
+        ],
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 12,
+          "total_tokens": 32
+        }
+      },
+      "stream": {
+        "chunkSize": 10
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact",
+    "ignoreThrown": true,
+    "tolerateThrownInjection": true,
+    "skipTerminalCheck": true,
+    "skipEventStreamCheck": true,
+    "skipHookOrderCheck": true
+  }
+}

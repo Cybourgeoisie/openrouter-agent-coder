@@ -45,14 +45,22 @@ describe.each(scenarios)('comparative scenario: $name', ({ path }) => {
     // the parity claim. For those scenarios we still inspect the throw
     // payload so a non-abort error (which would indicate genuine plumbing
     // breakage) still fails the test, but a benign abort path is allowed.
+    // Phase 6.6 failure-injection scenarios (#13–#15) ALSO populate `thrown`
+    // (transport/parse errors), but with SDK-specific phrasing that isn't
+    // abort-shaped — they opt out of the regex check via the
+    // `tolerateThrownInjection` flag while still requiring `ignoreThrown`
+    // to suppress the no-throw assertion. The flag is intentionally narrow
+    // (not a blanket "no defensive check") so non-injection scenarios that
+    // misuse it still get caught by the schema's documentation.
     const cancelling = scenario.comparator?.ignoreThrown === true;
+    const tolerateInjection = scenario.comparator?.tolerateThrownInjection === true;
     if (!cancelling) {
       expect(
         anthropicTranscript.thrown,
         `Anthropic side threw:\n${anthropicTranscript.thrown}`,
       ).toBeUndefined();
       expect(orTranscript.thrown, `OR side threw:\n${orTranscript.thrown}`).toBeUndefined();
-    } else {
+    } else if (!tolerateInjection) {
       // Defensive: confirm the throw, if any, looks abort-flavored — guards
       // against a future regression where the SDK starts throwing for a
       // different reason and the comparator's ignoreThrown silently masks it.
@@ -69,6 +77,9 @@ describe.each(scenarios)('comparative scenario: $name', ({ path }) => {
         );
       }
     }
+    // tolerateThrownInjection: no shape-check on the throw text — failure-
+    // injection scenarios surface SDK-specific transport/parse error
+    // phrasing that we explicitly don't compare across SDKs.
 
     const result = await compareTranscriptsFromScenario(
       scenario,

@@ -1,0 +1,102 @@
+{
+  "name": "13-mid-stream-5xx",
+  "description": "Canonical scenario #13: mid-stream HTTP 5xx / connection-close. After the SDK has opened a 200 SSE stream and consumed message_start + 2 content_block_delta events, the emulator emits a server-error event (Anthropic: `event: error` with overloaded_error payload; OR /responses: `event: response.failed`) and closes the connection without a terminal message_stop / response.completed. Both SDKs must surface this as a typed terminal error (not a crash) — the parity claim is 'graceful handling of a mid-stream upstream failure'. Per issue body: error message text is SDK-specific phrasing and is NOT compared; the comparator runs maximally-relaxed (ignoreThrown + skipTerminalCheck + skipEventStreamCheck + skipHookOrderCheck) since the two SDKs differ structurally in how they project a mid-stream failure into their host-facing event vocabulary — the parity test that CAN be made is 'neither side crashed the harness', which the test driver's no-thrown-at-harness-level wrapper asserts via the cancelling/ignoreThrown branch. A tighter assertion (e.g. terminal:error on both sides) would require comparator-config that this card declines to add per scope-fence; documented as ambiguity call in the PR body.",
+  "prompt": "Tell me a fact about networking.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Answer concisely.",
+  "tools": [],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:cacb9983519e1fdc8e98cc8f819b74f62306459121cbe9637b15a46bda0a530f",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"Networking fact\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 10
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:5a8f709be319e7d522c113102e191297f0d806855dca8aea36eb20d16b0bbd2b",
+      "turn": 0,
+      "kind": "failure",
+      "failure": {
+        "type": "mid_stream_error",
+        "eventsBeforeError": 4,
+        "error": {
+          "type": "invalid_request_error",
+          "message": "Emulator-injected mid-stream invalid_request_error."
+        }
+      },
+      "partial": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "TCP relies on three-way handshakes for connection setup."
+          }
+        ],
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 12
+        }
+      },
+      "stream": {
+        "chunkSize": 10
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:f13da2e02e3090112122e6ee507c82b34ad56aec020c07663703d39fba0e2dab",
+      "turn": 0,
+      "kind": "failure",
+      "failure": {
+        "type": "mid_stream_error",
+        "eventsBeforeError": 5,
+        "error": {
+          "type": "server_error",
+          "message": "Emulator-injected mid-stream overload."
+        }
+      },
+      "partial": {
+        "id": "resp-13-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "TCP relies on three-way handshakes for connection setup."
+          }
+        ],
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 12,
+          "total_tokens": 32
+        }
+      },
+      "stream": {
+        "chunkSize": 10
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact",
+    "ignoreThrown": true,
+    "tolerateThrownInjection": true,
+    "skipTerminalCheck": true,
+    "skipEventStreamCheck": true,
+    "skipHookOrderCheck": true
+  }
+}

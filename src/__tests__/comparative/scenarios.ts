@@ -103,13 +103,37 @@ const anthropicSuccessEntrySchema = z.object({
 // Phase 6.5c: scenario #12 needs to script a 429 on the Anthropic wire so the
 // SDK exercises its built-in backoff. The adapter already supports the failure
 // mode; this is the schema half (carries kind=failure, retry-after, no
-// response payload). Other Anthropic failure modes (mid_stream_error,
-// malformed_delta, etc.) are NOT exposed via the scenario schema yet — 6.6's
-// failure-injection pass will broaden the surface.
-const anthropicFailureModeSchema = z.object({
-  type: z.literal('rate_limit_429'),
-  retryAfter: z.union([z.string(), z.number()]),
-});
+// response payload).
+// Phase 6.6: extends the surface to cover the four wire-level failure modes
+// scenarios #13–#16 exercise (mid_stream_error, malformed_delta,
+// truncated_stream, split_json_field). The shapes mirror the engine-level
+// `AnthropicFailureMode` discriminated union 1:1. The `partial` field carries
+// the response whose initial events are replayed up to the failure point —
+// optional because some modes (429) don't need it.
+const anthropicFailureModeSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('rate_limit_429'),
+    retryAfter: z.union([z.string(), z.number()]),
+  }),
+  z.object({
+    type: z.literal('mid_stream_error'),
+    eventsBeforeError: z.number().int().nonnegative(),
+    error: z.object({ type: z.string(), message: z.string() }).optional(),
+  }),
+  z.object({
+    type: z.literal('malformed_delta'),
+    atDeltaIndex: z.number().int().nonnegative(),
+  }),
+  z.object({
+    type: z.literal('truncated_stream'),
+    eventsBeforeTruncation: z.number().int().nonnegative(),
+  }),
+  z.object({
+    type: z.literal('split_json_field'),
+    atDeltaIndex: z.number().int().nonnegative(),
+    splitAt: z.number().int().nonnegative(),
+  }),
+]);
 
 const anthropicFailureEntrySchema = z.object({
   wire: z.literal('anthropic').optional(),
@@ -117,6 +141,9 @@ const anthropicFailureEntrySchema = z.object({
   turn: z.number().int().nonnegative(),
   kind: z.literal('failure'),
   failure: anthropicFailureModeSchema,
+  // Partial response whose initial events are replayed up to the failure
+  // point. 429 doesn't use this; the other four modes typically do.
+  partial: anthropicResponseSchema.optional(),
   stream: streamControlSchema,
 });
 
@@ -131,13 +158,40 @@ const openaiEntrySchema = z.object({
   stream: streamControlSchema,
 });
 
-// Phase 6.5c: failure-mode subset on the OpenResponses wire. v1 ships only
-// `rate_limit_429` for scenario #12. The success branch stays the canonical
-// shape; failure entries omit `response` (the 429 doesn't carry one).
-const openResponsesFailureModeSchema = z.object({
-  type: z.literal('rate_limit_429'),
-  retryAfter: z.union([z.string(), z.number()]),
-});
+// Phase 6.5c: failure-mode subset on the OpenResponses wire. v1 shipped only
+// `rate_limit_429` for scenario #12.
+// Phase 6.6: extended to cover the wire-level failure modes scenarios #13–#16
+// exercise on the OR side. Shapes mirror the engine-level
+// `OpenResponsesFailureMode` discriminated union 1:1. Naming differs from the
+// Anthropic side intentionally (`atEventIndex` vs `atDeltaIndex`,
+// `malformed_event` vs `malformed_delta`) because the OR /responses wire's
+// event vocabulary uses "event" / "output_text.delta" / "function_call_-
+// arguments.delta", not Anthropic's "content_block_delta" — keeping the
+// per-wire term keeps scenario JSONs readable.
+const openResponsesFailureModeSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('rate_limit_429'),
+    retryAfter: z.union([z.string(), z.number()]),
+  }),
+  z.object({
+    type: z.literal('mid_stream_error'),
+    eventsBeforeError: z.number().int().nonnegative(),
+    error: z.object({ type: z.string(), message: z.string() }).optional(),
+  }),
+  z.object({
+    type: z.literal('malformed_event'),
+    atEventIndex: z.number().int().nonnegative(),
+  }),
+  z.object({
+    type: z.literal('truncated_stream'),
+    eventsBeforeTruncation: z.number().int().nonnegative(),
+  }),
+  z.object({
+    type: z.literal('split_json_field'),
+    atEventIndex: z.number().int().nonnegative(),
+    splitAt: z.number().int().nonnegative(),
+  }),
+]);
 
 const openResponsesSuccessEntrySchema = z.object({
   wire: z.literal('openresponses'),
@@ -154,6 +208,9 @@ const openResponsesFailureEntrySchema = z.object({
   turn: z.number().int().nonnegative(),
   kind: z.literal('failure'),
   failure: openResponsesFailureModeSchema,
+  // Partial response whose initial events are replayed up to the failure
+  // point. 429 doesn't use this; the other four modes typically do.
+  partial: openResponsesResponseSchema.optional(),
   stream: streamControlSchema,
 });
 
@@ -250,6 +307,19 @@ const comparatorConfigSchema = z
     // failing on a known agent.ts gap. A real fix lives in agent.ts and is
     // out of scope here.
     tolerateToolResultIsError: z.boolean().optional(),
+    // Phase 6.6: when true, the test driver's "if thrown, must look
+    // abort-flavored" defensive regex check is SKIPPED. Used by the
+    // failure-injection scenarios #13–#15 where the SDK may surface a
+    // transport/parse error whose phrasing is SDK-specific and not
+    // abort-shaped. Implies (and requires) `ignoreThrown: true` — the
+    // distinction from `ignoreThrown` alone is that ignoreThrown still
+    // demands a `/abort|cancel/i` pattern match when a throw IS observed,
+    // which is the right defensive posture for cancellation scenarios but
+    // wrong for failure-injection scenarios. Do NOT widen this flag to
+    // scenarios that don't deliberately inject a wire-level transport
+    // failure — a non-cancel non-injection throw is exactly the rot this
+    // harness exists to catch.
+    tolerateThrownInjection: z.boolean().optional(),
     // Phase 6.5c: when true, the comparator skips hook firing order equality.
     // Used by scenario #9 (max_tokens) where the two SDKs structurally diverge
     // on auto-continuation: the Anthropic Agent SDK injects a synthetic

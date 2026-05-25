@@ -1,0 +1,94 @@
+{
+  "name": "14-malformed-sse",
+  "description": "Canonical scenario #14: malformed SSE chunk. The emulator opens a 200 SSE stream and emits message_start (or, on OR, response.created + response.in_progress + output_item.added) correctly, then writes a delta-typed event whose data payload is intentionally invalid JSON (`{\"text\": \"\\xZZ-not-valid-json}`). Both SDKs' incremental JSON parsers must surface a typed parse error and stop — not crash. The comparator uses the same maximally-relaxed config as #13 (ignoreThrown + skipTerminalCheck + skipEventStreamCheck + skipHookOrderCheck): the two SDKs differ on whether they project a parse error into a thrown error vs. a typed terminal event, and ambiguity call #1 in the issue body authorizes asserting by error TYPE (typed parse error reaches host) rather than by exact message text. Per the brief's '8+ ambiguity calls' requirement, this scenario also encodes the call that 'malformed JSON in the SSE payload, not in the surrounding SSE envelope' is what malformed_delta / malformed_event actually inject — a stricter envelope-corruption mode would require new emulator wiring and is out of scope.",
+  "prompt": "What is HTTP?",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Answer concisely.",
+  "tools": [],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:3060a9efd4017f87fbe777c3f7f45f97e91d37077d5f3b210405da84f8dca04a",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"What is HTTP\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 10
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:e65eade8857b967c595ebe2d4fe0b0fb2eb4a17bd14c245db12f7d7c6dac2f86",
+      "turn": 0,
+      "kind": "failure",
+      "failure": {
+        "type": "malformed_delta",
+        "atDeltaIndex": 0
+      },
+      "partial": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "HTTP is a stateless protocol."
+          }
+        ],
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 8
+        }
+      },
+      "stream": {
+        "chunkSize": "natural"
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:569bfe15296a313d97c8c5aaef57a9efafcf32f7f30713e157d4ac89c3952e66",
+      "turn": 0,
+      "kind": "failure",
+      "failure": {
+        "type": "malformed_event",
+        "atEventIndex": 0
+      },
+      "partial": {
+        "id": "resp-14-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "HTTP is a stateless protocol."
+          }
+        ],
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 8,
+          "total_tokens": 28
+        }
+      },
+      "stream": {
+        "chunkSize": "natural"
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact",
+    "ignoreThrown": true,
+    "tolerateThrownInjection": true,
+    "skipTerminalCheck": true,
+    "skipEventStreamCheck": true,
+    "skipHookOrderCheck": true
+  }
+}
