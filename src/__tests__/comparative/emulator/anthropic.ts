@@ -10,7 +10,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import type { ScriptRegistry, ScriptEntry, FailureMode } from './script-engine.js';
+import type {
+  ScriptRegistry,
+  AnthropicScriptEntry,
+  AnthropicFailureMode,
+} from './script-engine.js';
 import { buildAnthropicEvents, serializeSseEvent, type SseEvent } from './sse.js';
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -104,7 +108,7 @@ export async function handleAnthropicMessages(
   await streamScriptEntry(res, lookup.entry);
 }
 
-async function streamScriptEntry(res: ServerResponse, entry: ScriptEntry): Promise<void> {
+async function streamScriptEntry(res: ServerResponse, entry: AnthropicScriptEntry): Promise<void> {
   if (entry.kind === 'failure' && entry.failure.type === 'rate_limit_429') {
     writeJson(
       res,
@@ -159,7 +163,7 @@ async function writeAllEvents(
 async function applyFailureMode(
   res: ServerResponse,
   events: SseEvent[],
-  failure: FailureMode,
+  failure: AnthropicFailureMode,
   interChunkDelayMs: number,
 ): Promise<void> {
   switch (failure.type) {
