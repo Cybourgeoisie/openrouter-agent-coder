@@ -18,6 +18,7 @@ export {
   parseSkillFile,
   parseYamlFrontmatter,
   normalizeFrontmatterKeys,
+  splitFrontmatter,
   splitShellArgs,
   MAX_PROJECT_WALK_DEPTH,
 } from './loader.js';
