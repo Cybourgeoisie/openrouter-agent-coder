@@ -1,6 +1,9 @@
 {
-  "name": "openrouter-agent-coder",
+  "name": "@cybourgeoisie/openrouter-agent-coder",
   "version": "0.2.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "OpenRouter Agent SDK library — async-iterable agent core with tool gating, hooks, and abort. Drop-in replacement for @anthropic-ai/claude-agent-sdk with OpenRouter routing.",
   "type": "module",
   "main": "dist/index.js",

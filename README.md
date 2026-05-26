@@ -11,13 +11,13 @@ See [`plans/callboard-compatibility.md`](./plans/callboard-compatibility.md) for
 ## Install
 
 ```bash
-npm install openrouter-agent-coder
+npm install @cybourgeoisie/openrouter-agent-coder
 ```
 
 ## Quick start
 
 ```ts
-import { OpenRouterAgentRun } from 'openrouter-agent-coder';
+import { OpenRouterAgentRun } from '@cybourgeoisie/openrouter-agent-coder';
 import { randomUUID } from 'node:crypto';
 
 const run = new OpenRouterAgentRun({
@@ -100,7 +100,7 @@ Discriminated union yielded by `for await (... of run)`. Narrow on `event.type`.
 `run.messages()` returns an `AsyncIterable<AgentMessage>` — a typed, aggregated view over the same run as the event stream above. Text deltas within a turn collapse into a single `AssistantMessage.content.TextContent`; tool calls within the same turn append to that message's `content` array; tool results emit a `UserMessage`; the run begins with a `SystemMessage{subtype:'session_start'}` and terminates with a `ResultMessage` followed by `SystemMessage{subtype:'session_end'}`.
 
 ```ts
-import { OpenRouterAgentRun, type AgentMessage } from 'openrouter-agent-coder';
+import { OpenRouterAgentRun, type AgentMessage } from '@cybourgeoisie/openrouter-agent-coder';
 
 const run = new OpenRouterAgentRun({ apiKey, sessionId, prompt });
 for await (const msg of run.messages()) {
@@ -215,7 +215,7 @@ Seven hook events are exposed. Six are auto-fired by the runtime in this fixed o
 The seventh event, **`Notification`**, is NOT auto-fired. Callers emit it themselves to surface progress or errors to subscribers — either by calling `onHook` directly or by using `ctx.notify(level, message, context?)` from inside a tool. When `onHook` is omitted, `ctx.notify` is undefined on the SDK tool context, so a `ctx.notify?.(...)` call no-ops cleanly.
 
 ```ts
-import { tool } from 'openrouter-agent-coder';
+import { tool } from '@cybourgeoisie/openrouter-agent-coder';
 import { z } from 'zod';
 
 const indexFiles = tool({
@@ -354,7 +354,7 @@ import {
   OpenRouterAgentRun,
   type UserQuestionRequest,
   type UserQuestionResponse,
-} from 'openrouter-agent-coder';
+} from '@cybourgeoisie/openrouter-agent-coder';
 
 const run = new OpenRouterAgentRun({
   apiKey,
@@ -399,7 +399,7 @@ Behaviour:
 The built-in `task_create` / `task_update` tools maintain a per-run task list that survives across turns but is **never persisted to `state.json`** (ephemeral; lost when the process exits). On every mutation the library pushes the full latest list to two channels: the `Notification` hook (so log/audit subscribers see it) and the optional `onTasksChanged` constructor callback (so a host UI doesn't have to filter every Notification).
 
 ```ts
-import { OpenRouterAgentRun, type Task, type OnTasksChanged } from 'openrouter-agent-coder';
+import { OpenRouterAgentRun, type Task, type OnTasksChanged } from '@cybourgeoisie/openrouter-agent-coder';
 
 const onTasksChanged: OnTasksChanged = (tasks: Task[]) => {
   // Re-render the task panel. `tasks` is a defensive shallow-copy — safe to retain.
@@ -435,7 +435,7 @@ Behaviour:
 Phase 4.5 ships a `forkSession()` helper and an `OpenRouterAgentRun.fork()` instance method. A fork copies the source session's on-disk `state.json` into a new session directory under the same `logsRoot` and writes a fresh `session.json` whose `parentSessionId` points back at the source. Per-request subdirectories (`req_*` / `gen_*`) are **not** copied — the fork inherits the OR `previousResponseId` chain via `state.json` alone, which is everything `callModel` needs to resume the conversation.
 
 ```ts
-import { OpenRouterAgentRun, forkSession } from 'openrouter-agent-coder';
+import { OpenRouterAgentRun, forkSession } from '@cybourgeoisie/openrouter-agent-coder';
 
 // 1) Run a session that persists state to disk.
 const root = new OpenRouterAgentRun({
@@ -493,7 +493,7 @@ Behaviour:
 Phase 4.6 adds pre-write file checkpointing to the built-in `write_file` and `edit_file` tools. When the run is constructed with `checkpoint: true` — or when an individual tool call passes `{ checkpoint: true }` in its arguments — the library snapshots the target path under `<logsRoot>/<sessionId>/checkpoints/<checkpointId>/` before the mutation lands, so the change can be reverted later with `restoreCheckpoint()`.
 
 ```ts
-import { OpenRouterAgentRun, listCheckpoints, restoreCheckpoint } from 'openrouter-agent-coder';
+import { OpenRouterAgentRun, listCheckpoints, restoreCheckpoint } from '@cybourgeoisie/openrouter-agent-coder';
 
 const run = new OpenRouterAgentRun({
   apiKey,
@@ -560,7 +560,7 @@ Phase 5.1: long-running sessions whose persisted message history grows past the 
 | `autoCompact`         | `boolean` | `true`                                                         | Suppress the in-`finally` threshold check when `false`. `compact()` still works.                                                      |
 
 ```ts
-import { OpenRouterAgentRun, getModelContextWindow } from 'openrouter-agent-coder';
+import { OpenRouterAgentRun, getModelContextWindow } from '@cybourgeoisie/openrouter-agent-coder';
 
 // Auto-trigger when ~64% of GPT-4o's 128k window worth of chars accumulates.
 const tokens = getModelContextWindow('openai/gpt-4o');
@@ -583,7 +583,7 @@ await run.compact();
 The new `PreCompact` lifecycle event fires right before each compaction call. It is **audit-only** — return values are ignored and thrown errors are logged + swallowed. Typical use is archiving the about-to-be-discarded prefix to external storage so audit consumers retain it after the on-disk state is rewritten.
 
 ```ts
-import { OpenRouterAgentRun } from 'openrouter-agent-coder';
+import { OpenRouterAgentRun } from '@cybourgeoisie/openrouter-agent-coder';
 
 const run = new OpenRouterAgentRun({
   apiKey,
@@ -606,7 +606,7 @@ The `getModelContextWindow(model)` helper is exported so consumers can compute t
 Phase 5.3: drive a single `OpenRouterAgentRun` across multiple user turns from a long-lived iterator OR an imperative `pushUserMessage()` queue, with a side-channel `interrupt()` control to stop the model between turns. Mirrors the Claude Agent SDK's `prompt: AsyncIterable<SDKUserMessage>` + `query.interrupt()` ergonomic so consumer code ports 1:1 — internally it's an interrupt-then-restart loop over OR's `interruptedBy` state primitive (see [spike 5.S2](./plans/spikes/5.S2-streaming-input.md) for the trade-off analysis).
 
 ```ts
-import { OpenRouterAgentRun, type UserInput } from 'openrouter-agent-coder';
+import { OpenRouterAgentRun, type UserInput } from '@cybourgeoisie/openrouter-agent-coder';
 
 async function* prompt(): AsyncGenerator<UserInput> {
   yield { content: 'Read README.md and summarise it.' };
@@ -668,7 +668,7 @@ Each yielded block is passed verbatim into the OR Responses API; the library per
 Phase 4.7: opt-in `spawn_subagent` built-in tool. Lets the parent model delegate a focused subtask to a child `OpenRouterAgentRun` with its own session id and (optionally) a narrowed tool whitelist. The parent waits for the subagent to complete and receives the subagent's final assistant text plus status/cost as a single `tool_result` — the subagent's own event stream stays internal to the runner.
 
 ```ts
-import { OpenRouterAgentRun } from 'openrouter-agent-coder';
+import { OpenRouterAgentRun } from '@cybourgeoisie/openrouter-agent-coder';
 import { randomUUID } from 'node:crypto';
 
 const run = new OpenRouterAgentRun({
@@ -818,7 +818,7 @@ Key invariants:
 Look up an OpenRouter key's label, usage, and credit limit.
 
 ```ts
-import { accountInfo } from 'openrouter-agent-coder';
+import { accountInfo } from '@cybourgeoisie/openrouter-agent-coder';
 
 const info = await accountInfo({ apiKey });
 // → { provider: 'openrouter', label: 'sk-…', usageUsd: 12.34, limitUsd: 100 } | null
@@ -831,7 +831,7 @@ Returns `null` for 401/403 (invalid key); throws for other HTTP failures. Option
 List models the OR endpoint advertises.
 
 ```ts
-import { supportedModels } from 'openrouter-agent-coder';
+import { supportedModels } from '@cybourgeoisie/openrouter-agent-coder';
 
 const models = await supportedModels({ apiKey });
 // → [{ value: '~anthropic/claude-sonnet-latest', displayName: '…', description: '…' }, …]
@@ -849,7 +849,7 @@ For host code adding its own tools, the library re-exports a Claude-Agent-SDK-sh
 
 ```ts
 import { z } from 'zod/v4';
-import { OpenRouterAgentRun, allTools, tool, createSdkMcpServer } from 'openrouter-agent-coder';
+import { OpenRouterAgentRun, allTools, tool, createSdkMcpServer } from '@cybourgeoisie/openrouter-agent-coder';
 
 const fetchIssue = tool({
   name: 'fetch_issue',
@@ -897,7 +897,7 @@ Phase 5.2 ships full Model Context Protocol (MCP) support — `OpenRouterAgentRu
 #### Quick start
 
 ```ts
-import { OpenRouterAgentRun, loadMcpConfig } from 'openrouter-agent-coder';
+import { OpenRouterAgentRun, loadMcpConfig } from '@cybourgeoisie/openrouter-agent-coder';
 
 const servers = await loadMcpConfig({ cwd: process.cwd() });
 const run = new OpenRouterAgentRun({
@@ -1039,7 +1039,7 @@ Phase 5.7 adds Claude Code-compatible **skills**: reusable markdown bodies disco
 #### Quick start
 
 ```ts
-import { OpenRouterAgentRun, createSkillLoader } from 'openrouter-agent-coder';
+import { OpenRouterAgentRun, createSkillLoader } from '@cybourgeoisie/openrouter-agent-coder';
 
 // Discovery walks .claude/skills/ in the project (cwd up to .git) and user
 // (~/.claude/skills/) scopes. Plugin roots can be added for 5.8 wiring.
@@ -1148,7 +1148,7 @@ Phase 5.6 adds **slash commands** as a flat-file degenerate skill: markdown file
 Precedence on name collision: **project > user**. Plugins are always namespaced so they never collide.
 
 ```ts
-import { OpenRouterAgentRun, createCommandLoader } from 'openrouter-agent-coder';
+import { OpenRouterAgentRun, createCommandLoader } from '@cybourgeoisie/openrouter-agent-coder';
 
 const commands = createCommandLoader({
   cwd: process.cwd(),
@@ -1248,7 +1248,7 @@ my-plugin/
 Wire it into a run:
 
 ```ts
-import { OpenRouterAgentRun, loadPlugins } from 'openrouter-agent-coder';
+import { OpenRouterAgentRun, loadPlugins } from '@cybourgeoisie/openrouter-agent-coder';
 
 const plugins = await loadPlugins({
   pluginDirs: ['/path/to/my-plugin', '/path/to/another-plugin'],
