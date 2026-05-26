@@ -1,0 +1,178 @@
+{
+  "name": "19-allowed-disallowed-grammar",
+  "description": "Phase 6.9 backfill #165: exercises the scoped allowed/disallowed-tools rule grammar (Phase 3.2). The shared bilateral flow is intentionally minimal (1-turn no-tool, no harness tools registered) because the harness uses MCP-bridge tools (`mcp__harness__*`) on both sides, and the scoped grammar applies ONLY to (a) canonical-name OR tools (`run_command`, `edit_file`) on the OR side and (b) the Claude Agent SDK's built-in tools (`Bash`, `Edit`) on the Anthropic side — never to MCP-bridge tools. Bilateral parity for the rule-grammar surface is therefore structurally impossible with the current harness shape (see PR body ambiguity call #1). The load-bearing assertions live in the companion OR-only-asserts supplemental driver test in `scenarios.comparative.test.ts`, which constructs an inline OR run with canonical-name tools (`run_command` / `edit_file`), scripts three tool-use turns (`rm -rf foo`, `npm install`, `src/foo.ts`) plus a closing text turn, and asserts: (a) `run_command({command:'rm -rf foo'})` denied via the canonical `tool_result(isError=true)` shape with the matching scoped-rule reason text (`denied by disallowedTools`); (b) `run_command({command:'npm install'})` allowed and surfaces the tool's `'ok'` output (matches `Bash(npm *)`); (c) `edit_file({path:'src/foo.ts'})` denied (matches `Edit(src/**/*.ts)`). The supplemental OR run uses `allowedTools: ['Bash(npm *)']` PLUS `disallowedTools: ['Bash(rm *)', 'Edit(src/**/*.ts)']` — the spec's literal config (`disallowedTools: ['Edit(src/**/*.ts)']` alone + `allowedTools: ['Bash(npm *)']`) would NOT deny `rm -rf foo` on OR because OR's `allowedTools` is additive (default-allow on miss) rather than a strict whitelist; the explicit `Bash(rm *)` disallow rule is the minimal augmentation that makes the deny outcome observable on OR (see PR body ambiguity call #4). The Anthropic side has whitelist semantics for `allowedTools`, but the harness uses MCP-bridge tools that the Anthropic SDK's scoped Bash/Edit rules don't filter — so that whitelist semantic would not surface for the harness shape either.",
+  "prompt": "Confirm the tool-permission rules are in effect for this session.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Answer concisely.",
+  "tools": [],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:a08dbd824d238fd293d57c6dd835a41c27477b2f22e42b443199228f5186edaf",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"Confirm tool permission rules\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 10
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:da7907fe466c71b79eebade74666edd0be97c5d8489e55e370079a779c9251e1",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "Tool-permission rules are in effect for this session."
+          }
+        ],
+        "usage": {
+          "input_tokens": 25,
+          "output_tokens": 12
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:dcb6cdd41eeed345e5adebd98b496667ecf777770cfb259e91ae4329047fcf9e",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-19-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Tool-permission rules are in effect for this session."
+          }
+        ],
+        "usage": {
+          "input_tokens": 25,
+          "output_tokens": 12,
+          "total_tokens": 37
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:73c85ab7a250306a9bdd29641416e05dffa1926ede5906c03389849e3dee1b60",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-19-supp-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          { "type": "text", "text": "Attempting to remove foo." },
+          {
+            "type": "tool_use",
+            "callId": "call_rm_0",
+            "name": "run_command",
+            "arguments": "{\"command\":\"rm -rf foo\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 60,
+          "output_tokens": 18,
+          "total_tokens": 78
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:7af628b6bd9e793ec5783b764798bd8fface671bdb1140ae3a10bed04fcde64e",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-19-supp-1",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Running npm install now."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_npm_1",
+            "name": "run_command",
+            "arguments": "{\"command\":\"npm install\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 90,
+          "output_tokens": 18,
+          "total_tokens": 108
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:2c6ea9f5b123586c8609c1757f378cc47a1c2730e7629b4267a08ee5154352b3",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-19-supp-2",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Editing src/foo.ts."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_edit_2",
+            "name": "edit_file",
+            "arguments": "{\"path\":\"src/foo.ts\",\"content\":\"// hello\\n\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 115,
+          "output_tokens": 20,
+          "total_tokens": 135
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:100a13adec0a6fe783e101128711163700fc5ed8e42e11e58ce8f77bae1fb1fb",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-19-supp-3",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Done — rm and edit were denied by the disallowedTools rules; npm install was allowed."
+          }
+        ],
+        "usage": {
+          "input_tokens": 150,
+          "output_tokens": 20,
+          "total_tokens": 170
+        }
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact"
+  }
+}
