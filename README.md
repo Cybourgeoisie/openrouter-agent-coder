@@ -4,7 +4,7 @@ A library for building agent applications on the [OpenRouter Agent SDK](https://
 
 ## Why this exists
 
-`openrouter-agent-coder` is designed to be a drop-in replacement for `@anthropic-ai/claude-agent-sdk` inside [callboard](https://github.com/Cybourgeoisie/callboard) or any host that needs a programmatic agent runtime. The library exposes the same shape host code already speaks (`for await` over a discriminated event stream, `canUseTool` permission gate, `onHook` lifecycle callbacks, `AbortSignal`-based cancellation), with OpenRouter routing model calls instead of Anthropic.
+`openrouter-agent-coder` is designed to be a drop-in replacement for `@anthropic-ai/claude-agent-sdk` inside [callboard](https://github.com/WolpertingerLabs/callboard) or any host that needs a programmatic agent runtime. The library exposes the same shape host code already speaks (`for await` over a discriminated event stream, `canUseTool` permission gate, `onHook` lifecycle callbacks, `AbortSignal`-based cancellation), with OpenRouter routing model calls instead of Anthropic.
 
 See [`plans/callboard-compatibility.md`](./plans/callboard-compatibility.md) for the full compatibility plan.
 
@@ -1241,7 +1241,7 @@ my-plugin/
   "name": "my-plugin",
   "version": "1.0.0",
   "description": "Example plugin",
-  "author": { "name": "Cybourgeoisie", "email": "ben@cybourgeoisie.com" }
+  "author": { "name": "Your Name", "email": "you@example.com" }
 }
 ```
 

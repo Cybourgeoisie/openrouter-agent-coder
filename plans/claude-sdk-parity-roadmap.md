@@ -241,4 +241,4 @@ The plan's phases have hard dependencies. Don't pull a Ready card whose prerequi
 
 - [`claude-agent-sdk-parity.md`](./claude-agent-sdk-parity.md) — the parity matrix this roadmap closes.
 - [`callboard-compatibility.md`](./callboard-compatibility.md) — Phase 0/1/2 plan, fast-track gate conventions, hard invariants.
-- The project board (https://github.com/users/cybilresistance/projects/1) — live status. Cards are sourced from this roadmap.
+- The GitHub Issues tracker — live status. Cards are sourced from this roadmap.
