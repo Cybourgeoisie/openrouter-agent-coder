@@ -1,7 +1,7 @@
 # Claude Agent SDK vs OpenRouter Agent Coder — Parity Analysis
 
 > Comparison of the [Claude Code Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) (TypeScript) against the openrouter-agent-coder feature set.
-> Originally generated 2026-05-21. **Last reviewed against this codebase: 2026-05-24** (all 12 Phase 3 + 9 Phase 4 cards landed; Phase 5 spikes 5.S1 / 5.S2 / 5.S3 complete; Phase 5 build cards 5.1 / 5.2.\* / 5.3 / 5.4 / 5.5 / 5.6 / 5.7 / 5.8 + spikes 5.2.S1 / 5.S4 + docs micro-card 3.0 carded; Bucket D reclassified in-scope. See [`claude-sdk-parity-roadmap.md`](./claude-sdk-parity-roadmap.md)).
+> Originally generated 2026-05-21. **Last reviewed against this codebase: 2026-05-26** (Phase 5 complete; Phase 6 comparative parity harness main sequence complete — 6.S1 + 6.1 → 6.9 all merged; Phase 6.9 rolling backfill cohort 5/20 merged then paused at #160 — scenarios #17 effort passthrough, #18 persistSession:false, #19 allowed/disallowed-tools grammar, #20 enhanced bash, #21 NotebookEdit). No library-surface changes since the 2026-05-24 snapshot — every commit since has landed under `src/__tests__/comparative/`. The parity matrix below is now backed by 21 comparative scenarios that run both SDKs against an in-process emulated wire (see [`comparative-parity-harness.md`](./comparative-parity-harness.md)). Roadmap detail in [`claude-sdk-parity-roadmap.md`](./claude-sdk-parity-roadmap.md).
 
 ## Summary
 
@@ -13,6 +13,8 @@
 | **Total features** | **46** |
 
 Net change vs the original 2026-05-21 snapshot: **+32 Full** — the additional one over the Phase 5.7 snapshot is `Plugins` after Phase 5.8. **Phase 5 is now complete**: this library reaches full parity with Claude Code + the Agent SDK on the in-scope dimensions. `Subagent hooks` stays Partial pending `SubagentStop` matcher patterns. The lone remaining "Missing" row (`Session listing ergonomics`) is the on-disk session-index helper — a quality-of-life follow-on, not a parity gap.
+
+**Empirical verification** (Phase 6, 2026-05-25 → 2026-05-26): the matrix is no longer just a documentation claim. The `comparative` test suite (`npm run test:comparative`) runs 21 parity scenarios against an in-process emulator that speaks both Anthropic Messages and OpenAI/OR chat-completions wire formats. Each scenario drives both `@anthropic-ai/claude-agent-sdk` and `@openrouter/agent` against scripted responses with deterministic prompt hashes, then asserts event-stream equivalence (exact mode for hooks + tool firing order; tolerant mode for model-creative outputs). A nightly live-mode workflow exercises 4 of the scenarios against real provider APIs with $0.50/scenario + $0.25/PR budget caps and auto-files drift issues. 15 of the 27 originally-audited parity-row scenarios remain in the rolling backfill (`parity-scenario-backfill` label) — current pause flag is in effect on the cohort.
 
 ---
 
