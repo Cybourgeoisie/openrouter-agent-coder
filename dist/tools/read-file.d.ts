@@ -7,26 +7,50 @@ export declare function readFileTool(ctx?: ToolContext): import("@openrouter/age
 }, z.core.$strip>, z.core.$ZodType<{
     content: string;
     path: string;
-    start_line?: undefined;
-    end_line?: undefined;
-    total_lines?: undefined;
+    start_line: number;
+    end_line: number;
+    total_lines: number;
+    truncated: boolean;
+    notice: string;
 } | {
     content: string;
     path: string;
     start_line: number;
     end_line: number;
     total_lines: number;
+    truncated?: undefined;
+    notice?: undefined;
+} | {
+    content: string;
+    path: string;
+    start_line?: undefined;
+    end_line?: undefined;
+    total_lines?: undefined;
+    truncated?: undefined;
+    notice?: undefined;
 }, unknown, z.core.$ZodTypeInternals<{
     content: string;
     path: string;
-    start_line?: undefined;
-    end_line?: undefined;
-    total_lines?: undefined;
+    start_line: number;
+    end_line: number;
+    total_lines: number;
+    truncated: boolean;
+    notice: string;
 } | {
     content: string;
     path: string;
     start_line: number;
     end_line: number;
     total_lines: number;
+    truncated?: undefined;
+    notice?: undefined;
+} | {
+    content: string;
+    path: string;
+    start_line?: undefined;
+    end_line?: undefined;
+    total_lines?: undefined;
+    truncated?: undefined;
+    notice?: undefined;
 }, unknown>>, Record<string, unknown>>;
 //# sourceMappingURL=read-file.d.ts.map
