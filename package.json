@@ -57,8 +57,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
-    "prepare": "npm run build"
+    "lint:fix": "eslint . --fix"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
