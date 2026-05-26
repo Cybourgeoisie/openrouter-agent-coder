@@ -568,3 +568,236 @@ describe('comparative scenario: 19-allowed-disallowed-grammar — rule grammar (
     expect(editOutput).toContain('denied by disallowedTools');
   });
 });
+
+// ----- Phase 6.9 backfill #164: enhanced bash tool (OR-only) -----
+//
+// The shared bilateral comparator-pass on scenario #20 is intentionally vacuous
+// (1-turn no-tool) because the load-bearing surface here is the OR-side
+// production `run_command` tool's spawn-and-supervise machinery (timeout →
+// SIGTERM → 250ms grace → SIGKILL; clamp at MAX_TIMEOUT_MS=600_000 firing a
+// `warn` notify). The Claude Agent SDK's built-in `Bash` tool runs inside the
+// subprocess CLI and is structurally inaccessible from this harness — only
+// the model-visible string output reaches the agent SDK's event stream, never
+// the exit code / stderr suffix / kill-grace timing. See scenario JSON
+// description + PR body ambiguity call #1 for the full structural rationale.
+//
+// This supplemental driver carries the load-bearing assertions. It constructs
+// an OR-only run inline with the production `runCommandTool()`, drives the
+// scripted two-tool-call flow through an in-process emulator, captures
+// `Notification` hook events via the run's `onHook` knob, and asserts:
+//   (a) timeout: `run_command({command:'sleep 5', timeout_ms:100,
+//       description:'list build artifacts'})` returns within a generous
+//       timing envelope with `exitCode === 1` and `stderr` containing the
+//       canonical `terminated by SIG{TERM,KILL}` suffix from
+//       run-command.ts:139-145.
+//   (b) clamp: `run_command({command:':', timeout_ms:700000})` runs to
+//       completion (the clamp shortens to MAX_TIMEOUT_MS but `:` exits
+//       immediately, so no SIGTERM fires) and the `Notification` hook
+//       receives the canonical `'run_command timeout_ms exceeds
+//       MAX_TIMEOUT_MS, clamping'` warn payload from run-command.ts:54-57.
+//
+// The issue body claims `RunCommandResult` carries `truncated: true` +
+// `exitCode: null` on the kill path; the ACTUAL production interface at
+// run-command.ts:11-15 is `{exitCode: number, stdout: string, stderr: string}`
+// — no truncated flag, never-null exitCode (the close handler at
+// run-command.ts:142 resolves `exitCode: code ?? 1`, so it's `1` on signal
+// kill, never null). We assert the actually-observable shape; the
+// issue-body spec mismatch + TODO for a structural `RunCommandResult`
+// extension is documented as PR body ambiguity call #2.
+//
+// Timing envelope rationale: nominal kill time is 100ms timeout + up to
+// 250ms SIGKILL grace = 350ms. CI subprocess spawn + signal delivery jitter
+// can add several hundred ms on cold cache. We use a 5_000ms upper bound
+// to stay generous against slow CI (the test still surfaces a real
+// regression — the production code without kill-on-timeout would let
+// `sleep 5` run the full 5s and would time out at the run-level 30s
+// AbortController instead).
+
+describe('comparative scenario: 20-enhanced-bash — spawn machinery (OR-only)', () => {
+  it('OR run_command honors timeout (SIGTERM → SIGKILL grace) and MAX_TIMEOUT_MS clamp warn-notify', async () => {
+    const { startEmulator } = await import('./emulator/index.js');
+    const { OpenRouterAgentRun } = await import('../../agent.js');
+    const { runCommandTool } = await import('../../tools/run-command.js');
+
+    const scenarioPath = join(SCENARIO_DIR, '20-enhanced-bash.json');
+    const scenario = await loadScenario(scenarioPath);
+
+    const emu = await startEmulator();
+    for (const entry of scenario.script) {
+      if ((entry.wire ?? 'anthropic') !== 'openresponses') continue;
+      emu.registry.register(entry as Parameters<typeof emu.registry.register>[0]);
+    }
+
+    // Capture every clamp `notify('warn', ...)` event the production tool
+    // emits from inside its execute. The wiring is:
+    //
+    //   - `run-command.ts:54-57` calls `ctx.notify?.('warn', ...)` from the
+    //     CLOSURE-captured `ToolContext` (the one passed to `runCommandTool(ctx)`
+    //     at factory time), not the SDK-supplied runtime ToolExecuteContext.
+    //   - `agent.ts:2224-2231` injects a `notify` onto the RUNTIME ctx (passed
+    //     as the 2nd arg to execute) that reroutes through
+    //     `safeFireHook('Notification', ...)`. But the run_command factory
+    //     reads from the closure ctx and ignores the runtime ctx — so the
+    //     clamp notify does NOT reach the run's `onHook` in production
+    //     through the canonical agent-internal-tools wiring (`allTools(ctx,
+    //     ...)` at `tools/index.ts:202` calls `runCommandTool(ctx)` with a
+    //     ctx that has no `notify`, per `agent.ts:1349-1361`). The same
+    //     pattern is used by `tools/monitor.ts:86,96`; `tools/tasks.ts:98-102`
+    //     and `tools/ask-user-question.ts:99-102` correctly prefer
+    //     `execCtx.notify ?? ctx.notify` so they bridge to the Notification
+    //     hook. The mismatch is a real production gap (the clamp warn is
+    //     intended-but-unreachable through the agent's hook surface today);
+    //     fixing it is OUT OF SCOPE for this harness-only PR (ZERO production
+    //     touches, per the scope rules). See PR body ambiguity call #4 for
+    //     the TODO + a follow-up issue link.
+    //
+    // To make the clamp-warn assertion observable from this test, we pass
+    // notify directly into the closure-captured ctx — the same pattern the
+    // production unit test at `tools/run-command.test.ts:137` uses. This
+    // exercises the tool's internal clamp-and-fire logic (the load-bearing
+    // half of the parity claim); the missing-hook-bridge half is documented
+    // separately. We also wire `onHook` so a future bridge-fix would
+    // surface here (the `notifications` array would receive a duplicate).
+    const notifications: Array<{ level: unknown; message: unknown; context: unknown }> = [];
+    const captureNotify = async (
+      level: 'info' | 'warn' | 'error',
+      message: string,
+      context?: unknown,
+    ) => {
+      notifications.push({ level, message, context });
+    };
+    const onHook = async (event: string, payload: unknown) => {
+      if (event !== 'Notification') return;
+      const p = payload as { level?: unknown; message?: unknown; context?: unknown };
+      notifications.push({ level: p.level, message: p.message, context: p.context });
+    };
+
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 30_000).unref();
+
+    const events: Array<Record<string, unknown>> = [];
+    try {
+      const run = new OpenRouterAgentRun({
+        apiKey: 'sk-or-emulator-stub',
+        sessionId: `enhanced-bash-${Date.now()}`,
+        prompt: scenario.prompt,
+        baseUrl: emu.url,
+        persistSession: false,
+        signal: ac.signal,
+        // Production tool — this test's load-bearing claim is on its real
+        // spawn/supervise behavior (timeout → SIGTERM → 250ms grace →
+        // SIGKILL; MAX_TIMEOUT_MS clamp). Construct with a closure ctx that
+        // carries `notify` so the clamp-warn fires (see note above for why
+        // the production agent-wired path can't reach the Notification hook
+        // for this tool today).
+        tools: [runCommandTool({ cwd: '.', notify: captureNotify })],
+        model: scenario.model,
+        instructions: scenario.systemPrompt,
+        onHook,
+      });
+      for await (const ev of run) {
+        events.push(ev as Record<string, unknown>);
+      }
+    } finally {
+      await emu.stop();
+    }
+
+    type ToolCall = { type: 'tool_call'; callId: string; name: string; input?: unknown };
+    type ToolResult = {
+      type: 'tool_result';
+      callId: string;
+      output: unknown;
+      isError: boolean;
+    };
+    const calls = events.filter((e) => e.type === 'tool_call') as ToolCall[];
+    const results = events.filter((e) => e.type === 'tool_result') as ToolResult[];
+    expect(calls).toHaveLength(2);
+    expect(results).toHaveLength(2);
+
+    const resultByCallId = new Map(results.map((r) => [r.callId, r]));
+
+    // ----- (a) timeout: sleep 5 with timeout_ms=100 ----------------------
+    const sleepCall = calls.find((c) => {
+      const input = (c.input ?? {}) as Record<string, unknown>;
+      return input.command === 'sleep 5';
+    });
+    expect(sleepCall, 'expected a tool_call for run_command sleep 5').toBeDefined();
+
+    // description advisory round-trips through the model-emitted args into
+    // the canonical tool_call.input event. The issue body's broader claim of
+    // "propagates into the canonical request log" is observable only via a
+    // recorded per-request log artifact — `persistSession: false` here, so
+    // we assert the observable half (PR body ambiguity call #3).
+    const sleepInput = (sleepCall!.input ?? {}) as Record<string, unknown>;
+    expect(sleepInput.description).toBe('list build artifacts');
+    expect(sleepInput.timeout_ms).toBe(100);
+
+    const sleepResult = resultByCallId.get(sleepCall!.callId);
+    expect(sleepResult, 'expected a tool_result for the sleep tool_call').toBeDefined();
+    // The agent serializes `RunCommandResult` to a JSON string for the
+    // `function_call_output` payload (so the model sees text, not a structured
+    // object). Parse it back to a structured shape for the per-field
+    // assertions below.
+    const sleepOutput = JSON.parse(String(sleepResult!.output ?? '{}')) as {
+      exitCode?: unknown;
+      stdout?: unknown;
+      stderr?: unknown;
+    };
+    // Spec mismatch: the issue body claims `{truncated: true, exitCode: null}`
+    // but the actual production interface at run-command.ts:11-15 is
+    // `{exitCode: number, stdout: string, stderr: string}` — never null, no
+    // truncated flag. Assert the actually-observable shape. See PR body
+    // ambiguity call #2.
+    expect(sleepOutput.exitCode).toBe(1);
+    expect(typeof sleepOutput.stdout).toBe('string');
+    expect(typeof sleepOutput.stderr).toBe('string');
+    // The close handler at run-command.ts:139-145 appends `terminated by
+    // SIGTERM` or `terminated by SIGKILL` depending on which signal won the
+    // race. On a 100ms timeout against `sleep 5`, SIGTERM almost always
+    // wins (sleep responds to SIGTERM immediately); the SIGKILL branch
+    // fires only when SIGTERM is ignored within the 250ms grace. Accept
+    // either suffix — both prove the kill-on-timeout path fired.
+    const stderr = String(sleepOutput.stderr ?? '');
+    expect(
+      stderr.includes('terminated by SIGTERM') || stderr.includes('terminated by SIGKILL'),
+      `expected stderr to contain SIGTERM/SIGKILL suffix, got: ${JSON.stringify(stderr)}`,
+    ).toBe(true);
+
+    // ----- (b) clamp: timeout_ms=700_000 against `:` ---------------------
+    const clampCall = calls.find((c) => {
+      const input = (c.input ?? {}) as Record<string, unknown>;
+      return input.command === ':';
+    });
+    expect(clampCall, 'expected a tool_call for run_command :').toBeDefined();
+    const clampInput = (clampCall!.input ?? {}) as Record<string, unknown>;
+    expect(clampInput.timeout_ms).toBe(700000);
+
+    const clampResult = resultByCallId.get(clampCall!.callId);
+    expect(clampResult, 'expected a tool_result for the clamp tool_call').toBeDefined();
+    const clampOutput = JSON.parse(String(clampResult!.output ?? '{}')) as {
+      exitCode?: unknown;
+    };
+    // `:` exits 0 immediately, well before MAX_TIMEOUT_MS expires. No
+    // SIGTERM fires — the clamp warn-notify fires synchronously (before
+    // spawn), then the spawn runs to completion.
+    expect(clampOutput.exitCode).toBe(0);
+
+    // The clamp warn-notify is the canon assertion for this sub-case. The
+    // production payload at run-command.ts:54-57 is `{requestedMs: 700000,
+    // effectiveMs: 600000}`; the agent's wrapToolWithHooks closure forwards
+    // it verbatim into the Notification hook.
+    const clampWarn = notifications.find(
+      (n) =>
+        n.level === 'warn' &&
+        typeof n.message === 'string' &&
+        n.message === 'run_command timeout_ms exceeds MAX_TIMEOUT_MS, clamping',
+    );
+    expect(
+      clampWarn,
+      `expected a clamp warn-notify; got: ${JSON.stringify(notifications)}`,
+    ).toBeDefined();
+    const clampCtx = (clampWarn!.context ?? {}) as Record<string, unknown>;
+    expect(clampCtx.requestedMs).toBe(700000);
+    expect(clampCtx.effectiveMs).toBe(600000);
+  });
+});
