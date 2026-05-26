@@ -19,4 +19,4 @@ Closes #
 
 ## Notes
 
-<!-- Anything reviewers should know that isn't in the diff: deferred follow-ups, runtime measurements, screenshots, ambiguity calls flagged for Forge. Otherwise delete this section. -->
+<!-- Anything reviewers should know that isn't in the diff: deferred follow-ups, runtime measurements, screenshots, ambiguity calls flagged for follow-up. Otherwise delete this section. -->

@@ -1,7 +1,7 @@
 {
   "name": "openrouter-agent-coder",
   "version": "0.2.0",
-  "description": "OpenRouter Agent SDK library — async-iterable agent core with tool gating, hooks, and abort. Designed for callboard compatibility.",
+  "description": "OpenRouter Agent SDK library — async-iterable agent core with tool gating, hooks, and abort. Drop-in replacement for @anthropic-ai/claude-agent-sdk with OpenRouter routing.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,6 +10,30 @@
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     }
+  },
+  "license": "MIT",
+  "author": "Cybourgeoisie",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Cybourgeoisie/openrouter-agent-coder.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Cybourgeoisie/openrouter-agent-coder/issues"
+  },
+  "homepage": "https://github.com/Cybourgeoisie/openrouter-agent-coder#readme",
+  "keywords": [
+    "openrouter",
+    "agent",
+    "agent-sdk",
+    "claude",
+    "anthropic",
+    "llm",
+    "ai",
+    "tool-use",
+    "mcp"
+  ],
+  "engines": {
+    "node": ">=20"
   },
   "files": [
     "dist",
