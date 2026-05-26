@@ -1,0 +1,265 @@
+{
+  "name": "21-notebook-edit",
+  "description": "Phase 6.9 backfill #160: exercises the NotebookEdit tool (Phase 4.3) — production `editNotebookTool()` at `src/tools/edit-notebook.ts:51`. The shared bilateral flow is intentionally minimal (1-turn no-tool, no harness tools registered) because the load-bearing surface here is the OR-side production `edit_notebook` tool's per-write source-normalization-to-`string[]` semantics + the four operations (`replace_source` / `insert` / `delete` / `change_type`) + the two scripted validation-error paths (`replace_source` without `new_source`; `insert` without `new_cell_type`). The Claude Agent SDK's built-in `NotebookEdit` tool runs inside the subprocess CLI and the harness uses MCP-bridge tools instead — there is no MCP analogue of `edit_notebook` registered on the Anthropic side, so the four-op flow + normalization + validation contracts are structurally inaccessible from the agent SDK's user-facing event stream. Same posture as PR #190 (`persistSession: false`) / PR #191 (allowed/disallowed grammar) / PR #192 (Enhanced Bash): bilateral parity carries hook-firing-order; OR-only supplemental carries the load-bearing assertions. The supplemental driver in `scenarios.comparative.test.ts` constructs an OR-only inline run with the production `editNotebookTool({cwd: tmpDir})` and a tmpdir-scoped fixture `.ipynb`, scripts six `edit_notebook` tool-use turns + a closing text turn against the in-process emulator, and asserts: (a) the four valid operations each return `{ok: true, cells: <count>}` with the expected cell-count progression; (b) the two validation-error operations each return `{error: <exact-message>}` from the production validation arms at `src/tools/edit-notebook.ts:104-119`; (c) the final on-disk notebook has every cell's `source` field as `string[]` (proving `stringToSourceArray` at `src/tools/edit-notebook.ts:39-49` ran on every successful write); (d) the cell-shape invariants from the production code — markdown cells lose `outputs`/`execution_count` on a code→markdown `change_type`, and `insert` of a markdown cell creates one WITHOUT `outputs`/`execution_count` — hold on disk after the run completes. The fixture is inlined into the supplemental (written to a tmpdir via `node:fs/promises.writeFile`) rather than checked in under `fixtures/*.ipynb` (PR body ambiguity call #2) — it keeps the parity-test surface fully self-contained and avoids a per-test-run static-file copy step. The initial fixture deliberately has cell 0's `source` as a STRING (not `string[]`) so a `change_type` run on it without `stringToSourceArray` normalization would leave the source as a non-array; the final-state assertion catches that.",
+  "prompt": "Confirm the notebook editing tool is available.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Answer concisely.",
+  "tools": [],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:0fcda0e89bb8ff16b306a5b40350d377172a62dd8d25cb7a996dd4bcb77ab1b5",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"Confirm notebook editing tool availability\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 10
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:5ba0a6b87752b95c35cf2ee87cf84ccbc89449041af89b818ef3cbe7be95d1da",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "The notebook editing tool is available."
+          }
+        ],
+        "usage": {
+          "input_tokens": 25,
+          "output_tokens": 9
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:f708f10042847334e03cc7d3e14d91286f799453ae14870f84e9e1c55cdcfc97",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-21-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "The notebook editing tool is available."
+          }
+        ],
+        "usage": {
+          "input_tokens": 25,
+          "output_tokens": 9,
+          "total_tokens": 34
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:7ecac0b9ba1fef8f64c603d2ec83f4d188e865c15cc38d181699a5e76449a7b3",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-21-supp-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Rewriting cell 0 source via replace_source."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_replace_0",
+            "name": "edit_notebook",
+            "arguments": "{\"path\":\"fixture.ipynb\",\"operation\":\"replace_source\",\"cell_index\":0,\"new_source\":\"x=1\\ny=2\\n\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 70,
+          "output_tokens": 30,
+          "total_tokens": 100
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:a95f0827513bef7b861cb8e27e6c440f7516c82e4e5d68c39324ef27f061b43b",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-21-supp-1",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Exercising the replace_source missing-new_source validation arm."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_replace_missing_1",
+            "name": "edit_notebook",
+            "arguments": "{\"path\":\"fixture.ipynb\",\"operation\":\"replace_source\",\"cell_index\":1}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 110,
+          "output_tokens": 28,
+          "total_tokens": 138
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:d9792091b83c09054010015414f967923e20363a0a4eefd8eef761b30ead0e25",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-21-supp-2",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Exercising the insert missing-new_cell_type validation arm."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_insert_missing_2",
+            "name": "edit_notebook",
+            "arguments": "{\"path\":\"fixture.ipynb\",\"operation\":\"insert\",\"cell_index\":2,\"new_source\":\"# Tail\\n\\nEnd.\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 150,
+          "output_tokens": 28,
+          "total_tokens": 178
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:ad33ae5ac04a03dc4aa7e0a43d2c7ba3be394baab4de2833be18083a59a9505f",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-21-supp-3",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Inserting a markdown cell at the tail."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_insert_3",
+            "name": "edit_notebook",
+            "arguments": "{\"path\":\"fixture.ipynb\",\"operation\":\"insert\",\"cell_index\":2,\"new_source\":\"# Tail\\n\\nEnd.\",\"new_cell_type\":\"markdown\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 190,
+          "output_tokens": 28,
+          "total_tokens": 218
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:120f2125d5794285bef04657e4737f0ae58d4ec7346761b9a80b570ce793c63d",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-21-supp-4",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Converting cell 0 from code to markdown."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_change_type_4",
+            "name": "edit_notebook",
+            "arguments": "{\"path\":\"fixture.ipynb\",\"operation\":\"change_type\",\"cell_index\":0,\"new_cell_type\":\"markdown\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 230,
+          "output_tokens": 26,
+          "total_tokens": 256
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:53887cdcf6035350aa3b1e68fb1711521ebea89078b3c4b0c14dfa3683538bcf",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-21-supp-5",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Deleting the original markdown intro cell."
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_delete_5",
+            "name": "edit_notebook",
+            "arguments": "{\"path\":\"fixture.ipynb\",\"operation\":\"delete\",\"cell_index\":1}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 270,
+          "output_tokens": 24,
+          "total_tokens": 294
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:0f6b2c139f886a995f94f7afd43e82250b5a16a8674db21fe769aef9d4179dc8",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-21-supp-6",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Done — applied all four operations and observed both validation paths."
+          }
+        ],
+        "usage": {
+          "input_tokens": 310,
+          "output_tokens": 18,
+          "total_tokens": 328
+        }
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact"
+  }
+}

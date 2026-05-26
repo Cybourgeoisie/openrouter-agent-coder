@@ -801,3 +801,220 @@ describe('comparative scenario: 20-enhanced-bash — spawn machinery (OR-only)',
     expect(clampCtx.effectiveMs).toBe(600000);
   });
 });
+
+// ----- Phase 6.9 backfill #160: NotebookEdit tool (OR-only) -----
+//
+// The shared bilateral comparator-pass on scenario #21 is intentionally vacuous
+// (1-turn no-tool) because the harness uses MCP-bridge tools on both sides and
+// the production `edit_notebook` tool has no MCP analogue registered on the
+// Anthropic side — the Claude Agent SDK's built-in `NotebookEdit` runs inside
+// the subprocess CLI and is structurally inaccessible from the agent SDK's
+// user-facing event stream. Same posture as PR #190 / #191 / #192. See the
+// scenario JSON description + PR body ambiguity call #1 for the full
+// structural rationale.
+//
+// This supplemental driver carries the load-bearing assertions. It constructs
+// an OR-only run inline with the production `editNotebookTool({cwd: tmpDir})`,
+// writes a fixture `.ipynb` into the tmpdir (PR body ambiguity call #2 —
+// inline vs checked-in fixture file), drives a six-tool-call flow through an
+// in-process emulator (four valid ops + two scripted validation errors), and
+// asserts:
+//   (a) the four valid operations each return `{ok: true, cells: <count>}`
+//       with the expected count progression (2 → 2 → 3 → 3 → 2 once the
+//       validation arms are interleaved);
+//   (b) the two validation-error operations return `{error: <exact-message>}`
+//       from the production validation arms at
+//       `src/tools/edit-notebook.ts:104-119`;
+//   (c) the final on-disk notebook has every cell's `source` as `string[]`
+//       (proves `stringToSourceArray` at `src/tools/edit-notebook.ts:39-49`
+//       ran on every successful write — including the code→markdown
+//       `change_type` arm that runs `stringToSourceArray(sourceToString(...))`
+//       on `target.source` rather than blindly trusting the prior shape);
+//   (d) `change_type` from code→markdown drops `outputs` + `execution_count`,
+//       and `insert` of a markdown cell creates one WITHOUT those keys (per
+//       the production code at `src/tools/edit-notebook.ts:156-167` /
+//       `:131-134`).
+//
+// Validation-error coverage lives in this same scenario (PR body ambiguity
+// call #3) — splitting it into a separate scenario would duplicate the
+// fixture-setup machinery for no observable parity gain. Source-normalization
+// is asserted on the FS post-write state (ambiguity call #4) rather than on
+// each tool-result payload because the on-disk shape is the load-bearing
+// contract: the tool result only carries `{ok, cells}`, never the cells
+// themselves. All four operations run in one scenario (ambiguity call #5) —
+// splitting per-operation would multiply the OR script-entry count without
+// adding coverage. The `change_type` operation's required-fields shape
+// (`new_cell_type` only — `new_source` is NOT required because the code
+// preserves the cell's current source via `stringToSourceArray(sourceToString(
+// target.source))` at `src/tools/edit-notebook.ts:155`) was verified by
+// reading the production code, not the spec doc (ambiguity call #6).
+
+describe('comparative scenario: 21-notebook-edit — four operations + validation (OR-only)', () => {
+  it('OR edit_notebook runs all four operations, surfaces validation errors, and normalizes source to string[] on every write', async () => {
+    const { mkdtemp, rm, readFile, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { startEmulator } = await import('./emulator/index.js');
+    const { OpenRouterAgentRun } = await import('../../agent.js');
+    const { editNotebookTool } = await import('../../tools/edit-notebook.js');
+
+    const scenarioPath = join(SCENARIO_DIR, '21-notebook-edit.json');
+    const scenario = await loadScenario(scenarioPath);
+
+    const workDir = await mkdtemp(join(tmpdir(), 'notebook-edit-'));
+    // Initial fixture: 2 cells. Cell 0's `source` is a STRING (not a
+    // `string[]`) on purpose — the post-run final-state assertion proves
+    // `stringToSourceArray` ran on the `replace_source` + `change_type` arms
+    // that touch it. Cell 1's `source` is already a `string[]` so the
+    // delete-arm doesn't matter for normalization, but the surviving cell
+    // (after delete) is the inserted one whose source is freshly normalized.
+    const initialNotebook = {
+      cells: [
+        {
+          cell_type: 'code',
+          source: 'print(1)\nprint(2)',
+          metadata: {},
+          outputs: [],
+          execution_count: null,
+        },
+        {
+          cell_type: 'markdown',
+          source: ['# Intro\n', '\n', 'Body.'],
+          metadata: {},
+        },
+      ],
+      metadata: { kernelspec: { name: 'python3' } },
+    };
+    await writeFile(join(workDir, 'fixture.ipynb'), JSON.stringify(initialNotebook), 'utf-8');
+
+    const emu = await startEmulator();
+    for (const entry of scenario.script) {
+      if ((entry.wire ?? 'anthropic') !== 'openresponses') continue;
+      emu.registry.register(entry as Parameters<typeof emu.registry.register>[0]);
+    }
+
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 30_000).unref();
+
+    const events: Array<Record<string, unknown>> = [];
+    try {
+      const run = new OpenRouterAgentRun({
+        apiKey: 'sk-or-emulator-stub',
+        sessionId: `notebook-edit-${Date.now()}`,
+        prompt: scenario.prompt,
+        baseUrl: emu.url,
+        persistSession: false,
+        signal: ac.signal,
+        // Production tool — load-bearing claim is on its real operation
+        // arms + source-normalization semantics. The closure ctx's `cwd` is
+        // the tmpdir, so the model's scripted `path: "fixture.ipynb"`
+        // resolves to the actual fixture file we wrote above.
+        tools: [editNotebookTool({ cwd: workDir })],
+        model: scenario.model,
+        instructions: scenario.systemPrompt,
+      });
+      for await (const ev of run) {
+        events.push(ev as Record<string, unknown>);
+      }
+    } finally {
+      await emu.stop();
+    }
+
+    type ToolCall = { type: 'tool_call'; callId: string; name: string; input?: unknown };
+    type ToolResult = {
+      type: 'tool_result';
+      callId: string;
+      output: unknown;
+      isError: boolean;
+    };
+    const calls = events.filter((e) => e.type === 'tool_call') as ToolCall[];
+    const results = events.filter((e) => e.type === 'tool_result') as ToolResult[];
+    expect(calls).toHaveLength(6);
+    expect(results).toHaveLength(6);
+
+    const resultByCallId = new Map(results.map((r) => [r.callId, r]));
+
+    const parseOutput = (callId: string): Record<string, unknown> => {
+      const r = resultByCallId.get(callId);
+      expect(r, `expected tool_result for callId ${callId}`).toBeDefined();
+      return JSON.parse(String(r!.output ?? '{}')) as Record<string, unknown>;
+    };
+
+    // ----- (a) replace_source on cell 0 — expect ok, cells=2 -------------
+    const replaceOut = parseOutput('call_replace_0');
+    expect(replaceOut.ok).toBe(true);
+    expect(replaceOut.cells).toBe(2);
+
+    // ----- (b) replace_source missing new_source — validation error -----
+    // Production arm at `src/tools/edit-notebook.ts:104-106`.
+    const replaceMissingOut = parseOutput('call_replace_missing_1');
+    expect(replaceMissingOut.error).toBe('replace_source requires new_source');
+
+    // ----- (c) insert missing new_cell_type — validation error ----------
+    // Production arm at `src/tools/edit-notebook.ts:118-120`. Note the
+    // production code checks `new_source` BEFORE `new_cell_type`, so the
+    // scripted args include a valid `new_source` to make the missing
+    // `new_cell_type` arm the one that fires.
+    const insertMissingOut = parseOutput('call_insert_missing_2');
+    expect(insertMissingOut.error).toBe('insert requires new_cell_type');
+
+    // ----- (d) insert markdown at idx 2 — expect ok, cells=3 ------------
+    const insertOut = parseOutput('call_insert_3');
+    expect(insertOut.ok).toBe(true);
+    expect(insertOut.cells).toBe(3);
+
+    // ----- (e) change_type code→markdown on cell 0 — expect ok, cells=3
+    const changeTypeOut = parseOutput('call_change_type_4');
+    expect(changeTypeOut.ok).toBe(true);
+    expect(changeTypeOut.cells).toBe(3);
+
+    // ----- (f) delete cell 1 (the original markdown intro) — cells=2 ----
+    const deleteOut = parseOutput('call_delete_5');
+    expect(deleteOut.ok).toBe(true);
+    expect(deleteOut.cells).toBe(2);
+
+    // ----- Post-run on-disk state -------------------------------------
+    // The load-bearing source-normalization assertion. After ops a/d/e ran,
+    // EVERY surviving cell's `source` must be a `string[]` — including
+    // cell 0 (originally a STRING) which got rewritten by `replace_source`
+    // and then `change_type`'d, and the inserted markdown cell from op d.
+    type FinalNotebookCell = {
+      cell_type: string;
+      source: string | string[];
+      outputs?: unknown;
+      execution_count?: unknown;
+    };
+    const finalRaw = await readFile(join(workDir, 'fixture.ipynb'), 'utf-8');
+    const finalNotebook = JSON.parse(finalRaw) as { cells: FinalNotebookCell[] };
+    expect(finalNotebook.cells).toHaveLength(2);
+
+    for (const cell of finalNotebook.cells) {
+      expect(
+        Array.isArray(cell.source),
+        `expected cell.source to be string[] (post-write normalization); got ${typeof cell.source}: ${JSON.stringify(cell.source)}`,
+      ).toBe(true);
+    }
+
+    // Cell 0 is the original code cell that was replace_source'd
+    // ("x=1\ny=2\n") then change_type'd to markdown. `stringToSourceArray`
+    // splits "x=1\ny=2\n" into ["x=1\n", "y=2\n"]; the change_type arm
+    // re-runs `stringToSourceArray(sourceToString(...))` which is a no-op
+    // on an already-canonical array. Markdown cells must NOT carry
+    // `outputs` / `execution_count` (the code→markdown arm at
+    // `src/tools/edit-notebook.ts:156-160` deletes them).
+    expect(finalNotebook.cells[0].cell_type).toBe('markdown');
+    expect((finalNotebook.cells[0].source as string[]).join('')).toBe('x=1\ny=2\n');
+    expect(Object.hasOwn(finalNotebook.cells[0], 'outputs')).toBe(false);
+    expect(Object.hasOwn(finalNotebook.cells[0], 'execution_count')).toBe(false);
+
+    // Cell 1 is the inserted markdown cell ("# Tail\n\nEnd."). The
+    // production code at `src/tools/edit-notebook.ts:126-134` creates a
+    // markdown cell WITHOUT `outputs` / `execution_count` (those are only
+    // added in the `cell_type === 'code'` arm).
+    expect(finalNotebook.cells[1].cell_type).toBe('markdown');
+    expect((finalNotebook.cells[1].source as string[]).join('')).toBe('# Tail\n\nEnd.');
+    expect(Object.hasOwn(finalNotebook.cells[1], 'outputs')).toBe(false);
+    expect(Object.hasOwn(finalNotebook.cells[1], 'execution_count')).toBe(false);
+
+    await rm(workDir, { recursive: true, force: true });
+  });
+});
