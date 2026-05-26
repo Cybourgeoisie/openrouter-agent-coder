@@ -24,11 +24,8 @@ const DEFAULT_LINE_LIMIT = 2000;
 const MAX_TOKENS_ESTIMATE = 25000;
 const CHARS_PER_TOKEN = 4;
 
-function formatBytes(n: number): string {
-  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)}MB`;
-  if (n >= 1024) return `${(n / 1024).toFixed(1)}KB`;
-  return `${n}B`;
-}
+/** Only ever called for MB-range values (>= MAX_BYTES) so MB is fine. */
+const mb = (n: number): string => `${(n / (1024 * 1024)).toFixed(1)}MB`;
 
 export function readFileTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
   return tool({
@@ -38,7 +35,7 @@ export function readFileTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
       `By default, reads up to the first ${DEFAULT_LINE_LIMIT} lines — use start_line and end_line ` +
       '(1-indexed, inclusive) to read a specific range, useful for paging through large files ' +
       'after grep_files has identified the relevant area. ' +
-      `Files larger than ${formatBytes(MAX_BYTES)} are rejected; use start_line/end_line or grep_files instead. ` +
+      `Files larger than ${mb(MAX_BYTES)} are rejected; use start_line/end_line or grep_files instead. ` +
       'Use this to understand existing code before making changes.',
     inputSchema: z.object({
       path: z.string().describe('Absolute or relative path to the file to read'),
@@ -66,7 +63,7 @@ export function readFileTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
       const s = await stat(resolved);
       if (s.size > MAX_BYTES) {
         throw new Error(
-          `File content (${formatBytes(s.size)}) exceeds maximum allowed size (${formatBytes(MAX_BYTES)}). ` +
+          `File content (${mb(s.size)}) exceeds maximum allowed size (${mb(MAX_BYTES)}). ` +
             'Use start_line and end_line to read specific portions of the file, ' +
             'or use grep_files to find specific content instead of reading the whole file.',
         );
