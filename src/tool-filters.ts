@@ -171,7 +171,7 @@ export function buildToolFilterCanUseTool(params: ToolFilterParams): CanUseTool 
   const allowed = (params.allowedTools ?? []).map(compileRule);
   const disallowed = (params.disallowedTools ?? []).map(compileRule);
   const modeGate = params.modeGate;
-  return async (toolName: string, input: unknown): Promise<CanUseToolResult> => {
+  return async (toolName, input, ctx): Promise<CanUseToolResult> => {
     for (const rule of disallowed) {
       if (rule.toolName === toolName && rule.matches(input)) {
         return { behavior: 'deny', reason: `denied by disallowedTools` };
@@ -183,7 +183,7 @@ export function buildToolFilterCanUseTool(params: ToolFilterParams): CanUseTool 
       }
     }
     if (modeGate) {
-      return modeGate(toolName, input);
+      return modeGate(toolName, input, ctx);
     }
     return { behavior: 'allow' };
   };

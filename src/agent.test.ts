@@ -969,7 +969,14 @@ describe('OpenRouterAgentRun canUseTool', () => {
     });
     const events = await collect(run);
 
-    expect(canUseTool).toHaveBeenCalledWith('echo_tool', { msg: 'hi' });
+    expect(canUseTool).toHaveBeenCalledWith(
+      'echo_tool',
+      { msg: 'hi' },
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        suggestions: expect.any(Array),
+      }),
+    );
     expect(execSpy).toHaveBeenCalledWith({ msg: 'hi' });
     const result = events.find((e) => e.type === 'tool_result') as Extract<
       AgentCoreEvent,
@@ -1062,6 +1069,49 @@ describe('OpenRouterAgentRun canUseTool', () => {
     const events = await collect(run);
 
     expect(execSpy).toHaveBeenCalledWith({ msg: 'free' });
+    const result = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(result.isError).toBe(false);
+  });
+
+  // Regression for #196: callers porting a Claude-shaped permission gate
+  // commonly destructure `{ signal }` (and sometimes `suggestions`) from a 3rd
+  // ctx arg. The previous 2-arg call shape made every such gate throw
+  // `Cannot destructure property 'signal' of 'undefined' as it is undefined`
+  // — surfaced as `{ denied: true }` on every tool call. Pass a real ctx.
+  it('passes a ctx object as the 3rd arg so Claude-shaped gates can destructure { signal, suggestions }', async () => {
+    const execSpy = vi.fn();
+    callModelMock.mockImplementation(
+      singleToolCallModel({
+        toolName: 'echo_tool',
+        callId: 'c-ctx',
+        input: { msg: 'destructure-me' },
+      }),
+    );
+
+    let observedSignal: AbortSignal | undefined;
+    let observedSuggestions: readonly unknown[] | undefined;
+    const canUseTool = vi.fn(async (_name, input, { signal, suggestions }) => {
+      observedSignal = signal;
+      observedSuggestions = suggestions;
+      return { behavior: 'allow' as const, updatedInput: input };
+    });
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'k',
+      sessionId: TEST_SESSION,
+      prompt: 'p',
+      tools: [makeEchoTool(execSpy)] as unknown as never,
+      canUseTool,
+    });
+    const events = await collect(run);
+
+    expect(observedSignal).toBeInstanceOf(AbortSignal);
+    expect(observedSignal!.aborted).toBe(false);
+    expect(Array.isArray(observedSuggestions)).toBe(true);
+    expect(execSpy).toHaveBeenCalledWith({ msg: 'destructure-me' });
     const result = events.find((e) => e.type === 'tool_result') as Extract<
       AgentCoreEvent,
       { type: 'tool_result' }
@@ -1305,7 +1355,14 @@ describe('OpenRouterAgentRun permissionMode', () => {
     });
     const events = await collect(run);
 
-    expect(canUseTool).toHaveBeenCalledWith('run_command', { command: 'ls' });
+    expect(canUseTool).toHaveBeenCalledWith(
+      'run_command',
+      { command: 'ls' },
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        suggestions: expect.any(Array),
+      }),
+    );
     const result = events.find((e) => e.type === 'tool_result') as Extract<
       AgentCoreEvent,
       { type: 'tool_result' }
@@ -1579,7 +1636,14 @@ describe('OpenRouterAgentRun allowedTools / disallowedTools', () => {
     });
     const events = await collect(run);
 
-    expect(canUseTool).toHaveBeenCalledWith('run_command', { command: 'rm -rf /' });
+    expect(canUseTool).toHaveBeenCalledWith(
+      'run_command',
+      { command: 'rm -rf /' },
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        suggestions: expect.any(Array),
+      }),
+    );
     const result = events.find((e) => e.type === 'tool_result') as Extract<
       AgentCoreEvent,
       { type: 'tool_result' }
@@ -3108,7 +3172,14 @@ describe('OpenRouterAgentRun onHook PreToolUse block/modify (Phase 3.7)', () => 
     const events = await collect(run);
 
     // canUseTool sees the MODIFIED input.
-    expect(canUseTool).toHaveBeenCalledWith('echo_tool', { msg: 'rewritten' });
+    expect(canUseTool).toHaveBeenCalledWith(
+      'echo_tool',
+      { msg: 'rewritten' },
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        suggestions: expect.any(Array),
+      }),
+    );
     // Tool execute receives the MODIFIED input.
     expect(execSpy).toHaveBeenCalledTimes(1);
     expect(execSpy).toHaveBeenCalledWith({ msg: 'rewritten' });
@@ -3307,7 +3378,14 @@ describe('OpenRouterAgentRun onHook PreToolUse block/modify (Phase 3.7)', () => 
     });
     await collect(run);
 
-    expect(canUseTool).toHaveBeenCalledWith('echo_tool', { layer: 1 });
+    expect(canUseTool).toHaveBeenCalledWith(
+      'echo_tool',
+      { layer: 1 },
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        suggestions: expect.any(Array),
+      }),
+    );
     expect(execSpy).toHaveBeenCalledWith({ layer: 1 });
   });
 

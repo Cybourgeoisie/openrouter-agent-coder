@@ -109,9 +109,29 @@ export type CanUseToolResult =
  */
 export type EffortLevel = 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
 
+/**
+ * Context passed as the 3rd argument to {@link CanUseTool}. Matches the
+ * Claude Code SDK's permission-callback context shape so consumers porting a
+ * Claude-shaped `canUseTool` between SDKs can destructure `{ signal }` /
+ * `{ suggestions }` without a runtime trap (issue #196).
+ *
+ * - `signal`: aborts when the surrounding tool call is cancelled (either by
+ *   run interruption or by a hook/permission decision elsewhere in the
+ *   pipeline). Always present so destructure-style consumers don't see
+ *   `undefined`; check `.aborted` before kicking off slow permission UIs.
+ * - `suggestions`: forward-compat slot for permission-mode suggestion lists
+ *   the host UI might surface alongside the prompt. Always an array; empty
+ *   on this implementation today.
+ */
+export interface CanUseToolContext {
+  signal: AbortSignal;
+  suggestions: readonly unknown[];
+}
+
 export type CanUseTool = (
   toolName: string,
   input: unknown,
+  ctx: CanUseToolContext,
 ) => Promise<CanUseToolResult> | CanUseToolResult;
 
 /**
@@ -1551,7 +1571,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       const baseCanUseTool = this.opts.canUseTool;
       const composedCanUseTool: CanUseTool | undefined =
         baseCanUseTool || skillsForRun.length > 0
-          ? async (toolName, input) => {
+          ? async (toolName, input, ctx) => {
               if (activeSkill?.allowedToolsNarrowing) {
                 const inList = activeSkill.allowedToolsNarrowing.some((rule) => {
                   const compiled = compileRule(rule);
@@ -1564,7 +1584,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
                   };
                 }
               }
-              if (baseCanUseTool) return baseCanUseTool(toolName, input);
+              if (baseCanUseTool) return baseCanUseTool(toolName, input, ctx);
               return { behavior: 'allow' };
             }
           : undefined;
@@ -2145,9 +2165,13 @@ function wrapToolWithPermission(t: Tool, canUseTool: CanUseTool): Tool {
   // outside our wrapper; pass them through unchanged.
   if (typeof originalExecute !== 'function') return t;
   const wrappedExecute = async (input: unknown, ctx?: unknown): Promise<unknown> => {
+    const canUseCtx: CanUseToolContext = {
+      signal: new AbortController().signal,
+      suggestions: [],
+    };
     let decision: CanUseToolResult;
     try {
-      decision = await canUseTool(name, input);
+      decision = await canUseTool(name, input, canUseCtx);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       throw new Error(JSON.stringify({ error: reason, denied: true }), { cause: err });
