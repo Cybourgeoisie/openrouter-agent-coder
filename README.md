@@ -399,7 +399,11 @@ Behaviour:
 The built-in `task_create` / `task_update` tools maintain a per-run task list that survives across turns but is **never persisted to `state.json`** (ephemeral; lost when the process exits). On every mutation the library pushes the full latest list to two channels: the `Notification` hook (so log/audit subscribers see it) and the optional `onTasksChanged` constructor callback (so a host UI doesn't have to filter every Notification).
 
 ```ts
-import { OpenRouterAgentRun, type Task, type OnTasksChanged } from '@cybourgeoisie/openrouter-agent-coder';
+import {
+  OpenRouterAgentRun,
+  type Task,
+  type OnTasksChanged,
+} from '@cybourgeoisie/openrouter-agent-coder';
 
 const onTasksChanged: OnTasksChanged = (tasks: Task[]) => {
   // Re-render the task panel. `tasks` is a defensive shallow-copy — safe to retain.
@@ -493,7 +497,11 @@ Behaviour:
 Phase 4.6 adds pre-write file checkpointing to the built-in `write_file` and `edit_file` tools. When the run is constructed with `checkpoint: true` — or when an individual tool call passes `{ checkpoint: true }` in its arguments — the library snapshots the target path under `<logsRoot>/<sessionId>/checkpoints/<checkpointId>/` before the mutation lands, so the change can be reverted later with `restoreCheckpoint()`.
 
 ```ts
-import { OpenRouterAgentRun, listCheckpoints, restoreCheckpoint } from '@cybourgeoisie/openrouter-agent-coder';
+import {
+  OpenRouterAgentRun,
+  listCheckpoints,
+  restoreCheckpoint,
+} from '@cybourgeoisie/openrouter-agent-coder';
 
 const run = new OpenRouterAgentRun({
   apiKey,
@@ -849,7 +857,12 @@ For host code adding its own tools, the library re-exports a Claude-Agent-SDK-sh
 
 ```ts
 import { z } from 'zod/v4';
-import { OpenRouterAgentRun, allTools, tool, createSdkMcpServer } from '@cybourgeoisie/openrouter-agent-coder';
+import {
+  OpenRouterAgentRun,
+  allTools,
+  tool,
+  createSdkMcpServer,
+} from '@cybourgeoisie/openrouter-agent-coder';
 
 const fetchIssue = tool({
   name: 'fetch_issue',

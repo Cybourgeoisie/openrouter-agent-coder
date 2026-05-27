@@ -4,6 +4,7 @@ export type {
   AgentLogger,
   AgentLoggerLevel,
   CanUseTool,
+  CanUseToolContext,
   CanUseToolResult,
   OnHook,
 } from './agent.js';

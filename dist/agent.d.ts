@@ -34,7 +34,25 @@ export type CanUseToolResult = {
  * lacks the requested one. Ignored by non-reasoning models.
  */
 export type EffortLevel = 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
-export type CanUseTool = (toolName: string, input: unknown) => Promise<CanUseToolResult> | CanUseToolResult;
+/**
+ * Context passed as the 3rd argument to {@link CanUseTool}. Matches the
+ * Claude Code SDK's permission-callback context shape so consumers porting a
+ * Claude-shaped `canUseTool` between SDKs can destructure `{ signal }` /
+ * `{ suggestions }` without a runtime trap (issue #196).
+ *
+ * - `signal`: aborts when the surrounding tool call is cancelled (either by
+ *   run interruption or by a hook/permission decision elsewhere in the
+ *   pipeline). Always present so destructure-style consumers don't see
+ *   `undefined`; check `.aborted` before kicking off slow permission UIs.
+ * - `suggestions`: forward-compat slot for permission-mode suggestion lists
+ *   the host UI might surface alongside the prompt. Always an array; empty
+ *   on this implementation today.
+ */
+export interface CanUseToolContext {
+    signal: AbortSignal;
+    suggestions: readonly unknown[];
+}
+export type CanUseTool = (toolName: string, input: unknown, ctx: CanUseToolContext) => Promise<CanUseToolResult> | CanUseToolResult;
 /**
  * Lifecycle hook callback. Invoked with a {@link HookEvent} discriminator and
  * the matching {@link HookPayload} variant. Hooks are awaited; thrown errors

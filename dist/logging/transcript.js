@@ -51,7 +51,8 @@ export async function logTranscriptAssistant(input) {
         model: input.model,
         ...(input.text !== undefined && { text: input.text }),
         ...(input.reasoning !== undefined && { reasoning: input.reasoning }),
-        ...(input.toolCalls !== undefined && input.toolCalls.length > 0 && {
+        ...(input.toolCalls !== undefined &&
+            input.toolCalls.length > 0 && {
             toolCalls: input.toolCalls,
         }),
         ...(input.usage !== undefined && { usage: input.usage }),

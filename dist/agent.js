@@ -921,7 +921,7 @@ export class OpenRouterAgentRun {
             // still runs and can further deny (run-level deny-wins is preserved).
             const baseCanUseTool = this.opts.canUseTool;
             const composedCanUseTool = baseCanUseTool || skillsForRun.length > 0
-                ? async (toolName, input) => {
+                ? async (toolName, input, ctx) => {
                     if (activeSkill?.allowedToolsNarrowing) {
                         const inList = activeSkill.allowedToolsNarrowing.some((rule) => {
                             const compiled = compileRule(rule);
@@ -935,7 +935,7 @@ export class OpenRouterAgentRun {
                         }
                     }
                     if (baseCanUseTool)
-                        return baseCanUseTool(toolName, input);
+                        return baseCanUseTool(toolName, input, ctx);
                     return { behavior: 'allow' };
                 }
                 : undefined;
@@ -1152,10 +1152,10 @@ export class OpenRouterAgentRun {
                             const extracted = extractAssistantContent(response.output);
                             const usage = toTranscriptUsage(response.usage);
                             const resolvedModel = typeof response.model === 'string'
-                                ? (response.model)
+                                ? response.model
                                 : model;
                             const cycleCost = typeof response.usage?.cost === 'number'
-                                ? (response.usage.cost)
+                                ? response.usage.cost
                                 : 0;
                             await logTranscriptAssistant({
                                 logsRoot,
@@ -1535,9 +1535,13 @@ function wrapToolWithPermission(t, canUseTool) {
     if (typeof originalExecute !== 'function')
         return t;
     const wrappedExecute = async (input, ctx) => {
+        const canUseCtx = {
+            signal: new AbortController().signal,
+            suggestions: [],
+        };
         let decision;
         try {
-            decision = await canUseTool(name, input);
+            decision = await canUseTool(name, input, canUseCtx);
         }
         catch (err) {
             const reason = err instanceof Error ? err.message : String(err);
@@ -1738,9 +1742,7 @@ function extractAssistantContent(output) {
             const content = item.content;
             if (Array.isArray(content)) {
                 for (const c of content) {
-                    if (c &&
-                        typeof c === 'object' &&
-                        c.type === 'output_text') {
+                    if (c && typeof c === 'object' && c.type === 'output_text') {
                         const t = c.text;
                         if (typeof t === 'string')
                             text += t;
