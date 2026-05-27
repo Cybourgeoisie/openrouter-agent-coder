@@ -148,6 +148,22 @@ export type {
 } from './messages.js';
 export type { UserInput } from './streaming-input.js';
 export {
+  TRANSCRIPT_SCHEMA_VERSION,
+  logTranscriptSessionStart,
+  logTranscriptUser,
+  logTranscriptAssistant,
+  logTranscriptToolResult,
+  logTranscriptCompact,
+  logTranscriptSessionEnd,
+  readTranscript,
+} from './logging/transcript.js';
+export type {
+  TranscriptRecord,
+  TranscriptRecordKind,
+  TranscriptUsage,
+  TranscriptToolCall,
+} from './logging/transcript.js';
+export {
   createSkillLoader,
   loadSkills,
   parseSkillFile,

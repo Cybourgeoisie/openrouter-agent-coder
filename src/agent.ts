@@ -43,6 +43,16 @@ import {
   logGeneration,
   logSessionStart,
 } from './logging/logger.js';
+import {
+  logTranscriptSessionStart,
+  logTranscriptUser,
+  logTranscriptAssistant,
+  logTranscriptToolResult,
+  logTranscriptCompact,
+  logTranscriptSessionEnd,
+  type TranscriptToolCall,
+  type TranscriptUsage,
+} from './logging/transcript.js';
 import type {
   AgentCoreEvent,
   AgentCoreEventStatus,
@@ -1054,6 +1064,16 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     delete (nextState as { partialResponse?: unknown }).partialResponse;
 
     await this.stateAccessor.save(nextState);
+
+    if (this.persistSession) {
+      await logTranscriptCompact({
+        logsRoot: this.opts.logsRoot,
+        sessionId: this.opts.sessionId,
+        reason,
+        droppedMessages: summarize.length,
+        summaryText,
+      });
+    }
   }
 
   /**
@@ -1220,6 +1240,17 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
     let maxTurnNumber = 0;
     let totalCostUsd = 0;
     let finalUsage: TokenUsage | null = null;
+    // Tool call_id → tool_name, populated when the SDK emits a function_call
+    // item and read when the matching tool_call_output arrives. The output
+    // event carries only the callId, so a side-map is the cheapest way to
+    // surface the human-readable name on the transcript record.
+    const toolCallNames = new Map<string, string>();
+    // Set true once the session_start transcript record lands. Errors thrown
+    // before that point (bad logsRoot, createOpenRouterClient throws,
+    // pre-session_start cwd-related failures) skip the matching session_end
+    // transcript write so we never try to write into a directory that
+    // doesn't exist.
+    let transcriptStarted = false;
     const signal = this.compositeSignal;
     // Captured at every stream_complete yield site so the outer finally can
     // fire exactly one SessionEnd hook with matching status/usage/cost. Null
@@ -1328,6 +1359,13 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
 
       if (persistSession) {
         await logSessionStart(logsRoot, sessionId, cwd, parentSessionId);
+        await logTranscriptSessionStart({
+          logsRoot,
+          sessionId,
+          cwd,
+          ...(parentSessionId !== undefined && { parentSessionId }),
+        });
+        transcriptStarted = true;
       }
 
       yield {
@@ -1760,6 +1798,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
             prompt: cyclePromptForLog,
             timestamp: new Date().toISOString(),
           });
+          await logTranscriptUser({ logsRoot, sessionId, text: cyclePromptForLog });
         }
 
         // 4. Fire the callModel for this cycle. The state accessor is
@@ -1774,7 +1813,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           state,
           stopWhen: [stepCountIs(maxTurns), maxCost(maxBudgetUsd)],
           ...(this.opts.effort !== undefined && { reasoning: { effort: this.opts.effort } }),
-          onTurnEnd: async (_ctx, response) => {
+          onTurnEnd: async (turnCtx, response) => {
             if (persistSession) {
               const generationId = createGenerationId();
               await logGeneration(logsRoot, {
@@ -1783,6 +1822,26 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
                 generationId,
                 response,
                 timestamp: new Date().toISOString(),
+              });
+              const extracted = extractAssistantContent((response as { output?: unknown }).output);
+              const usage = toTranscriptUsage((response as { usage?: unknown }).usage);
+              const resolvedModel =
+                typeof (response as { model?: unknown }).model === 'string'
+                  ? (response as { model: string }).model
+                  : model;
+              const cycleCost =
+                typeof (response as { usage?: { cost?: unknown } }).usage?.cost === 'number'
+                  ? (response as { usage: { cost: number } }).usage.cost
+                  : 0;
+              await logTranscriptAssistant({
+                logsRoot,
+                sessionId,
+                turnNumber: turnCtx.numberOfTurns,
+                requestId: cycleRequestId,
+                model: resolvedModel,
+                ...extracted,
+                ...(usage !== undefined && { usage }),
+                costUsd: cycleCost,
               });
             }
             totalCostUsd += response.usage?.cost ?? 0;
@@ -1844,6 +1903,16 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
                 output: out.output,
                 isError,
               };
+              if (persistSession) {
+                await logTranscriptToolResult({
+                  logsRoot,
+                  sessionId,
+                  callId: out.callId,
+                  name: toolCallNames.get(out.callId) ?? '',
+                  isError,
+                  output: out.output,
+                });
+              }
               // After an abort, surface the tool result then stop iterating.
               if (signal.aborted) break;
               continue;
@@ -1872,6 +1941,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
                 } catch {
                   input = fnItem.arguments;
                 }
+                toolCallNames.set(fnItem.callId, fnItem.name);
                 yield {
                   type: 'tool_call',
                   callId: fnItem.callId,
@@ -2112,6 +2182,17 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
 
       if (sessionEndPayload) {
         await safeFireHook('SessionEnd', sessionEndPayload);
+        if (persistSession && transcriptStarted) {
+          const totalUsage = toTranscriptUsage(sessionEndPayload.usage);
+          await logTranscriptSessionEnd({
+            logsRoot,
+            sessionId,
+            status: sessionEndPayload.status,
+            ...(stopPayload.reason !== undefined && { reason: stopPayload.reason }),
+            ...(totalUsage !== undefined && { totalUsage }),
+            totalCostUsd: sessionEndPayload.costUsd,
+          });
+        }
       }
       // Stop is the last hook event in the run. Fires regardless of how we
       // exited iterate(); when the run somehow exited without setting
@@ -2338,6 +2419,98 @@ function namedFromPositional(
     out[names[i]!] = i < args.length ? args[i]! : '';
   }
   return out;
+}
+
+/**
+ * Walk a {@link OpenResponsesResult.output} array and pull out the user-visible
+ * pieces a transcript record cares about — concatenated assistant text,
+ * concatenated reasoning text, and the list of tool calls the turn issued.
+ * Best-effort: unknown item shapes are skipped silently rather than throwing,
+ * so transcript writes never block the run on SDK schema drift.
+ */
+function extractAssistantContent(output: unknown): {
+  text?: string;
+  reasoning?: string;
+  toolCalls?: TranscriptToolCall[];
+} {
+  let text = '';
+  let reasoning = '';
+  const toolCalls: TranscriptToolCall[] = [];
+  if (!Array.isArray(output)) return {};
+  for (const item of output) {
+    if (!item || typeof item !== 'object') continue;
+    const type = (item as { type?: unknown }).type;
+    if (type === 'message') {
+      const content = (item as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        for (const c of content) {
+          if (c && typeof c === 'object' && (c as { type?: unknown }).type === 'output_text') {
+            const t = (c as { text?: unknown }).text;
+            if (typeof t === 'string') text += t;
+          }
+        }
+      }
+    } else if (type === 'reasoning') {
+      const content = (item as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        for (const c of content) {
+          if (c && typeof c === 'object') {
+            const t = (c as { text?: unknown }).text;
+            if (typeof t === 'string') reasoning += t;
+          }
+        }
+      }
+    } else if (type === 'function_call') {
+      const fn = item as { callId?: unknown; name?: unknown; arguments?: unknown };
+      let parsedInput: unknown;
+      if (typeof fn.arguments === 'string') {
+        try {
+          parsedInput = JSON.parse(fn.arguments);
+        } catch {
+          parsedInput = fn.arguments;
+        }
+      } else {
+        parsedInput = fn.arguments;
+      }
+      toolCalls.push({
+        callId: typeof fn.callId === 'string' ? fn.callId : '',
+        name: typeof fn.name === 'string' ? fn.name : '',
+        input: parsedInput,
+      });
+    }
+  }
+  const result: { text?: string; reasoning?: string; toolCalls?: TranscriptToolCall[] } = {};
+  if (text.length > 0) result.text = text;
+  if (reasoning.length > 0) result.reasoning = reasoning;
+  if (toolCalls.length > 0) result.toolCalls = toolCalls;
+  return result;
+}
+
+/**
+ * Project the OR SDK's {@link Usage} shape down to the compact
+ * {@link TranscriptUsage} the transcript log persists. Returns `undefined` for
+ * a missing usage object so the record skips the field entirely (vs. writing
+ * a zero-everywhere placeholder).
+ */
+function toTranscriptUsage(u: unknown): TranscriptUsage | undefined {
+  if (!u || typeof u !== 'object') return undefined;
+  const usage = u as {
+    inputTokens?: number;
+    outputTokens?: number;
+    outputTokensDetails?: { reasoningTokens?: number };
+    inputTokensDetails?: { cachedTokens?: number };
+  };
+  const result: TranscriptUsage = {
+    prompt: usage.inputTokens ?? 0,
+    completion: usage.outputTokens ?? 0,
+  };
+  if (usage.outputTokensDetails?.reasoningTokens !== undefined) {
+    result.reasoning = usage.outputTokensDetails.reasoningTokens;
+  }
+  if (usage.inputTokensDetails?.cachedTokens !== undefined) {
+    result.cached = usage.inputTokensDetails.cachedTokens;
+  }
+  return result;
 }
 
 function deriveCompletionStatus(input: DeriveCompletionInput): AgentCoreEventStatus {
