@@ -71,7 +71,23 @@ function fakeCallModel(args: { events: unknown[]; response?: FakeResponse }) {
     };
     return {
       async *getFullResponsesStream() {
-        for (const ev of args.events) yield ev;
+        // Replay the caller's events, then synthesize the `response.completed`
+        // event the real SDK emits right before `turn.end`. The transcript
+        // writer hangs off this event, so tests that drive the full lifecycle
+        // need it present.
+        let emittedCompleted = false;
+        for (const ev of args.events) {
+          if (
+            !emittedCompleted &&
+            !!ev &&
+            typeof ev === 'object' &&
+            (ev as { type?: string }).type === 'turn.end'
+          ) {
+            yield { type: 'response.completed', response, sequenceNumber: 0 };
+            emittedCompleted = true;
+          }
+          yield ev;
+        }
         if (request.onTurnEnd) {
           await request.onTurnEnd({ numberOfTurns: 1 }, response);
         }
@@ -112,6 +128,54 @@ afterEach(async () => {
 });
 
 describe('OpenRouterAgentRun transcript log', () => {
+  // Regression: the OR SDK only fires `onTurnEnd` on follow-up turns (after a
+  // tool-execution round). Single-shot runs (no tool calls) trigger zero
+  // `onTurnEnd` callbacks — the initial response IS the final response. An
+  // earlier version of the transcript writer hung off `onTurnEnd` and so
+  // wrote zero assistant records on such runs. Switching the write hook to
+  // the `response.completed` stream event (which fires once per turn, initial
+  // AND follow-up) fixes that. This test guards the regression.
+  it('writes the assistant record on a single-shot run with no tool calls', async () => {
+    callModelMock.mockImplementation(
+      fakeCallModel({
+        events: [
+          { type: 'turn.start', turnNumber: 0, timestamp: 1 },
+          { type: 'response.output_text.delta', delta: 'single ' },
+          { type: 'response.output_text.delta', delta: 'shot' },
+          { type: 'turn.end', turnNumber: 0, timestamp: 2 },
+        ],
+        response: {
+          id: 'r-singleshot',
+          model: 'mock-singleshot',
+          usage: { cost: 0.001, inputTokens: 5, outputTokens: 2, totalTokens: 7 },
+          output: [
+            {
+              type: 'message',
+              role: 'assistant',
+              content: [{ type: 'output_text', text: 'single shot' }],
+            },
+          ],
+        },
+      }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: SESSION,
+      prompt: 'one and done',
+      logsRoot,
+    });
+    await drain(run);
+
+    const records = await collectTranscript(logsRoot, SESSION);
+    const assistantRecords = records.filter((r) => r.kind === 'assistant');
+    expect(assistantRecords).toHaveLength(1);
+    const assistant = assistantRecords[0] as Extract<TranscriptRecord, { kind: 'assistant' }>;
+    expect(assistant.text).toBe('single shot');
+    expect(assistant.model).toBe('mock-singleshot');
+    expect(assistant.costUsd).toBeCloseTo(0.001);
+  });
+
   it('writes session_start → user → assistant (with model/usage/cost) → session_end on a simple turn', async () => {
     callModelMock.mockImplementation(
       fakeCallModel({
@@ -156,7 +220,7 @@ describe('OpenRouterAgentRun transcript log', () => {
     expect(kinds).toEqual(['session_start', 'user', 'assistant', 'session_end']);
 
     const assistant = records[2] as Extract<TranscriptRecord, { kind: 'assistant' }>;
-    expect(assistant.turnNumber).toBe(1);
+    expect(assistant.turnNumber).toBe(0);
     expect(assistant.model).toBe('openrouter/auto/resolved-to-claude');
     expect(assistant.text).toBe('hello world');
     expect(assistant.usage).toEqual({
