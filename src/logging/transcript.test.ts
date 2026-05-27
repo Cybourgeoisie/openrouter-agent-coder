@@ -172,6 +172,27 @@ describe('transcript writer', () => {
     });
   });
 
+  it('omits optional fields when undefined on compact and session_end', async () => {
+    await logTranscriptCompact({
+      logsRoot,
+      sessionId: SESSION,
+      reason: 'manual',
+      droppedMessages: 0,
+      summaryText: '',
+    });
+    await logTranscriptSessionEnd({ logsRoot, sessionId: SESSION, status: 'error' });
+    const raw = await readFile(join(logsRoot, SESSION, 'transcript.jsonl'), 'utf8');
+    const [compact, end] = raw
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as TranscriptRecord);
+    expect(compact).not.toHaveProperty('usage');
+    expect(compact).not.toHaveProperty('costUsd');
+    expect(end).not.toHaveProperty('reason');
+    expect(end).not.toHaveProperty('totalUsage');
+    expect(end).not.toHaveProperty('totalCostUsd');
+  });
+
   it('omits optional fields when undefined (assistant w/o tool calls)', async () => {
     await logTranscriptAssistant({
       logsRoot,
@@ -220,6 +241,39 @@ describe('readTranscript', () => {
     expect(collected).toHaveLength(3);
     expect(collected[0].kind).toBe('session_start');
     expect(collected.slice(1).map((r) => (r as { text: string }).text)).toEqual(['a', 'b']);
+  });
+
+  it('rethrows non-ENOENT errors when opening the transcript', async () => {
+    // Plant an unreadable transcript file (mode 000) so `open(..., 'r')`
+    // rejects with EACCES, exercising the rethrow arm (vs. the
+    // swallow-on-ENOENT path).
+    const { mkdir, writeFile, chmod } = await import('node:fs/promises');
+    const dir = join(logsRoot, SESSION);
+    const path = join(dir, 'transcript.jsonl');
+    await mkdir(dir, { recursive: true });
+    await writeFile(path, '{"v":1}\n');
+    await chmod(path, 0o000);
+    try {
+      await expect(async () => {
+        for await (const _r of readTranscript(logsRoot, SESSION)) {
+          void _r;
+        }
+      }).rejects.toThrow();
+    } finally {
+      // Restore so the temp-dir cleanup teardown can delete it.
+      await chmod(path, 0o644);
+    }
+  });
+
+  it('skips blank lines in the transcript', async () => {
+    const { appendFile } = await import('node:fs/promises');
+    await logTranscriptSessionStart({ logsRoot, sessionId: SESSION, cwd: '/w' });
+    // Inject a trailing blank line.
+    await appendFile(join(logsRoot, SESSION, 'transcript.jsonl'), '\n');
+    await logTranscriptUser({ logsRoot, sessionId: SESSION, text: 'after blank' });
+    const collected: TranscriptRecord[] = [];
+    for await (const r of readTranscript(logsRoot, SESSION)) collected.push(r);
+    expect(collected.map((r) => r.kind)).toEqual(['session_start', 'user']);
   });
 
   it('skips malformed lines silently', async () => {

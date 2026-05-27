@@ -697,12 +697,7 @@ export class OpenRouterAgentRun {
             }
             if (persistSession) {
                 await logSessionStart(logsRoot, sessionId, cwd, parentSessionId);
-                await logTranscriptSessionStart({
-                    logsRoot,
-                    sessionId,
-                    cwd,
-                    ...(parentSessionId !== undefined && { parentSessionId }),
-                });
+                await logTranscriptSessionStart({ logsRoot, sessionId, cwd, parentSessionId });
                 transcriptStarted = true;
             }
             yield {
@@ -1163,8 +1158,10 @@ export class OpenRouterAgentRun {
                                 turnNumber: turnCtx.numberOfTurns,
                                 requestId: cycleRequestId,
                                 model: resolvedModel,
-                                ...extracted,
-                                ...(usage !== undefined && { usage }),
+                                text: extracted.text,
+                                reasoning: extracted.reasoning,
+                                toolCalls: extracted.toolCalls,
+                                usage,
                                 costUsd: cycleCost,
                             });
                         }
@@ -1504,8 +1501,8 @@ export class OpenRouterAgentRun {
                         logsRoot,
                         sessionId,
                         status: sessionEndPayload.status,
-                        ...(stopPayload.reason !== undefined && { reason: stopPayload.reason }),
-                        ...(totalUsage !== undefined && { totalUsage }),
+                        reason: stopPayload.reason,
+                        totalUsage,
                         totalCostUsd: sessionEndPayload.costUsd,
                     });
                 }
@@ -1737,34 +1734,21 @@ function extractAssistantContent(output) {
     for (const item of output) {
         if (!item || typeof item !== 'object')
             continue;
-        const type = item.type;
-        if (type === 'message') {
-            const content = item.content;
-            if (Array.isArray(content)) {
-                for (const c of content) {
-                    if (c && typeof c === 'object' && c.type === 'output_text') {
-                        const t = c.text;
-                        if (typeof t === 'string')
-                            text += t;
-                    }
-                }
+        if (item.type === 'message' && Array.isArray(item.content)) {
+            for (const c of item.content) {
+                if (c?.type === 'output_text' && typeof c.text === 'string')
+                    text += c.text;
             }
         }
-        else if (type === 'reasoning') {
-            const content = item.content;
-            if (Array.isArray(content)) {
-                for (const c of content) {
-                    if (c && typeof c === 'object') {
-                        const t = c.text;
-                        if (typeof t === 'string')
-                            reasoning += t;
-                    }
-                }
+        else if (item.type === 'reasoning' && Array.isArray(item.content)) {
+            for (const c of item.content) {
+                if (typeof c?.text === 'string')
+                    reasoning += c.text;
             }
         }
-        else if (type === 'function_call') {
+        else if (item.type === 'function_call') {
             const fn = item;
-            let parsedInput;
+            let parsedInput = fn.arguments;
             if (typeof fn.arguments === 'string') {
                 try {
                     parsedInput = JSON.parse(fn.arguments);
@@ -1772,9 +1756,6 @@ function extractAssistantContent(output) {
                 catch {
                     parsedInput = fn.arguments;
                 }
-            }
-            else {
-                parsedInput = fn.arguments;
             }
             toolCalls.push({
                 callId: typeof fn.callId === 'string' ? fn.callId : '',

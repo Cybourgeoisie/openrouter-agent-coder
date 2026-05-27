@@ -220,6 +220,71 @@ describe('OpenRouterAgentRun transcript log', () => {
     expect(assistant.text).toBe('answer');
   });
 
+  it('extracts toolCalls from function_call items in response.output (with parsed + raw args + missing callId/name fallbacks + unknown item type)', async () => {
+    callModelMock.mockImplementation(
+      fakeCallModel({
+        events: [
+          { type: 'turn.start', turnNumber: 0, timestamp: 1 },
+          { type: 'turn.end', turnNumber: 0, timestamp: 2 },
+        ],
+        response: {
+          id: 'r-tc',
+          model: 'm',
+          usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          output: [
+            // Unknown item type — neither message / reasoning / function_call.
+            // Exercises the else-if false branch in extractAssistantContent.
+            { type: 'web_search_call' },
+            {
+              type: 'function_call',
+              callId: 'c-json',
+              name: 'read_file',
+              arguments: '{"path":"a.txt"}',
+            },
+            {
+              type: 'function_call',
+              callId: 'c-bad',
+              name: 'grep',
+              arguments: 'not-json',
+            },
+            {
+              type: 'function_call',
+              callId: 'c-obj',
+              name: 'glob',
+              arguments: { pattern: '*.ts' },
+            },
+            // Missing callId and name (non-string) — exercises the
+            // string-fallback branches on both fields.
+            {
+              type: 'function_call',
+              arguments: '{}',
+            },
+          ],
+        },
+      }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: SESSION,
+      prompt: 'multi tools',
+      logsRoot,
+    });
+    await drain(run);
+
+    const records = await collectTranscript(logsRoot, SESSION);
+    const assistant = records.find((r) => r.kind === 'assistant') as Extract<
+      TranscriptRecord,
+      { kind: 'assistant' }
+    >;
+    expect(assistant.toolCalls).toEqual([
+      { callId: 'c-json', name: 'read_file', input: { path: 'a.txt' } },
+      { callId: 'c-bad', name: 'grep', input: 'not-json' },
+      { callId: 'c-obj', name: 'glob', input: { pattern: '*.ts' } },
+      { callId: '', name: '', input: {} },
+    ]);
+  });
+
   it('writes tool_result with the resolved tool name (looked up from tool_call)', async () => {
     callModelMock.mockImplementation(
       fakeCallModel({
@@ -269,6 +334,66 @@ describe('OpenRouterAgentRun transcript log', () => {
     expect(toolResult.name).toBe('read_file');
     expect(toolResult.isError).toBe(false);
     expect(toolResult.output).toBe('file body');
+  });
+
+  it('tolerates null / unknown items and non-text content in response.output', async () => {
+    callModelMock.mockImplementation(
+      fakeCallModel({
+        events: [
+          { type: 'turn.start', turnNumber: 0, timestamp: 1 },
+          { type: 'turn.end', turnNumber: 0, timestamp: 2 },
+        ],
+        response: {
+          id: 'r-defensive',
+          model: 'm',
+          usage: { cost: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          output: [
+            // Null item — skipped by the falsy-item guard.
+            null,
+            {
+              type: 'message',
+              role: 'assistant',
+              content: [
+                // Wrong content type — skipped (covers the && short-circuit).
+                { type: 'refusal', text: 'no thanks' },
+                // Output text with non-string text — skipped (covers typeof guard).
+                { type: 'output_text', text: 42 },
+                // Valid text — captured.
+                { type: 'output_text', text: 'real answer' },
+              ],
+            },
+            {
+              type: 'reasoning',
+              content: [
+                // Missing text — skipped.
+                { type: 'reasoning_text' },
+                // Non-string text — skipped.
+                { type: 'reasoning_text', text: null },
+                // Valid text — captured.
+                { type: 'reasoning_text', text: 'real thought' },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: SESSION,
+      prompt: 'defensive',
+      logsRoot,
+    });
+    await drain(run);
+
+    const records = await collectTranscript(logsRoot, SESSION);
+    const assistant = records.find((r) => r.kind === 'assistant') as Extract<
+      TranscriptRecord,
+      { kind: 'assistant' }
+    >;
+    expect(assistant.text).toBe('real answer');
+    expect(assistant.reasoning).toBe('real thought');
+    expect(assistant.toolCalls).toBeUndefined();
   });
 
   it('writes nothing under logsRoot when persistSession is false', async () => {

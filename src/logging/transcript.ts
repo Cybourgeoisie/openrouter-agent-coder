@@ -114,13 +114,16 @@ export async function logTranscriptSessionStart(
     parentSessionId?: string;
   },
 ): Promise<void> {
+  // `JSON.stringify` drops keys whose value is `undefined`, so we set every
+  // optional field unconditionally rather than spreading a per-field guard —
+  // the on-disk record stays compact, and the writer has fewer branches.
   const record: TranscriptRecord = {
     v: TRANSCRIPT_SCHEMA_VERSION,
     sessionId: input.sessionId,
     ts: now(input),
     kind: 'session_start',
     cwd: input.cwd,
-    ...(input.parentSessionId !== undefined && { parentSessionId: input.parentSessionId }),
+    parentSessionId: input.parentSessionId,
   };
   await appendRecord(input.logsRoot, record);
 }
@@ -161,15 +164,12 @@ export async function logTranscriptAssistant(
     turnNumber: input.turnNumber,
     requestId: input.requestId,
     model: input.model,
-    ...(input.text !== undefined && { text: input.text }),
-    ...(input.reasoning !== undefined && { reasoning: input.reasoning }),
-    ...(input.toolCalls !== undefined &&
-      input.toolCalls.length > 0 && {
-        toolCalls: input.toolCalls,
-      }),
-    ...(input.usage !== undefined && { usage: input.usage }),
-    ...(input.costUsd !== undefined && { costUsd: input.costUsd }),
-    ...(input.durationMs !== undefined && { durationMs: input.durationMs }),
+    text: input.text,
+    reasoning: input.reasoning,
+    toolCalls: input.toolCalls?.length ? input.toolCalls : undefined,
+    usage: input.usage,
+    costUsd: input.costUsd,
+    durationMs: input.durationMs,
   };
   await appendRecord(input.logsRoot, record);
 }
@@ -212,8 +212,8 @@ export async function logTranscriptCompact(
     reason: input.reason,
     droppedMessages: input.droppedMessages,
     summaryText: input.summaryText,
-    ...(input.usage !== undefined && { usage: input.usage }),
-    ...(input.costUsd !== undefined && { costUsd: input.costUsd }),
+    usage: input.usage,
+    costUsd: input.costUsd,
   };
   await appendRecord(input.logsRoot, record);
 }
@@ -232,9 +232,9 @@ export async function logTranscriptSessionEnd(
     ts: now(input),
     kind: 'session_end',
     status: input.status,
-    ...(input.reason !== undefined && { reason: input.reason }),
-    ...(input.totalUsage !== undefined && { totalUsage: input.totalUsage }),
-    ...(input.totalCostUsd !== undefined && { totalCostUsd: input.totalCostUsd }),
+    reason: input.reason,
+    totalUsage: input.totalUsage,
+    totalCostUsd: input.totalCostUsd,
   };
   await appendRecord(input.logsRoot, record);
 }

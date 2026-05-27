@@ -1379,12 +1379,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
 
       if (persistSession) {
         await logSessionStart(logsRoot, sessionId, cwd, parentSessionId);
-        await logTranscriptSessionStart({
-          logsRoot,
-          sessionId,
-          cwd,
-          ...(parentSessionId !== undefined && { parentSessionId }),
-        });
+        await logTranscriptSessionStart({ logsRoot, sessionId, cwd, parentSessionId });
         transcriptStarted = true;
       }
 
@@ -1859,8 +1854,10 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
                 turnNumber: turnCtx.numberOfTurns,
                 requestId: cycleRequestId,
                 model: resolvedModel,
-                ...extracted,
-                ...(usage !== undefined && { usage }),
+                text: extracted.text,
+                reasoning: extracted.reasoning,
+                toolCalls: extracted.toolCalls,
+                usage,
                 costUsd: cycleCost,
               });
             }
@@ -2208,8 +2205,8 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
             logsRoot,
             sessionId,
             status: sessionEndPayload.status,
-            ...(stopPayload.reason !== undefined && { reason: stopPayload.reason }),
-            ...(totalUsage !== undefined && { totalUsage }),
+            reason: stopPayload.reason,
+            totalUsage,
             totalCostUsd: sessionEndPayload.costUsd,
           });
         }
@@ -2461,40 +2458,25 @@ function extractAssistantContent(output: unknown): {
   let reasoning = '';
   const toolCalls: TranscriptToolCall[] = [];
   if (!Array.isArray(output)) return {};
-  for (const item of output) {
+  for (const item of output as Array<{ type?: string; content?: unknown[] } | null>) {
     if (!item || typeof item !== 'object') continue;
-    const type = (item as { type?: unknown }).type;
-    if (type === 'message') {
-      const content = (item as { content?: unknown }).content;
-      if (Array.isArray(content)) {
-        for (const c of content) {
-          if (c && typeof c === 'object' && (c as { type?: unknown }).type === 'output_text') {
-            const t = (c as { text?: unknown }).text;
-            if (typeof t === 'string') text += t;
-          }
-        }
+    if (item.type === 'message' && Array.isArray(item.content)) {
+      for (const c of item.content as Array<{ type?: string; text?: string }>) {
+        if (c?.type === 'output_text' && typeof c.text === 'string') text += c.text;
       }
-    } else if (type === 'reasoning') {
-      const content = (item as { content?: unknown }).content;
-      if (Array.isArray(content)) {
-        for (const c of content) {
-          if (c && typeof c === 'object') {
-            const t = (c as { text?: unknown }).text;
-            if (typeof t === 'string') reasoning += t;
-          }
-        }
+    } else if (item.type === 'reasoning' && Array.isArray(item.content)) {
+      for (const c of item.content as Array<{ text?: string }>) {
+        if (typeof c?.text === 'string') reasoning += c.text;
       }
-    } else if (type === 'function_call') {
-      const fn = item as { callId?: unknown; name?: unknown; arguments?: unknown };
-      let parsedInput: unknown;
+    } else if (item.type === 'function_call') {
+      const fn = item as unknown as { callId?: unknown; name?: unknown; arguments?: unknown };
+      let parsedInput: unknown = fn.arguments;
       if (typeof fn.arguments === 'string') {
         try {
           parsedInput = JSON.parse(fn.arguments);
         } catch {
           parsedInput = fn.arguments;
         }
-      } else {
-        parsedInput = fn.arguments;
       }
       toolCalls.push({
         callId: typeof fn.callId === 'string' ? fn.callId : '',
