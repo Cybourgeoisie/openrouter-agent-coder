@@ -9,6 +9,7 @@ import { createServerToolsHooks } from './tools/server-tools.js';
 import { createFileStateAccessor } from './state/file-state.js';
 import { createMemoryStateAccessor } from './state/memory-state.js';
 import { createRequestId, createGenerationId, logRequest, logGeneration, logSessionStart, } from './logging/logger.js';
+import { logTranscriptSessionStart, logTranscriptUser, logTranscriptAssistant, logTranscriptToolResult, logTranscriptCompact, logTranscriptSessionEnd, } from './logging/transcript.js';
 import { permissionModeToCanUseTool } from './permission-modes.js';
 import { buildToolFilterCanUseTool, compileRule } from './tool-filters.js';
 import { composeInstructions } from './context-discovery.js';
@@ -435,6 +436,15 @@ export class OpenRouterAgentRun {
         delete nextState.unsentToolResults;
         delete nextState.partialResponse;
         await this.stateAccessor.save(nextState);
+        if (this.persistSession) {
+            await logTranscriptCompact({
+                logsRoot: this.opts.logsRoot,
+                sessionId: this.opts.sessionId,
+                reason,
+                droppedMessages: summarize.length,
+                summaryText,
+            });
+        }
     }
     /**
      * Abort the in-flight run. Fires the run's internal AbortController, which
@@ -576,6 +586,17 @@ export class OpenRouterAgentRun {
         let maxTurnNumber = 0;
         let totalCostUsd = 0;
         let finalUsage = null;
+        // Tool call_id → tool_name, populated when the SDK emits a function_call
+        // item and read when the matching tool_call_output arrives. The output
+        // event carries only the callId, so a side-map is the cheapest way to
+        // surface the human-readable name on the transcript record.
+        const toolCallNames = new Map();
+        // Set true once the session_start transcript record lands. Errors thrown
+        // before that point (bad logsRoot, createOpenRouterClient throws,
+        // pre-session_start cwd-related failures) skip the matching session_end
+        // transcript write so we never try to write into a directory that
+        // doesn't exist.
+        let transcriptStarted = false;
         const signal = this.compositeSignal;
         // Captured at every stream_complete yield site so the outer finally can
         // fire exactly one SessionEnd hook with matching status/usage/cost. Null
@@ -676,6 +697,8 @@ export class OpenRouterAgentRun {
             }
             if (persistSession) {
                 await logSessionStart(logsRoot, sessionId, cwd, parentSessionId);
+                await logTranscriptSessionStart({ logsRoot, sessionId, cwd, parentSessionId });
+                transcriptStarted = true;
             }
             yield {
                 type: 'session_started',
@@ -1097,6 +1120,7 @@ export class OpenRouterAgentRun {
                         prompt: cyclePromptForLog,
                         timestamp: new Date().toISOString(),
                     });
+                    await logTranscriptUser({ logsRoot, sessionId, text: cyclePromptForLog });
                 }
                 // 4. Fire the callModel for this cycle. The state accessor is
                 //    shared across cycles so the SDK's resume path picks up the
@@ -1110,7 +1134,7 @@ export class OpenRouterAgentRun {
                     state,
                     stopWhen: [stepCountIs(maxTurns), maxCost(maxBudgetUsd)],
                     ...(this.opts.effort !== undefined && { reasoning: { effort: this.opts.effort } }),
-                    onTurnEnd: async (_ctx, response) => {
+                    onTurnEnd: async (turnCtx, response) => {
                         if (persistSession) {
                             const generationId = createGenerationId();
                             await logGeneration(logsRoot, {
@@ -1119,6 +1143,26 @@ export class OpenRouterAgentRun {
                                 generationId,
                                 response,
                                 timestamp: new Date().toISOString(),
+                            });
+                            const extracted = extractAssistantContent(response.output);
+                            const usage = toTranscriptUsage(response.usage);
+                            const resolvedModel = typeof response.model === 'string'
+                                ? response.model
+                                : model;
+                            const cycleCost = typeof response.usage?.cost === 'number'
+                                ? response.usage.cost
+                                : 0;
+                            await logTranscriptAssistant({
+                                logsRoot,
+                                sessionId,
+                                turnNumber: turnCtx.numberOfTurns,
+                                requestId: cycleRequestId,
+                                model: resolvedModel,
+                                text: extracted.text,
+                                reasoning: extracted.reasoning,
+                                toolCalls: extracted.toolCalls,
+                                usage,
+                                costUsd: cycleCost,
                             });
                         }
                         totalCostUsd += response.usage?.cost ?? 0;
@@ -1181,6 +1225,16 @@ export class OpenRouterAgentRun {
                                 output: out.output,
                                 isError,
                             };
+                            if (persistSession) {
+                                await logTranscriptToolResult({
+                                    logsRoot,
+                                    sessionId,
+                                    callId: out.callId,
+                                    name: toolCallNames.get(out.callId) ?? '',
+                                    isError,
+                                    output: out.output,
+                                });
+                            }
                             // After an abort, surface the tool result then stop iterating.
                             if (signal.aborted)
                                 break;
@@ -1208,6 +1262,7 @@ export class OpenRouterAgentRun {
                                 catch {
                                     input = fnItem.arguments;
                                 }
+                                toolCallNames.set(fnItem.callId, fnItem.name);
                                 yield {
                                     type: 'tool_call',
                                     callId: fnItem.callId,
@@ -1440,6 +1495,17 @@ export class OpenRouterAgentRun {
             }
             if (sessionEndPayload) {
                 await safeFireHook('SessionEnd', sessionEndPayload);
+                if (persistSession && transcriptStarted) {
+                    const totalUsage = toTranscriptUsage(sessionEndPayload.usage);
+                    await logTranscriptSessionEnd({
+                        logsRoot,
+                        sessionId,
+                        status: sessionEndPayload.status,
+                        reason: stopPayload.reason,
+                        totalUsage,
+                        totalCostUsd: sessionEndPayload.costUsd,
+                    });
+                }
             }
             // Stop is the last hook event in the run. Fires regardless of how we
             // exited iterate(); when the run somehow exited without setting
@@ -1651,6 +1717,83 @@ function namedFromPositional(names, args) {
         out[names[i]] = i < args.length ? args[i] : '';
     }
     return out;
+}
+/**
+ * Walk a {@link OpenResponsesResult.output} array and pull out the user-visible
+ * pieces a transcript record cares about — concatenated assistant text,
+ * concatenated reasoning text, and the list of tool calls the turn issued.
+ * Best-effort: unknown item shapes are skipped silently rather than throwing,
+ * so transcript writes never block the run on SDK schema drift.
+ */
+function extractAssistantContent(output) {
+    let text = '';
+    let reasoning = '';
+    const toolCalls = [];
+    if (!Array.isArray(output))
+        return {};
+    for (const item of output) {
+        if (!item || typeof item !== 'object')
+            continue;
+        if (item.type === 'message' && Array.isArray(item.content)) {
+            for (const c of item.content) {
+                if (c?.type === 'output_text' && typeof c.text === 'string')
+                    text += c.text;
+            }
+        }
+        else if (item.type === 'reasoning' && Array.isArray(item.content)) {
+            for (const c of item.content) {
+                if (typeof c?.text === 'string')
+                    reasoning += c.text;
+            }
+        }
+        else if (item.type === 'function_call') {
+            const fn = item;
+            let parsedInput = fn.arguments;
+            if (typeof fn.arguments === 'string') {
+                try {
+                    parsedInput = JSON.parse(fn.arguments);
+                }
+                catch {
+                    parsedInput = fn.arguments;
+                }
+            }
+            toolCalls.push({
+                callId: typeof fn.callId === 'string' ? fn.callId : '',
+                name: typeof fn.name === 'string' ? fn.name : '',
+                input: parsedInput,
+            });
+        }
+    }
+    const result = {};
+    if (text.length > 0)
+        result.text = text;
+    if (reasoning.length > 0)
+        result.reasoning = reasoning;
+    if (toolCalls.length > 0)
+        result.toolCalls = toolCalls;
+    return result;
+}
+/**
+ * Project the OR SDK's {@link Usage} shape down to the compact
+ * {@link TranscriptUsage} the transcript log persists. Returns `undefined` for
+ * a missing usage object so the record skips the field entirely (vs. writing
+ * a zero-everywhere placeholder).
+ */
+function toTranscriptUsage(u) {
+    if (!u || typeof u !== 'object')
+        return undefined;
+    const usage = u;
+    const result = {
+        prompt: usage.inputTokens ?? 0,
+        completion: usage.outputTokens ?? 0,
+    };
+    if (usage.outputTokensDetails?.reasoningTokens !== undefined) {
+        result.reasoning = usage.outputTokensDetails.reasoningTokens;
+    }
+    if (usage.inputTokensDetails?.cachedTokens !== undefined) {
+        result.cached = usage.inputTokensDetails.cachedTokens;
+    }
+    return result;
 }
 function deriveCompletionStatus(input) {
     if (input.totalCostUsd >= input.maxBudgetUsd)
