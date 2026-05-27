@@ -393,7 +393,14 @@ describe('OpenRouterAgentRun MCP bridge integration', () => {
     // Calling the wrapper should consult canUseTool with the prefixed name
     // and reject when canUseTool denies.
     await expect(wrapped.function.execute({ x: 1 }, {})).rejects.toThrow();
-    expect(canUseTool).toHaveBeenCalledWith('srv__danger', { x: 1 });
+    expect(canUseTool).toHaveBeenCalledWith(
+      'srv__danger',
+      { x: 1 },
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        suggestions: expect.any(Array),
+      }),
+    );
   });
 
   it('disallowedTools rule matches a prefixed MCP tool name', async () => {

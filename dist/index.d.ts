@@ -1,5 +1,5 @@
 export { OpenRouterAgentRun, DEFAULT_INSTRUCTIONS } from './agent.js';
-export type { OpenRouterAgentRunOptions, AgentLogger, AgentLoggerLevel, CanUseTool, CanUseToolResult, OnHook, } from './agent.js';
+export type { OpenRouterAgentRunOptions, AgentLogger, AgentLoggerLevel, CanUseTool, CanUseToolContext, CanUseToolResult, OnHook, } from './agent.js';
 export { permissionModeToCanUseTool } from './permission-modes.js';
 export type { PermissionMode } from './permission-modes.js';
 export { composeInstructions, COMPOSED_INSTRUCTIONS_CHAR_CAP, MAX_PROJECT_WALK_DEPTH, } from './context-discovery.js';
