@@ -1828,7 +1828,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           state,
           stopWhen: [stepCountIs(maxTurns), maxCost(maxBudgetUsd)],
           ...(this.opts.effort !== undefined && { reasoning: { effort: this.opts.effort } }),
-          onTurnEnd: async (turnCtx, response) => {
+          onTurnEnd: async (_turnCtx, response) => {
             if (persistSession) {
               const generationId = createGenerationId();
               await logGeneration(logsRoot, {
@@ -1837,28 +1837,6 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
                 generationId,
                 response,
                 timestamp: new Date().toISOString(),
-              });
-              const extracted = extractAssistantContent((response as { output?: unknown }).output);
-              const usage = toTranscriptUsage((response as { usage?: unknown }).usage);
-              const resolvedModel =
-                typeof (response as { model?: unknown }).model === 'string'
-                  ? (response as { model: string }).model
-                  : model;
-              const cycleCost =
-                typeof (response as { usage?: { cost?: unknown } }).usage?.cost === 'number'
-                  ? (response as { usage: { cost: number } }).usage.cost
-                  : 0;
-              await logTranscriptAssistant({
-                logsRoot,
-                sessionId,
-                turnNumber: turnCtx.numberOfTurns,
-                requestId: cycleRequestId,
-                model: resolvedModel,
-                text: extracted.text,
-                reasoning: extracted.reasoning,
-                toolCalls: extracted.toolCalls,
-                usage,
-                costUsd: cycleCost,
               });
             }
             totalCostUsd += response.usage?.cost ?? 0;
@@ -1939,6 +1917,38 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
               const delta = (event as { type: string; delta: string }).delta;
               if (delta) {
                 yield { type: 'text_delta', content: delta };
+              }
+              continue;
+            }
+            // `response.completed` fires once per SDK turn — the initial
+            // response (which may be the only one if there are no tool calls)
+            // AND every follow-up response. This is the right hook for the
+            // assistant transcript record: `onTurnEnd` only fires on
+            // follow-ups, so single-shot runs would otherwise leave no
+            // assistant record on disk.
+            if ('type' in event && event.type === 'response.completed') {
+              if (persistSession) {
+                const resp = (event as { response?: unknown }).response as {
+                  model?: unknown;
+                  output?: unknown;
+                  usage?: { cost?: unknown } | null;
+                };
+                const extracted = extractAssistantContent(resp.output);
+                const usage = toTranscriptUsage(resp.usage);
+                const cost = typeof resp.usage?.cost === 'number' ? resp.usage.cost : 0;
+                const resolvedModel = typeof resp.model === 'string' ? resp.model : model;
+                await logTranscriptAssistant({
+                  logsRoot,
+                  sessionId,
+                  turnNumber: lastTurnNumber,
+                  requestId: cycleRequestId,
+                  model: resolvedModel,
+                  text: extracted.text,
+                  reasoning: extracted.reasoning,
+                  toolCalls: extracted.toolCalls,
+                  usage,
+                  costUsd: cost,
+                });
               }
               continue;
             }
