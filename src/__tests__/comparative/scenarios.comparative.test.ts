@@ -19,6 +19,7 @@ import { appendFile, mkdir, writeFile } from 'node:fs/promises';
 import { readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { StateAccessor, ConversationState } from '@openrouter/agent';
 
 import { compareTranscriptsFromScenario } from './comparator.js';
 import { runScenario } from './harness.js';
@@ -1016,5 +1017,232 @@ describe('comparative scenario: 21-notebook-edit — four operations + validatio
     expect(Object.hasOwn(finalNotebook.cells[1], 'execution_count')).toBe(false);
 
     await rm(workDir, { recursive: true, force: true });
+  });
+});
+
+// ----- Phase 6.9 backfill #156: streaming input + host-interrupt (OR-only) -----
+//
+// POSTURE — OR-only-asserts (PR body ambiguity call #1). Streaming input
+// (`prompt: AsyncIterable<UserInput>`, Phase 5.3) and the run's between-turn
+// `interrupt()` facade have NO Anthropic analog reachable through this harness:
+// the shared `runScenario` harness constructs BOTH SDKs with a single string
+// `prompt` (harness.ts) and exposes neither an `AsyncIterable` prompt nor an
+// `interrupt()`/`pushUserMessage()` surface on the Anthropic `query()` side.
+// The bilateral comparator-pass on scenario #22 therefore carries only the
+// 1-turn no-tool event-stream floor; this OR-only supplemental carries the
+// load-bearing streaming-input + interrupt assertions, against the SAME
+// in-process emulator the bilateral run uses. Same posture as PRs #190–#192.
+//
+// MECHANISM. The supplemental drives a real `OpenRouterAgentRun` with
+// `prompt: AsyncIterable<UserInput>` yielding THREE messages, against the
+// emulator seeded with scenario #22's three `openresponses` streaming entries.
+// The interrupt is injected deterministically via a wrapper `StateAccessor`:
+//
+//   - The `@openrouter/agent` SDK only polls the host interrupt flag at the
+//     `checkForInterruption` call INSIDE its tool-execution loop
+//     (model-result.js:1058) — a no-tool response completes in one turn and
+//     never reaches that poll. So cycle 2's scripted response carries BOTH
+//     text AND a `tool_use` block, which makes the SDK enter the loop. The
+//     tool call is the load-bearing mechanism that makes the interrupt
+//     observable, not incidental (PR body ambiguity call #2).
+//   - The wrapper detects that exact poll — the first `load()` where status is
+//     `'in_progress'` and a `function_call` is pending with no matching
+//     `function_call_output` — and calls the PRODUCTION `setInterruptedFlag`
+//     (src/streaming-input.ts) to write `interruptedBy='host-interrupt'`,
+//     returning the flagged state so the SDK's own checkForInterruption exits
+//     cycle 2 with `status:'interrupted'` + `partialResponse`. One-shot — the
+//     SDK's cycle-start handler clears the flag (model-result.js:798) so cycle
+//     3 runs clean.
+//   - The interrupt is injected via the wrapper invoking `setInterruptedFlag`
+//     rather than `run.interrupt()` directly because `interrupt()` awaits the
+//     in-flight cycle promise, which deadlocks when called from inside the
+//     consumer's `for await` (PR body ambiguity call #3). `setInterruptedFlag`
+//     is exactly what `interrupt()` calls internally to write the flag, so the
+//     state projection asserted here is faithful to the public API.
+//
+// FINDING (not fixed here — ZERO production touches). The SDK's
+// checkForInterruption persists `{status:'interrupted', partialResponse}` by
+// merging onto its in-memory `currentState` (cached at cycle start, before the
+// host wrote the flag), so the persisted interrupted state does NOT retain
+// `interruptedBy`. The agent loop's post-cycle `stateAfter.interruptedBy` read
+// (src/agent.ts:2040) consequently falls back to the literal `'interrupted'`
+// for `stream_complete.reason` rather than `'host-interrupt'` on a run whose
+// LAST cycle was the interrupted one. This run's last cycle (3) completes
+// cleanly so `reason` is absent regardless; the divergence is documented in
+// the PR body as a follow-up, not a blocker for this assertion.
+
+describe('comparative scenario: 22-streaming-input-interrupt — streaming input + host-interrupt (OR-only)', () => {
+  it('admits three user messages, exits cycle 2 interrupted with partialResponse, and commits it before cycle 3', async () => {
+    const { startEmulator } = await import('./emulator/index.js');
+    const { OpenRouterAgentRun } = await import('../../agent.js');
+    const { createMemoryStateAccessor } = await import('../../state/memory-state.js');
+    const { setInterruptedFlag } = await import('../../streaming-input.js');
+    const { canonicalizeOr } = await import('./canonicalize.js');
+    const { tool: orTool } = await import('@openrouter/agent');
+    const { z } = await import('zod/v4');
+
+    type StateLike = {
+      status?: string;
+      messages?: Array<{ type?: string; role?: string; content?: unknown }>;
+      interruptedBy?: string;
+      partialResponse?: { text?: string };
+    };
+
+    const scenarioPath = join(SCENARIO_DIR, '22-streaming-input-interrupt.json');
+    const scenario = await loadScenario(scenarioPath);
+
+    const emu = await startEmulator();
+    for (const entry of scenario.script) {
+      if ((entry.wire ?? 'anthropic') !== 'openresponses') continue;
+      emu.registry.register(entry as Parameters<typeof emu.registry.register>[0]);
+    }
+
+    // (a) Record each admitted user message: the trailing role:'user' item in
+    // every callModel request body's `input`. One per cycle → three admissions.
+    const admitted: string[] = [];
+    const originalLookup = emu.registry.lookup.bind(emu.registry);
+    (emu.registry as { lookup: typeof originalLookup }).lookup = (body, wire) => {
+      const input = (body as { input?: Array<{ role?: string; content?: unknown }> }).input;
+      if (Array.isArray(input)) {
+        const lastUser = [...input].reverse().find((m) => m && m.role === 'user');
+        if (lastUser && typeof lastUser.content === 'string') admitted.push(lastUser.content);
+      }
+      return originalLookup(body, wire);
+    };
+
+    const inner = createMemoryStateAccessor();
+    let fired = false;
+    let observedInterruptedBy: string | undefined;
+    let interruptedSave: { status?: string; partialText?: string } | undefined;
+    let toolExecuted = false;
+
+    const wrapped: StateAccessor = {
+      load: async () => {
+        const s = (await inner.load()) as (StateLike & ConversationState) | null;
+        if (!fired && s && s.status === 'in_progress') {
+          const msgs = s.messages ?? [];
+          const pendingTool =
+            msgs.some((m) => m.type === 'function_call') &&
+            !msgs.some((m) => m.type === 'function_call_output');
+          if (pendingTool) {
+            fired = true;
+            // Host-side interrupt at the exact between-turns poll. Production
+            // code writes the flag; the SDK observes it on this same load.
+            await setInterruptedFlag(inner, 'host-interrupt');
+            const flagged = (await inner.load()) as (StateLike & ConversationState) | null;
+            observedInterruptedBy = (flagged as StateLike | null)?.interruptedBy;
+            return flagged;
+          }
+        }
+        return s;
+      },
+      save: async (s) => {
+        const st = s as StateLike & ConversationState;
+        if (st.status === 'interrupted' && st.partialResponse && interruptedSave === undefined) {
+          interruptedSave = { status: st.status, partialText: st.partialResponse.text };
+        }
+        await inner.save(s);
+      },
+    };
+
+    async function* prompt(): AsyncGenerator<{ content: string }> {
+      yield { content: 'MESSAGE_ONE' };
+      yield { content: 'MESSAGE_TWO' };
+      yield { content: 'MESSAGE_THREE' };
+    }
+
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 30_000).unref();
+
+    const events: Array<Record<string, unknown>> = [];
+    try {
+      const run = new OpenRouterAgentRun({
+        apiKey: 'sk-or-emulator-stub',
+        sessionId: `streaming-input-interrupt-${Date.now()}`,
+        prompt: prompt(),
+        baseUrl: emu.url,
+        persistSession: false,
+        signal: ac.signal,
+        // `echo` mirrors the shared `_tools.ts` fixture's name/description/schema
+        // so the scripted cycle-2/cycle-3 promptHashes match the request bodies.
+        tools: [
+          orTool({
+            name: 'echo',
+            description:
+              'Echoes the given text back to the caller. Deterministic, no side effects.',
+            inputSchema: z.object({ text: z.string() }),
+            execute: ({ text }) => {
+              toolExecuted = true;
+              return text;
+            },
+          }),
+        ],
+        model: scenario.model,
+        instructions: scenario.systemPrompt,
+      });
+      // Swap in the interrupt-injecting accessor before iteration begins (the
+      // agent reads `this.stateAccessor` lazily inside `iterate()`). Same
+      // reflection pattern the Phase 5.3 unit tests use (agent.streaming.test.ts).
+      (run as unknown as { stateAccessor: StateAccessor }).stateAccessor = wrapped;
+      for await (const ev of run) {
+        events.push(ev as Record<string, unknown>);
+      }
+    } finally {
+      await emu.stop();
+    }
+
+    // ----- (a) three distinct user-message admissions --------------------
+    expect(admitted).toEqual(['MESSAGE_ONE', 'MESSAGE_TWO', 'MESSAGE_THREE']);
+    // ...and the canonical OR event stream shows three turn brackets, one
+    // reply per admitted message (cycle 2's reply is the partial text).
+    const projection = canonicalizeOr({
+      wire: 'openrouter',
+      events: events as never,
+      costUsd: 0,
+    });
+    expect(projection.events.filter((e) => e.type === 'turn_start')).toHaveLength(3);
+    expect(
+      projection.events
+        .filter((e) => e.type === 'text')
+        .map((e) => (e as { type: 'text'; text: string }).text),
+    ).toEqual(['REPLY_ONE', 'REPLY_TWO_PARTIAL', 'REPLY_THREE']);
+
+    // ----- (b) host-interrupt → state.interruptedBy + interrupted exit ----
+    expect(observedInterruptedBy).toBe('host-interrupt');
+    expect(interruptedSave, 'expected an interrupted state save').toBeDefined();
+    expect(interruptedSave!.status).toBe('interrupted');
+    expect(interruptedSave!.partialText).toBe('REPLY_TWO_PARTIAL');
+    // The interrupt short-circuits the in-flight tool round — echo never runs.
+    expect(toolExecuted).toBe(false);
+
+    // ----- (c) next cycle commits partialResponse.text as an assistant msg
+    const finalState = (await inner.load()) as StateLike | null;
+    expect(finalState).not.toBeNull();
+    const msgs = finalState!.messages ?? [];
+    // commitPartialResponse (src/streaming-input.ts) appends a plain-STRING
+    // -content assistant message; the SDK-persisted responses carry block-array
+    // content, so the committed partial is uniquely the string-content one.
+    const committedIdx = msgs.findIndex(
+      (m) => m.role === 'assistant' && m.content === 'REPLY_TWO_PARTIAL',
+    );
+    expect(
+      committedIdx,
+      'expected a committed string-content assistant message carrying the partial text',
+    ).toBeGreaterThanOrEqual(0);
+    // It lands BEFORE cycle 3's reply enters history.
+    const cycle3Idx = msgs.findIndex(
+      (m) =>
+        m.role === 'assistant' &&
+        Array.isArray(m.content) &&
+        JSON.stringify(m.content).includes('REPLY_THREE'),
+    );
+    expect(cycle3Idx).toBeGreaterThan(committedIdx);
+    // partialResponse cleared after the commit.
+    expect(finalState!.partialResponse).toBeUndefined();
+
+    // The run completed cleanly — the last cycle (3) was not interrupted.
+    const complete = events.at(-1) as { type: string; status: string };
+    expect(complete.type).toBe('stream_complete');
+    expect(complete.status).toBe('success');
   });
 });

@@ -1,0 +1,147 @@
+{
+  "name": "22-streaming-input-interrupt",
+  "description": "Phase 6.9 backfill #156: exercises streaming input (Phase 5.3) — `prompt: AsyncIterable<UserInput>` + the run's between-turn `interrupt()` facade (production `OpenRouterAgentRun` at `src/agent.ts:1772` restart-loop + `src/streaming-input.ts`). POSTURE — OR-only-asserts (PR body ambiguity call #1): the shared bilateral comparator-pass flow is intentionally minimal (1-turn no-tool, no harness tools) because the streaming-input + host-interrupt control flow has NO Anthropic analog reachable through this harness — the shared `runScenario` harness constructs BOTH SDKs with a single string `prompt` (harness.ts:387,528) and exposes neither an `AsyncIterable` prompt nor an `interrupt()`/`pushUserMessage()` surface on the Anthropic `query()` side. Driving three user-message admissions + a mid-cycle interrupt is therefore structurally OR-side-only. Same posture as PR #190 (`persistSession: false`) / #191 (allowed-disallowed grammar) / #192 (Enhanced Bash) / the NotebookEdit backfill: bilateral parity carries the happy-path event-stream + hook-firing-order floor; the OR-only supplemental in `scenarios.comparative.test.ts` carries the load-bearing assertions. The supplemental driver constructs an OR-only inline run with `prompt: AsyncIterable<UserInput>` yielding THREE messages, registers a single `echo` tool, and injects a wrapper `StateAccessor` that calls the production `setInterruptedFlag(inner, 'host-interrupt')` at the exact between-turns boundary the SDK polls (the `checkForInterruption` load inside the tool-execution loop — `@openrouter/agent` model-result.js:316/1058), then drives the three OR-wire cycles scripted below against the in-process emulator and asserts: (a) the emulator admits THREE distinct user messages (MESSAGE_ONE/TWO/THREE) — one `callModel` cycle each — and the canonical OR event stream shows three `turn_start` brackets; (b) the host-interrupt projects to `state.interruptedBy = 'host-interrupt'` and the in-flight cycle-2 callModel exits with `status: 'interrupted'` + a populated `partialResponse` ({text: 'REPLY_TWO_PARTIAL'}) WITHOUT executing the in-flight `echo` tool call (the interrupt short-circuits the tool round); (c) the next cycle commits `partialResponse.text` as a plain-string-content `assistant` message into the persisted history (production `commitPartialResponse` at `src/streaming-input.ts:182`) BEFORE submitting MESSAGE_THREE, and clears `partialResponse`. Interrupt timing (PR body ambiguity call #2): cycle 2's scripted response carries BOTH text AND a `tool_use` block so the SDK enters its tool-execution loop where `checkForInterruption` is polled (model-result.js:1058) — a no-tool response completes in one turn and never reaches that poll, so the tool call is the load-bearing mechanism that makes the host-interrupt observable, not incidental. The interrupt is injected via a wrapper accessor invoking the production `setInterruptedFlag` rather than `run.interrupt()` directly because `interrupt()` awaits the in-flight cycle promise, which would deadlock when called from inside the consumer's `for await` (PR body ambiguity call #3). The three `openresponses` streaming entries below are consumed ONLY by the supplemental; the bilateral entries (anthropic title-gen + anthropic main + openresponses main) drive the standard comparator-pass run, which makes a single no-tool request and never matches the streaming entries' hashes.",
+  "prompt": "Acknowledge that you can accept a stream of user messages.",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful assistant. Answer concisely.",
+  "tools": [],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:2f0c630d687631acdad540bf822f46f3443b78b8395f1ce12314cdfe49483eac",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"title\": \"Streaming input acknowledgement\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 10
+        }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:48dd0a139818e1dabba7b4b79d9ef8fc843f77156ab2014a953e1d7bbdd3251e",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "Yes — I can accept a stream of user messages."
+          }
+        ],
+        "usage": {
+          "input_tokens": 25,
+          "output_tokens": 12
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:7bd5b067dde8b667f3c43f29c0f946df16a036c8bd354b733b33a7711ebfec95",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-22-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "Yes — I can accept a stream of user messages."
+          }
+        ],
+        "usage": {
+          "input_tokens": 25,
+          "output_tokens": 12,
+          "total_tokens": 37
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:834f086b787735b59af226999fbd4b2eb4d21c7c26adf594c8652b2f94d39c85",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-22-stream-c1",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "REPLY_ONE"
+          }
+        ],
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 5,
+          "total_tokens": 15
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:05a1c8d21479cef4b9576973e989b15df5f9c3c9f53498e81711d3a44ad971be",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-22-stream-c2",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "REPLY_TWO_PARTIAL"
+          },
+          {
+            "type": "tool_use",
+            "callId": "call_echo_c2",
+            "name": "echo",
+            "arguments": "{\"text\":\"hi from cycle 2\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 5,
+          "total_tokens": 15
+        }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:be7f94530b83bce351c90f2c1f5081be79e5e1791c959ba929a09ea5b77f282c",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-22-stream-c3",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "REPLY_THREE"
+          }
+        ],
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 5,
+          "total_tokens": 15
+        }
+      }
+    }
+  ],
+  "comparator": {
+    "mode": "exact"
+  }
+}
