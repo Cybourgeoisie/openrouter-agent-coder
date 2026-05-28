@@ -91,8 +91,8 @@ export function grepFilesTool(ctx = DEFAULT_TOOL_CONTEXT) {
                 .default('*'),
             case_sensitive: z
                 .boolean()
-                .describe('Whether the pattern match is case-sensitive. Defaults to true.')
-                .default(true),
+                .describe('Whether the pattern match is case-sensitive. Defaults to false.')
+                .default(false),
             type: z
                 .string()
                 .describe('Built-in filetype filter (e.g. "ts", "py", "go"). Combines with file_glob via union — a file matches if either includes it. Unknown values are silently ignored.')

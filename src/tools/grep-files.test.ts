@@ -45,7 +45,7 @@ type GrepInput = {
   pattern: string;
   path: string;
   file_glob: string;
-  case_sensitive: boolean;
+  case_sensitive?: boolean;
   type?: string;
   before_context?: number;
   after_context?: number;
@@ -160,7 +160,19 @@ describe('grep_files tool', () => {
     expect(result.matches[0].file).toBe('code.ts');
   });
 
-  it('is case-sensitive by default', async () => {
+  it('is case-insensitive by default', async () => {
+    await writeFile(join(TMP, 'c.ts'), 'Hello\nhello\nHELLO\n', 'utf-8');
+
+    const result = await execute({
+      pattern: 'hello',
+      path: TMP,
+      file_glob: '*.ts',
+    });
+
+    expect(result.matchCount).toBe(3);
+  });
+
+  it('respects case_sensitive: true', async () => {
     await writeFile(join(TMP, 'c.ts'), 'Hello\nhello\nHELLO\n', 'utf-8');
 
     const result = await execute({

@@ -108,8 +108,8 @@ export function grepFilesTool(ctx: ToolContext = DEFAULT_TOOL_CONTEXT) {
         .default('*'),
       case_sensitive: z
         .boolean()
-        .describe('Whether the pattern match is case-sensitive. Defaults to true.')
-        .default(true),
+        .describe('Whether the pattern match is case-sensitive. Defaults to false.')
+        .default(false),
       type: z
         .string()
         .describe(
