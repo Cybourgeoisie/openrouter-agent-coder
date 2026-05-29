@@ -345,6 +345,81 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     expect(sessionEnd!.usage).toBeNull();
   });
 
+  it('surfaces a response.failed on the INITIAL turn as stream_complete{status:error} with the provider reason', async () => {
+    // Regression for the initial-turn gap: the request opens 200 + SSE, then
+    // the stream emits `response.failed` with no preceding tool call. Before
+    // the fix this fell through the event loop and resolved as `success`.
+    state.fixture = loadFixture('initial-turn-response-failed');
+    const hookEvents: Array<{ event: HookEvent; payload: HookPayload }> = [];
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'generation fails after connect',
+      tools: [echoTool()] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+      onHook: (event, payload) => {
+        hookEvents.push({ event, payload });
+      },
+    });
+    const events = await collect(run);
+
+    const error = events.find((e) => e.type === 'error') as Extract<
+      AgentCoreEvent,
+      { type: 'error' }
+    >;
+    expect(error).toBeDefined();
+    expect(error.message).toBe(
+      'server_error: upstream provider returned an error: no endpoints available',
+    );
+
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.type).toBe('stream_complete');
+    expect(complete.status).toBe('error');
+    expect(complete.reason).toBe(
+      'server_error: upstream provider returned an error: no endpoints available',
+    );
+
+    const stop = hookEvents.find((h) => h.event === 'Stop')!.payload as Extract<
+      HookPayload,
+      { event: 'Stop' }
+    >;
+    expect(stop.status).toBe('error');
+    expect(stop.reason).toBe(
+      'server_error: upstream provider returned an error: no endpoints available',
+    );
+  });
+
+  it('surfaces a response.failed on a FOLLOW-UP turn (after a tool call) as stream_complete{status:error}', async () => {
+    // Regression guard ensuring both turns behave identically: a failure that
+    // arrives after a tool call must also produce status:error, never success.
+    state.fixture = loadFixture('followup-turn-response-failed');
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'follow-up generation fails',
+      tools: [echoTool()] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+    });
+    const events = await collect(run);
+
+    // The tool result from the first turn still surfaced before the failure.
+    const toolResult = events.find((e) => e.type === 'tool_result') as Extract<
+      AgentCoreEvent,
+      { type: 'tool_result' }
+    >;
+    expect(toolResult.isError).toBe(false);
+    expect(toolResult.output).toBe('echoed:hello');
+
+    const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
+    expect(complete.type).toBe('stream_complete');
+    expect(complete.status).toBe('error');
+    expect(complete.reason).toBe('rate_limit_exceeded: provider rate limit exceeded on follow-up turn');
+  });
+
   it('completes with null usage and zero cost when the response carries no usage block', async () => {
     state.fixture = loadFixture('single-turn-no-usage');
     const run = new OpenRouterAgentRun({
