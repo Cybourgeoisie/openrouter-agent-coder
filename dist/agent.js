@@ -1229,6 +1229,22 @@ export class OpenRouterAgentRun {
                             }
                             continue;
                         }
+                        // A `response.failed` event means the request was accepted (200 + SSE
+                        // established) but generation failed afterward (upstream provider
+                        // error, moderation block, "no endpoints available", timeout, …).
+                        // The SDK only converts this to a thrown error on follow-up turns
+                        // (`pipeAndConsumeStream`); on the initial response of a cycle it is
+                        // pushed through as an ordinary event and would otherwise fall
+                        // through the loop, leaving the run to resolve as `success`. Throw
+                        // so the catch at the end of the cycle emits the `error` event +
+                        // terminal `stream_complete { status: 'error', reason }`. Let an
+                        // in-flight abort win — matching the abort-first precedence in that
+                        // catch and the other handlers above.
+                        if ('type' in event && event.type === 'response.failed') {
+                            if (signal.aborted)
+                                continue;
+                            throw new Error(extractResponseFailedMessage(event));
+                        }
                         // `response.completed` fires once per SDK turn — the initial
                         // response (which may be the only one if there are no tool calls)
                         // AND every follow-up response. This is the right hook for the
@@ -1733,6 +1749,30 @@ function namedFromPositional(names, args) {
  * Best-effort: unknown item shapes are skipped silently rather than throwing,
  * so transcript writes never block the run on SDK schema drift.
  */
+/**
+ * Pull the most useful human-readable text out of a `response.failed` stream
+ * event. The richest detail lives at `event.response.error.message` (with a
+ * machine `code`, e.g. `server_error`/`rate_limit_exceeded`); we prefix the
+ * code when present so the surfaced `reason` mirrors the body-bearing style of
+ * the SDK's HTTP-level `OpenRouterDefaultError`. Falls back, in order, to a
+ * top-level `event.message` (what the follow-up `pipeAndConsumeStream` path
+ * reads), then `response.incompleteDetails.reason`, then a generic label.
+ */
+function extractResponseFailedMessage(event) {
+    const e = event;
+    const err = e.response?.error;
+    if (err && typeof err.message === 'string' && err.message.length > 0) {
+        return typeof err.code === 'string' && err.code.length > 0
+            ? `${err.code}: ${err.message}`
+            : err.message;
+    }
+    if (typeof e.message === 'string' && e.message.length > 0)
+        return e.message;
+    const reason = e.response?.incompleteDetails?.reason;
+    if (typeof reason === 'string' && reason.length > 0)
+        return reason;
+    return 'Response failed';
+}
 function extractAssistantContent(output) {
     let text = '';
     let reasoning = '';

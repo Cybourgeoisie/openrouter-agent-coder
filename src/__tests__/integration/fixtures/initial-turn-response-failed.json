@@ -1,0 +1,28 @@
+{
+  "name": "initial-turn-response-failed",
+  "steps": [
+    { "type": "yield", "event": { "type": "turn.start", "turnNumber": 0, "timestamp": 1 } },
+    { "type": "yield", "event": { "type": "response.output_text.delta", "delta": "thinking..." } },
+    {
+      "type": "yield",
+      "event": {
+        "type": "response.failed",
+        "sequenceNumber": 2,
+        "response": {
+          "id": "resp-failed-initial",
+          "model": "mock-model",
+          "status": "failed",
+          "error": {
+            "code": "server_error",
+            "message": "upstream provider returned an error: no endpoints available"
+          }
+        }
+      }
+    }
+  ],
+  "response": {
+    "id": "resp-failed-initial",
+    "model": "mock-model",
+    "output": []
+  }
+}
