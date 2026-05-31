@@ -43,11 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Agent SDK has no equivalent request-level cache knob (prompt caching on
   Anthropic lives per-content-block on `TextBlockParam`), so the scenario
   is OR-only on the Anthropic side — documented asymmetry in the scenario
-  body. NOTE: the pinned `@openrouter/sdk` (0.12.35) declares `cacheControl`
-  on `ChatRequest` but not on `ResponsesRequest`, so the field is silently
-  stripped at SDK serialization until the SDK is bumped to a version that
-  declares it on `ResponsesRequest`; the agent-side plumbing is ready and
-  unit-tested today. PR #205.
+  body. To make the field reach the wire end-to-end, this PR also adds a
+  direct `@openrouter/sdk` dependency and an `overrides` entry pinning the
+  transitive resolution to `^0.12.79` — the first 0.12.x point release whose
+  generated `ResponsesRequest` model declares `cacheControl` (0.12.35,
+  which `@openrouter/agent@0.3.2` pulls in by default, only declared it on
+  `ChatRequest`, silently stripping the field on the OpenResponses path the
+  agent uses). PR #205.
 
 - Phase 5.8: Plugins — Claude Code-compatible plugin manifest + directory
   loader. **This is the consummating Phase 5 card: the library now reaches
