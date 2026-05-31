@@ -904,4 +904,61 @@ describe('integration: spawn_subagent via OpenRouterAgentRun', () => {
     expect(parentArgs.reasoning).toEqual({ effort: 'high' });
     expect(childArgs.reasoning).toEqual({ effort: 'low' });
   });
+
+  it('spawned subagent inherits parent `cacheControl` when the spawn spec omits it', async () => {
+    // Parent runs with `cacheControl: { type: 'ephemeral' }`, spawns a
+    // subagent that does not override. Both parent and child callModel
+    // requests should carry the inherited cacheControl field verbatim.
+    state.fixtureQueue = [
+      parentFixtureCallingSubagent({ description: 'inherit cache' }),
+      childFixtureSimpleText(),
+    ];
+
+    const parent = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: PARENT_SESSION,
+      prompt: 'parent caches, child inherits',
+      enableSubagents: true,
+      persistSession: false,
+      cacheControl: { type: 'ephemeral' },
+    });
+
+    for await (const _ of parent) void _;
+
+    expect(state.callModelArgs).toHaveLength(2);
+    const parentArgs = state.callModelArgs[0] as {
+      cacheControl?: { type: string; ttl?: string };
+    };
+    const childArgs = state.callModelArgs[1] as {
+      cacheControl?: { type: string; ttl?: string };
+    };
+    expect(parentArgs.cacheControl).toEqual({ type: 'ephemeral' });
+    expect(childArgs.cacheControl).toEqual({ type: 'ephemeral' });
+  });
+
+  it('parent without `cacheControl` → child callModel has NO `cacheControl` field', async () => {
+    // Negative: nothing is set at the parent. Child should mirror — no
+    // `cacheControl` key on either request body. Covers the `unset` arm of
+    // the inheritance spread.
+    state.fixtureQueue = [
+      parentFixtureCallingSubagent({ description: 'no cache anywhere' }),
+      childFixtureSimpleText(),
+    ];
+
+    const parent = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: PARENT_SESSION,
+      prompt: 'neither parent nor child set cacheControl',
+      enableSubagents: true,
+      persistSession: false,
+    });
+
+    for await (const _ of parent) void _;
+
+    expect(state.callModelArgs).toHaveLength(2);
+    const parentArgs = state.callModelArgs[0] as Record<string, unknown>;
+    const childArgs = state.callModelArgs[1] as Record<string, unknown>;
+    expect('cacheControl' in parentArgs).toBe(false);
+    expect('cacheControl' in childArgs).toBe(false);
+  });
 });

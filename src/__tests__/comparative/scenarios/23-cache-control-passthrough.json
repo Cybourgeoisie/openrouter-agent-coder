@@ -1,0 +1,51 @@
+{
+  "name": "23-cache-control-passthrough",
+  "description": "OR auto-prompt-cache passthrough (#NNN): single-turn no-tool happy path with `cacheControl: { type: 'ephemeral' }` set on the scenario. The OR side forwards the directive into `OpenRouterAgentRunOptions.cacheControl` → top-level `cacheControl` field on the `callModel` request body. The OR canonical projection (`script-engine.ts`'s openresponses branch) does NOT include `cache_control`, so the request hash matches the no-cache case for the same prompt/model combo (identical to scenario #01's openresponses hash). The pinned `@openrouter/sdk` (0.12.35) declares `cacheControl` on `ChatRequest` but not on `ResponsesRequest`, so the field is silently stripped at SDK serialization today — the plumbing is ready and exercises the agent-layer spread sites, and the field will reach the wire once the SDK declares it on `ResponsesRequest` (newer 0.12.79+). PARITY ASYMMETRY: the Claude Agent SDK's `query()` Options has NO top-level cacheControl knob (prompt caching on Anthropic is per-content-block via `cache_control` on `TextBlockParam` — a different mechanism), so the scenario's `cacheControl` field is intentionally OR-only. The Anthropic-side request hashes match scenario #01's exactly (no field on either wire). The parity claim is: setting `cacheControl` does not break OR-side execution and the event stream is identical to scenario #01.",
+  "prompt": "What is 2+2?",
+  "model": "claude-sonnet-4-5-20250929",
+  "systemPrompt": "You are a helpful math assistant. Answer concisely.",
+  "cacheControl": {
+    "type": "ephemeral"
+  },
+  "tools": [],
+  "script": [
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:23de58079ba1a066d7f15353c0816069e87f0dacf66a4e4475fa50fa0c518e81",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [{ "type": "text", "text": "{\"title\": \"Math question 2 plus 2\"}" }],
+        "usage": { "input_tokens": 100, "output_tokens": 10 }
+      }
+    },
+    {
+      "wire": "anthropic",
+      "promptHash": "sha256:eb3c6a7264356e9d2eff1e8c52cdcad9e02c7ee4353bb041c8d6bff70b7593c7",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "model": "claude-sonnet-4-5-20250929",
+        "stopReason": "end_turn",
+        "content": [{ "type": "text", "text": "2 + 2 = 4." }],
+        "usage": { "input_tokens": 20, "output_tokens": 8 }
+      }
+    },
+    {
+      "wire": "openresponses",
+      "promptHash": "sha256:1c292e68172adc7f90ae872dfdfca199e19c0465db910e55023bf7270ede73ed",
+      "turn": 0,
+      "kind": "success",
+      "response": {
+        "id": "resp-23-0",
+        "model": "claude-sonnet-4-5-20250929",
+        "status": "completed",
+        "content": [{ "type": "text", "text": "2 + 2 = 4." }],
+        "usage": { "input_tokens": 20, "output_tokens": 8, "total_tokens": 28 }
+      }
+    }
+  ],
+  "comparator": { "mode": "exact" }
+}

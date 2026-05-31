@@ -405,6 +405,12 @@ async function captureAnthropic(
         // is invisible to the Anthropic canonical hash, but the option is
         // still accepted at the SDK boundary and reaches the subprocess.
         ...(scenario.effort !== undefined && { effort: scenario.effort }),
+        // Scenario #23: `cacheControl` is intentionally NOT forwarded on
+        // the Anthropic side. The Claude Agent SDK's `query()` `Options`
+        // exposes no top-level cacheControl directive — prompt caching on
+        // Anthropic is per-content-block via `cache_control` on
+        // `TextBlockParam`, a different mechanism. The scenario field is
+        // OR-only by design; the Anthropic hash matches the no-cache case.
         // Phase 6.5b: enable per-chunk message events when a cancellation
         // policy is set. The Anthropic SDK normally buffers the streaming
         // response and emits ONE coalesced `assistant` message; without
@@ -537,6 +543,13 @@ async function captureOpenRouter(
       // body. The OR canonical projection (`script-engine.ts`'s `reasoning`
       // field) surfaces it, so the request hash differs from scenario #01.
       ...(scenario.effort !== undefined && { effort: scenario.effort }),
+      // Scenario #23: per-run OR auto-prompt-cache directive →
+      // production agent.ts forwards it as the top-level `cacheControl`
+      // field on the `callModel` request body. The OR canonical projection
+      // does NOT include `cache_control`, so the request hash matches the
+      // no-cache case for the same prompt/model combo — the parity claim
+      // is event-stream equality with the option set, not hash difference.
+      ...(scenario.cacheControl !== undefined && { cacheControl: scenario.cacheControl }),
       ...(canUseTool && { canUseTool }),
     });
     const cancelAfter = scenario.cancellation?.afterEventsOr;

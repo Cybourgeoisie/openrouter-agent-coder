@@ -62,7 +62,11 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openrouter/agent": "^0.3.2",
+    "@openrouter/sdk": "^0.12.79",
     "zod": "^4.0.0"
+  },
+  "overrides": {
+    "@openrouter/sdk": "^0.12.79"
   },
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.150",

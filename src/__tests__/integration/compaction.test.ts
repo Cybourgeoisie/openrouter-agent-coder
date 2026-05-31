@@ -218,6 +218,82 @@ describe('integration: context compaction', () => {
     expect(persisted.messages[2]).toEqual(longMessages[7]);
   });
 
+  it('compaction callModel inherits the run-level `cacheControl` when set', async () => {
+    // Compaction summarization prompts are exactly the kind of large
+    // reusable prefix that benefits from auto prompt caching — the agent
+    // threads the run's `cacheControl` into the isolated compaction call so
+    // the summarizer can hit the same cache. Verify the field forwards.
+    const longMessages = [
+      { role: 'user', content: 'a'.repeat(100) },
+      { role: 'assistant', content: 'b'.repeat(100) },
+      { role: 'user', content: 'c'.repeat(100) },
+      { role: 'assistant', content: 'd'.repeat(100) },
+      { role: 'user', content: 'e'.repeat(100) },
+      { role: 'assistant', content: 'f'.repeat(100) },
+    ];
+    await seedState({ logsRoot, sessionId: SESSION, messages: longMessages });
+    state.fixtureQueue = [parentFixture(), compactFixture('SUMMARY')];
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: SESSION,
+      prompt: 'continue',
+      logsRoot,
+      compactionThreshold: 100,
+      keepRecentTurns: 2,
+      cacheControl: { type: 'ephemeral' },
+    });
+
+    for await (const _ of run) void _;
+
+    // Two callModel calls: parent run + compaction sub-call. Both should
+    // carry the cacheControl directive verbatim.
+    expect(state.callModelArgs.length).toBe(2);
+    const parentArgs = state.callModelArgs[0] as {
+      cacheControl?: { type: string; ttl?: string };
+    };
+    const compactArgs = state.callModelArgs[1] as {
+      sessionId: string;
+      cacheControl?: { type: string; ttl?: string };
+    };
+    expect(parentArgs.cacheControl).toEqual({ type: 'ephemeral' });
+    expect(compactArgs.sessionId).toMatch(/^integration-compaction:compact:/);
+    expect(compactArgs.cacheControl).toEqual({ type: 'ephemeral' });
+  });
+
+  it('compaction callModel has NO `cacheControl` field when the run did not set one', async () => {
+    // Negative arm: omitted `cacheControl` → the compaction sub-call must
+    // not carry the field at all (preserves prior behavior and covers the
+    // false branch of the conditional spread).
+    const longMessages = [
+      { role: 'user', content: 'a'.repeat(100) },
+      { role: 'assistant', content: 'b'.repeat(100) },
+      { role: 'user', content: 'c'.repeat(100) },
+      { role: 'assistant', content: 'd'.repeat(100) },
+      { role: 'user', content: 'e'.repeat(100) },
+      { role: 'assistant', content: 'f'.repeat(100) },
+    ];
+    await seedState({ logsRoot, sessionId: SESSION, messages: longMessages });
+    state.fixtureQueue = [parentFixture(), compactFixture('SUMMARY')];
+
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: SESSION,
+      prompt: 'continue',
+      logsRoot,
+      compactionThreshold: 100,
+      keepRecentTurns: 2,
+    });
+
+    for await (const _ of run) void _;
+
+    expect(state.callModelArgs.length).toBe(2);
+    const parentArgs = state.callModelArgs[0] as Record<string, unknown>;
+    const compactArgs = state.callModelArgs[1] as Record<string, unknown>;
+    expect('cacheControl' in parentArgs).toBe(false);
+    expect('cacheControl' in compactArgs).toBe(false);
+  });
+
   it('does NOT auto-compact when threshold not crossed', async () => {
     // Seed a transcript well below the (default) threshold.
     await seedState({

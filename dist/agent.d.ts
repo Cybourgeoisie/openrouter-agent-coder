@@ -1,4 +1,5 @@
 import { type Tool } from '@openrouter/agent';
+import type { AnthropicCacheControlDirective } from '@openrouter/sdk/models';
 import { type SkillLoader } from './skills/index.js';
 import type { OnAskUserQuestion } from './tools/ask-user-question.js';
 import type { OnTasksChanged } from './tools/tasks.js';
@@ -342,6 +343,20 @@ export interface OpenRouterAgentRunOptions {
      * See {@link EffortLevel} for the enum semantics and per-provider mapping.
      */
     effort?: EffortLevel;
+    /**
+     * OpenRouter's auto-prompt-cache directive. When set, the value is
+     * forwarded as the top-level `cacheControl` field on the `callModel`
+     * request body — OR then automatically applies cache breakpoints to the
+     * last cacheable block in the request. This is a request-level hint, NOT
+     * a per-content-block `cache_control` (see `@openrouter/sdk`'s
+     * `AnthropicCacheControlDirective` JSDoc). Currently honored only by
+     * Anthropic Claude models; other providers ignore it. Omitted runs send
+     * no `cacheControl` field on the wire (preserves default behavior).
+     * Inherited by spawned subagents unless the spawn config overrides it,
+     * and also rides the compaction `callModel` so summarization prompts
+     * benefit from the same cache.
+     */
+    cacheControl?: AnthropicCacheControlDirective;
     /**
      * Phase 5.1: character-count threshold that triggers an auto-compaction
      * pass once the persisted `ConversationState.messages` array crosses it.
