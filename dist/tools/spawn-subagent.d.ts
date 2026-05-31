@@ -75,6 +75,12 @@ export interface SubagentRunConfig {
      * Only honored by Anthropic Claude models today.
      */
     cacheControl?: AnthropicCacheControlDirective;
+    /**
+     * Pass-through to {@link OpenRouterAgentRunOptions.disableServerTools}.
+     * When `true`, the child skips OR's built-in `openrouter:*` server-tool
+     * hook. Omit to inherit the parent's value.
+     */
+    disableServerTools?: boolean;
     /** Composite abort signal that fires when either the parent or the subagent itself aborts. */
     signal: AbortSignal;
     /** Chain depth of the new subagent (root = 0, first subagent = 1, …). */

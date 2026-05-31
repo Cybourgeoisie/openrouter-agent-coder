@@ -417,7 +417,9 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     const complete = events.at(-1) as Extract<AgentCoreEvent, { type: 'stream_complete' }>;
     expect(complete.type).toBe('stream_complete');
     expect(complete.status).toBe('error');
-    expect(complete.reason).toBe('rate_limit_exceeded: provider rate limit exceeded on follow-up turn');
+    expect(complete.reason).toBe(
+      'rate_limit_exceeded: provider rate limit exceeded on follow-up turn',
+    );
   });
 
   it('completes with null usage and zero cost when the response carries no usage block', async () => {
@@ -1008,5 +1010,59 @@ describe('integration: full run via OpenRouterAgentRun', () => {
       cacheControl?: { type: string; ttl?: string };
     };
     expect(callArgs.cacheControl).toEqual({ type: 'ephemeral', ttl: '5m' });
+  });
+
+  it('default (no `disableServerTools`) → OR ctor receives `hooks` (server tools active)', async () => {
+    state.fixture = loadFixture('single-turn-no-usage');
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'server tools default',
+      tools: [echoTool()] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+    });
+    await collect(run);
+
+    expect(state.ctorArgs.length).toBeGreaterThan(0);
+    const ctorArgs = state.ctorArgs[0] as Record<string, unknown>;
+    expect('hooks' in ctorArgs).toBe(true);
+  });
+
+  it('`disableServerTools: true` → OR ctor receives NO `hooks` key (server tools suppressed)', async () => {
+    state.fixture = loadFixture('single-turn-no-usage');
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'server tools disabled',
+      tools: [echoTool()] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+      disableServerTools: true,
+    });
+    await collect(run);
+
+    expect(state.ctorArgs.length).toBeGreaterThan(0);
+    const ctorArgs = state.ctorArgs[0] as Record<string, unknown>;
+    // Hard negative — the field must be absent (not present-with-undefined).
+    expect('hooks' in ctorArgs).toBe(false);
+  });
+
+  it('`disableServerTools: false` (explicit) → OR ctor receives `hooks` (server tools active)', async () => {
+    state.fixture = loadFixture('single-turn-no-usage');
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'server tools explicitly on',
+      tools: [echoTool()] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+      disableServerTools: false,
+    });
+    await collect(run);
+
+    expect(state.ctorArgs.length).toBeGreaterThan(0);
+    const ctorArgs = state.ctorArgs[0] as Record<string, unknown>;
+    expect('hooks' in ctorArgs).toBe(true);
   });
 });
