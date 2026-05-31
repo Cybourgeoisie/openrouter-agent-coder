@@ -47,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on `ChatRequest` but not on `ResponsesRequest`, so the field is silently
   stripped at SDK serialization until the SDK is bumped to a version that
   declares it on `ResponsesRequest`; the agent-side plumbing is ready and
-  unit-tested today. PR #NNN.
+  unit-tested today. PR #205.
 
 - Phase 5.8: Plugins — Claude Code-compatible plugin manifest + directory
   loader. **This is the consummating Phase 5 card: the library now reaches
