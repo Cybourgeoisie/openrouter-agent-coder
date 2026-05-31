@@ -30,6 +30,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `OpenRouterAgentRunOptions.disableServerTools?: boolean` — opt-out of OR's
+  built-in server-side tool injection (`openrouter:datetime` /
+  `openrouter:web_search` / `openrouter:web_fetch`). Default `false`: hooks
+  remain registered, preserving prior behavior. When `true`, the OR client
+  constructed by `createOpenRouterClient` omits the `hooks` entry that
+  appends the three server tools to every request body. Inherited by spawned
+  subagents (per-`SubagentRunConfig` override wins). Motivation: interim
+  workaround for an upstream OR cache bug where the server tools defeat
+  `cache_control` auto-prompt-caching on Anthropic models when combined with
+  user-defined tools — costing roughly 10x on multi-turn Opus/Sonnet
+  sessions. Consumers that don't need OR's server-side datetime/web access
+  can set this `true` to recover caching.
+
 - `OpenRouterAgentRunOptions.cacheControl?: AnthropicCacheControlDirective`
   — thin passthrough for OpenRouter's auto-prompt-cache directive. When set,
   the value is forwarded as the top-level `cacheControl` field on the

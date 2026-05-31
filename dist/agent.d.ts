@@ -358,6 +358,24 @@ export interface OpenRouterAgentRunOptions {
      */
     cacheControl?: AnthropicCacheControlDirective;
     /**
+     * When `true`, skip OpenRouter's built-in server-side tool injection
+     * (`openrouter:datetime`, `openrouter:web_search`, `openrouter:web_fetch`).
+     * Default `false` — server tools remain active, preserving prior behavior.
+     *
+     * Why this exists: empirically, the presence of those three server tools
+     * in the request body disables OR's `cacheControl` auto-prompt-caching on
+     * Anthropic models when combined with user-defined tools (the cache-key
+     * path OR uses to forward to Anthropic appears to be invalidated by the
+     * server-tools rewrite). Setting this to `true` keeps the request's
+     * `tools` array exactly as built by the agent, restoring caching at the
+     * cost of losing OR's server-side datetime/web access.
+     *
+     * Inherited by spawned subagents unless the spawn config overrides.
+     * Applies to both the main run client and the compaction client (which
+     * share `createOpenRouterClient`).
+     */
+    disableServerTools?: boolean;
+    /**
      * Phase 5.1: character-count threshold that triggers an auto-compaction
      * pass once the persisted `ConversationState.messages` array crosses it.
      * Defaults to `getModelContextWindow(model) * 4 * 0.8` — i.e. ~80% of the

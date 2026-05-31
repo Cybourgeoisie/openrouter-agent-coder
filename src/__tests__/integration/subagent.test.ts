@@ -961,4 +961,51 @@ describe('integration: spawn_subagent via OpenRouterAgentRun', () => {
     expect('cacheControl' in parentArgs).toBe(false);
     expect('cacheControl' in childArgs).toBe(false);
   });
+
+  it('spawned subagent inherits parent `disableServerTools: true` — both OR ctors omit `hooks`', async () => {
+    state.fixtureQueue = [
+      parentFixtureCallingSubagent({ description: 'inherit server-tools opt-out' }),
+      childFixtureSimpleText(),
+    ];
+
+    const parent = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: PARENT_SESSION,
+      prompt: 'parent opts out, child inherits',
+      enableSubagents: true,
+      persistSession: false,
+      disableServerTools: true,
+    });
+
+    for await (const _ of parent) void _;
+
+    expect(state.ctorArgs.length).toBeGreaterThanOrEqual(2);
+    const parentCtor = state.ctorArgs[0] as Record<string, unknown>;
+    const childCtor = state.ctorArgs[1] as Record<string, unknown>;
+    expect('hooks' in parentCtor).toBe(false);
+    expect('hooks' in childCtor).toBe(false);
+  });
+
+  it('parent omits `disableServerTools` → both OR ctors receive `hooks` (default-on)', async () => {
+    state.fixtureQueue = [
+      parentFixtureCallingSubagent({ description: 'default server tools' }),
+      childFixtureSimpleText(),
+    ];
+
+    const parent = new OpenRouterAgentRun({
+      apiKey: 'sk-test',
+      sessionId: PARENT_SESSION,
+      prompt: 'default server-tools',
+      enableSubagents: true,
+      persistSession: false,
+    });
+
+    for await (const _ of parent) void _;
+
+    expect(state.ctorArgs.length).toBeGreaterThanOrEqual(2);
+    const parentCtor = state.ctorArgs[0] as Record<string, unknown>;
+    const childCtor = state.ctorArgs[1] as Record<string, unknown>;
+    expect('hooks' in parentCtor).toBe(true);
+    expect('hooks' in childCtor).toBe(true);
+  });
 });

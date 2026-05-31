@@ -106,6 +106,7 @@ function resolveOptions(opts) {
         ...(opts.disallowedTools !== undefined && { disallowedTools: opts.disallowedTools }),
         ...(opts.effort !== undefined && { effort: opts.effort }),
         ...(opts.cacheControl !== undefined && { cacheControl: opts.cacheControl }),
+        ...(opts.disableServerTools !== undefined && { disableServerTools: opts.disableServerTools }),
         ...(opts.compactionThreshold !== undefined && {
             compactionThreshold: opts.compactionThreshold,
         }),
@@ -322,7 +323,7 @@ export class OpenRouterAgentRun {
             apiKey: this.opts.apiKey,
             ...(this.opts.baseUrl && { serverURL: this.opts.baseUrl }),
             appTitle: this.opts.appTitle,
-            hooks: createServerToolsHooks(),
+            ...(this.opts.disableServerTools !== true && { hooks: createServerToolsHooks() }),
         });
     }
     /**
@@ -795,6 +796,7 @@ export class OpenRouterAgentRun {
                 const childDisallowedTools = config.disallowedTools ?? this.opts.disallowedTools;
                 const childEffort = config.effort ?? this.opts.effort;
                 const childCacheControl = config.cacheControl ?? this.opts.cacheControl;
+                const childDisableServerTools = config.disableServerTools ?? this.opts.disableServerTools;
                 const child = new OpenRouterAgentRun({
                     apiKey,
                     sessionId: config.sessionId,
@@ -818,6 +820,9 @@ export class OpenRouterAgentRun {
                     ...(childDisallowedTools !== undefined && { disallowedTools: childDisallowedTools }),
                     ...(childEffort !== undefined && { effort: childEffort }),
                     ...(childCacheControl !== undefined && { cacheControl: childCacheControl }),
+                    ...(childDisableServerTools !== undefined && {
+                        disableServerTools: childDisableServerTools,
+                    }),
                 });
                 let text = '';
                 let summary = {

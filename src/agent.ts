@@ -453,6 +453,24 @@ export interface OpenRouterAgentRunOptions {
    */
   cacheControl?: AnthropicCacheControlDirective;
   /**
+   * When `true`, skip OpenRouter's built-in server-side tool injection
+   * (`openrouter:datetime`, `openrouter:web_search`, `openrouter:web_fetch`).
+   * Default `false` — server tools remain active, preserving prior behavior.
+   *
+   * Why this exists: empirically, the presence of those three server tools
+   * in the request body disables OR's `cacheControl` auto-prompt-caching on
+   * Anthropic models when combined with user-defined tools (the cache-key
+   * path OR uses to forward to Anthropic appears to be invalidated by the
+   * server-tools rewrite). Setting this to `true` keeps the request's
+   * `tools` array exactly as built by the agent, restoring caching at the
+   * cost of losing OR's server-side datetime/web access.
+   *
+   * Inherited by spawned subagents unless the spawn config overrides.
+   * Applies to both the main run client and the compaction client (which
+   * share `createOpenRouterClient`).
+   */
+  disableServerTools?: boolean;
+  /**
    * Phase 5.1: character-count threshold that triggers an auto-compaction
    * pass once the persisted `ConversationState.messages` array crosses it.
    * Defaults to `getModelContextWindow(model) * 4 * 0.8` — i.e. ~80% of the
@@ -655,6 +673,14 @@ interface ResolvedOptions {
    * shape; thin passthrough — no defaulting, no shape munging.
    */
   cacheControl?: AnthropicCacheControlDirective;
+  /**
+   * Resolved per-run opt-out of OR's built-in server-side tool hook. When
+   * `true`, `createOpenRouterClient` omits the `hooks` entry that injects
+   * `openrouter:datetime` / `openrouter:web_search` / `openrouter:web_fetch`
+   * into every request body. Inherited by spawned subagents when their spec
+   * omits an override. Mirrors the {@link cacheControl} resolution shape.
+   */
+  disableServerTools?: boolean;
   /** Phase 5.1: explicit caller-supplied threshold (chars). `undefined` → derived from {@link model}. */
   compactionThreshold?: number;
   /** Phase 5.1: resolved trailing-message count to preserve verbatim. */
@@ -756,6 +782,7 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     ...(opts.disallowedTools !== undefined && { disallowedTools: opts.disallowedTools }),
     ...(opts.effort !== undefined && { effort: opts.effort }),
     ...(opts.cacheControl !== undefined && { cacheControl: opts.cacheControl }),
+    ...(opts.disableServerTools !== undefined && { disableServerTools: opts.disableServerTools }),
     ...(opts.compactionThreshold !== undefined && {
       compactionThreshold: opts.compactionThreshold,
     }),
@@ -987,7 +1014,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       apiKey: this.opts.apiKey,
       ...(this.opts.baseUrl && { serverURL: this.opts.baseUrl }),
       appTitle: this.opts.appTitle,
-      hooks: createServerToolsHooks(),
+      ...(this.opts.disableServerTools !== true && { hooks: createServerToolsHooks() }),
     } as ConstructorParameters<typeof OpenRouter>[0]);
   }
 
@@ -1503,6 +1530,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         const childDisallowedTools = config.disallowedTools ?? this.opts.disallowedTools;
         const childEffort = config.effort ?? this.opts.effort;
         const childCacheControl = config.cacheControl ?? this.opts.cacheControl;
+        const childDisableServerTools = config.disableServerTools ?? this.opts.disableServerTools;
         const child = new OpenRouterAgentRun({
           apiKey,
           sessionId: config.sessionId,
@@ -1526,6 +1554,9 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           ...(childDisallowedTools !== undefined && { disallowedTools: childDisallowedTools }),
           ...(childEffort !== undefined && { effort: childEffort }),
           ...(childCacheControl !== undefined && { cacheControl: childCacheControl }),
+          ...(childDisableServerTools !== undefined && {
+            disableServerTools: childDisableServerTools,
+          }),
         });
         let text = '';
         let summary: SubagentRunResult = {
