@@ -951,4 +951,62 @@ describe('integration: full run via OpenRouterAgentRun', () => {
     // `{ reasoning: { effort: undefined } }` payloads).
     expect('reasoning' in callArgs).toBe(false);
   });
+
+  it('forwards `cacheControl` into the callModel request as a top-level field', async () => {
+    state.fixture = loadFixture('single-turn-no-usage');
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'cacheControl flows through',
+      tools: [echoTool()] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+      cacheControl: { type: 'ephemeral' },
+    });
+    await collect(run);
+
+    expect(state.callModelArgs).toHaveLength(1);
+    const callArgs = state.callModelArgs[0] as {
+      cacheControl?: { type: string; ttl?: string };
+    };
+    expect(callArgs.cacheControl).toEqual({ type: 'ephemeral' });
+  });
+
+  it('omitted `cacheControl` → callModel request has NO `cacheControl` field (negative assertion)', async () => {
+    state.fixture = loadFixture('single-turn-no-usage');
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'cacheControl omitted',
+      tools: [echoTool()] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+    });
+    await collect(run);
+
+    expect(state.callModelArgs).toHaveLength(1);
+    const callArgs = state.callModelArgs[0] as Record<string, unknown>;
+    // Hard negative — the field must be absent (not present-with-undefined).
+    expect('cacheControl' in callArgs).toBe(false);
+  });
+
+  it('forwards `cacheControl` with a `ttl` field verbatim', async () => {
+    state.fixture = loadFixture('single-turn-no-usage');
+    const run = new OpenRouterAgentRun({
+      apiKey: 'sk-int-test',
+      sessionId: TEST_SESSION,
+      prompt: 'cacheControl with ttl',
+      tools: [echoTool()] as unknown as ConstructorParameters<
+        typeof OpenRouterAgentRun
+      >[0]['tools'],
+      cacheControl: { type: 'ephemeral', ttl: '5m' },
+    });
+    await collect(run);
+
+    expect(state.callModelArgs).toHaveLength(1);
+    const callArgs = state.callModelArgs[0] as {
+      cacheControl?: { type: string; ttl?: string };
+    };
+    expect(callArgs.cacheControl).toEqual({ type: 'ephemeral', ttl: '5m' });
+  });
 });

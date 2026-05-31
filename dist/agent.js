@@ -105,6 +105,7 @@ function resolveOptions(opts) {
         ...(opts.allowedTools !== undefined && { allowedTools: opts.allowedTools }),
         ...(opts.disallowedTools !== undefined && { disallowedTools: opts.disallowedTools }),
         ...(opts.effort !== undefined && { effort: opts.effort }),
+        ...(opts.cacheControl !== undefined && { cacheControl: opts.cacheControl }),
         ...(opts.compactionThreshold !== undefined && {
             compactionThreshold: opts.compactionThreshold,
         }),
@@ -406,6 +407,12 @@ export class OpenRouterAgentRun {
             sessionId: compactSessionId,
             input: JSON.stringify(summarize),
             instructions: COMPACTION_PROMPT,
+            // Compaction prompts are exactly the kind of large reusable prefix that
+            // benefits from auto prompt caching. Inherit the run's `cacheControl`
+            // when set; omit when unset (preserves prior behavior).
+            ...(this.opts.cacheControl !== undefined && {
+                cacheControl: this.opts.cacheControl,
+            }),
         });
         let summaryText = '';
         for await (const event of result.getFullResponsesStream()) {
@@ -787,6 +794,7 @@ export class OpenRouterAgentRun {
                 const childAllowedTools = config.allowedTools ?? this.opts.allowedTools;
                 const childDisallowedTools = config.disallowedTools ?? this.opts.disallowedTools;
                 const childEffort = config.effort ?? this.opts.effort;
+                const childCacheControl = config.cacheControl ?? this.opts.cacheControl;
                 const child = new OpenRouterAgentRun({
                     apiKey,
                     sessionId: config.sessionId,
@@ -809,6 +817,7 @@ export class OpenRouterAgentRun {
                     ...(childAllowedTools !== undefined && { allowedTools: childAllowedTools }),
                     ...(childDisallowedTools !== undefined && { disallowedTools: childDisallowedTools }),
                     ...(childEffort !== undefined && { effort: childEffort }),
+                    ...(childCacheControl !== undefined && { cacheControl: childCacheControl }),
                 });
                 let text = '';
                 let summary = {
@@ -1134,6 +1143,14 @@ export class OpenRouterAgentRun {
                     state,
                     stopWhen: [stepCountIs(maxTurns), maxCost(maxBudgetUsd)],
                     ...(this.opts.effort !== undefined && { reasoning: { effort: this.opts.effort } }),
+                    // Forward OR auto-cache directive when set. Pinned SDK 0.12.35 doesn't
+                    // declare `cacheControl` on `ResponsesRequest`, so we widen the
+                    // typecheck here; the value flows through OR's request body once the
+                    // SDK adds the field (or via passthrough at runtime on newer SDKs).
+                    ...(this.opts.cacheControl !== undefined &&
+                        {
+                            cacheControl: this.opts.cacheControl,
+                        }),
                     onTurnEnd: async (_turnCtx, response) => {
                         if (persistSession) {
                             const generationId = createGenerationId();

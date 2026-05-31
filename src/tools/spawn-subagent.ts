@@ -11,6 +11,7 @@ import type {
 } from '../events.js';
 import type { PermissionMode } from '../permission-modes.js';
 import type { EffortLevel } from '../agent.js';
+import type { AnthropicCacheControlDirective } from '@openrouter/sdk/models';
 
 /**
  * Phase 5.4: tuple of accepted effort enum values. Defined here so the Zod
@@ -79,6 +80,14 @@ export interface SubagentRunConfig {
    * `reasoning: { effort }`.
    */
   effort?: EffortLevel;
+  /**
+   * Pass-through to {@link OpenRouterAgentRunOptions.cacheControl}. OR auto
+   * prompt-cache directive forwarded to the child run's `callModel` request
+   * body as the top-level `cacheControl` field. Omit to inherit the
+   * parent's value (or to leave unset if the parent also omitted it).
+   * Only honored by Anthropic Claude models today.
+   */
+  cacheControl?: AnthropicCacheControlDirective;
   /** Composite abort signal that fires when either the parent or the subagent itself aborts. */
   signal: AbortSignal;
   /** Chain depth of the new subagent (root = 0, first subagent = 1, …). */

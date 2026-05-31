@@ -30,6 +30,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `OpenRouterAgentRunOptions.cacheControl?: AnthropicCacheControlDirective`
+  — thin passthrough for OpenRouter's auto-prompt-cache directive. When set,
+  the value is forwarded as the top-level `cacheControl` field on the
+  `callModel` request body so OR can automatically apply cache breakpoints
+  to the last cacheable block. Inherited by spawned subagents (parent
+  default flows in; per-`SubagentRunConfig` override wins) and by the
+  isolated compaction `callModel` (large reusable prefixes benefit from the
+  same cache). Omitted runs send no `cacheControl` on the wire (preserves
+  default behavior). Currently honored only by Anthropic Claude models.
+  Comparative scenario #23 exercises the OR-side passthrough; the Claude
+  Agent SDK has no equivalent request-level cache knob (prompt caching on
+  Anthropic lives per-content-block on `TextBlockParam`), so the scenario
+  is OR-only on the Anthropic side — documented asymmetry in the scenario
+  body. NOTE: the pinned `@openrouter/sdk` (0.12.35) declares `cacheControl`
+  on `ChatRequest` but not on `ResponsesRequest`, so the field is silently
+  stripped at SDK serialization until the SDK is bumped to a version that
+  declares it on `ResponsesRequest`; the agent-side plumbing is ready and
+  unit-tested today. PR #NNN.
+
 - Phase 5.8: Plugins — Claude Code-compatible plugin manifest + directory
   loader. **This is the consummating Phase 5 card: the library now reaches
   full parity with Claude Code + the Agent SDK on the in-scope dimensions

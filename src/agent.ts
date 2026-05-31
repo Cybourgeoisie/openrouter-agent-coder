@@ -9,6 +9,7 @@ import {
   type StateAccessor,
   type ConversationState,
 } from '@openrouter/agent';
+import type { AnthropicCacheControlDirective } from '@openrouter/sdk/models';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
@@ -438,6 +439,20 @@ export interface OpenRouterAgentRunOptions {
    */
   effort?: EffortLevel;
   /**
+   * OpenRouter's auto-prompt-cache directive. When set, the value is
+   * forwarded as the top-level `cacheControl` field on the `callModel`
+   * request body — OR then automatically applies cache breakpoints to the
+   * last cacheable block in the request. This is a request-level hint, NOT
+   * a per-content-block `cache_control` (see `@openrouter/sdk`'s
+   * `AnthropicCacheControlDirective` JSDoc). Currently honored only by
+   * Anthropic Claude models; other providers ignore it. Omitted runs send
+   * no `cacheControl` field on the wire (preserves default behavior).
+   * Inherited by spawned subagents unless the spawn config overrides it,
+   * and also rides the compaction `callModel` so summarization prompts
+   * benefit from the same cache.
+   */
+  cacheControl?: AnthropicCacheControlDirective;
+  /**
    * Phase 5.1: character-count threshold that triggers an auto-compaction
    * pass once the persisted `ConversationState.messages` array crosses it.
    * Defaults to `getModelContextWindow(model) * 4 * 0.8` — i.e. ~80% of the
@@ -632,6 +647,14 @@ interface ResolvedOptions {
    * subagents when their spec omits an override.
    */
   effort?: EffortLevel;
+  /**
+   * Resolved per-run OR auto-prompt-cache directive. Forwarded into the
+   * `callModel` call as `cacheControl` ONLY when defined (omitted → no
+   * `cacheControl` field on the wire), and inherited by spawned subagents
+   * when their spec omits an override. Mirrors the {@link effort} resolution
+   * shape; thin passthrough — no defaulting, no shape munging.
+   */
+  cacheControl?: AnthropicCacheControlDirective;
   /** Phase 5.1: explicit caller-supplied threshold (chars). `undefined` → derived from {@link model}. */
   compactionThreshold?: number;
   /** Phase 5.1: resolved trailing-message count to preserve verbatim. */
@@ -732,6 +755,7 @@ function resolveOptions(opts: OpenRouterAgentRunOptions): ResolvedOptions {
     ...(opts.allowedTools !== undefined && { allowedTools: opts.allowedTools }),
     ...(opts.disallowedTools !== undefined && { disallowedTools: opts.disallowedTools }),
     ...(opts.effort !== undefined && { effort: opts.effort }),
+    ...(opts.cacheControl !== undefined && { cacheControl: opts.cacheControl }),
     ...(opts.compactionThreshold !== undefined && {
       compactionThreshold: opts.compactionThreshold,
     }),
@@ -1049,6 +1073,12 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
       sessionId: compactSessionId,
       input: JSON.stringify(summarize),
       instructions: COMPACTION_PROMPT,
+      // Compaction prompts are exactly the kind of large reusable prefix that
+      // benefits from auto prompt caching. Inherit the run's `cacheControl`
+      // when set; omit when unset (preserves prior behavior).
+      ...(this.opts.cacheControl !== undefined && {
+        cacheControl: this.opts.cacheControl,
+      }),
     } as Parameters<typeof client.callModel>[0]);
 
     let summaryText = '';
@@ -1472,6 +1502,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
         const childAllowedTools = config.allowedTools ?? this.opts.allowedTools;
         const childDisallowedTools = config.disallowedTools ?? this.opts.disallowedTools;
         const childEffort = config.effort ?? this.opts.effort;
+        const childCacheControl = config.cacheControl ?? this.opts.cacheControl;
         const child = new OpenRouterAgentRun({
           apiKey,
           sessionId: config.sessionId,
@@ -1494,6 +1525,7 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           ...(childAllowedTools !== undefined && { allowedTools: childAllowedTools }),
           ...(childDisallowedTools !== undefined && { disallowedTools: childDisallowedTools }),
           ...(childEffort !== undefined && { effort: childEffort }),
+          ...(childCacheControl !== undefined && { cacheControl: childCacheControl }),
         });
         let text = '';
         let summary: SubagentRunResult = {
@@ -1828,6 +1860,14 @@ export class OpenRouterAgentRun implements AsyncIterable<AgentCoreEvent> {
           state,
           stopWhen: [stepCountIs(maxTurns), maxCost(maxBudgetUsd)],
           ...(this.opts.effort !== undefined && { reasoning: { effort: this.opts.effort } }),
+          // Forward OR auto-cache directive when set. Pinned SDK 0.12.35 doesn't
+          // declare `cacheControl` on `ResponsesRequest`, so we widen the
+          // typecheck here; the value flows through OR's request body once the
+          // SDK adds the field (or via passthrough at runtime on newer SDKs).
+          ...(this.opts.cacheControl !== undefined &&
+            ({
+              cacheControl: this.opts.cacheControl,
+            } as { cacheControl?: AnthropicCacheControlDirective })),
           onTurnEnd: async (_turnCtx, response) => {
             if (persistSession) {
               const generationId = createGenerationId();

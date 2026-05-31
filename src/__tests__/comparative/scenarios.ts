@@ -415,6 +415,19 @@ const cancellationConfigSchema = z
 // this enum then; v1 keeps it tight.
 const scenarioEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh']);
 
+// Scenario-level OR auto-prompt-cache directive. Matches the shape of
+// `AnthropicCacheControlDirective` from `@openrouter/sdk/models` — thin
+// passthrough with no defaulting. Threaded ONLY into the OR side of the
+// harness today: the Claude Agent SDK has no top-level cacheControl knob
+// (per-content-block `cache_control` lives on the SDK's `TextBlockParam`,
+// not on `query()`'s `Options`), so the Anthropic side of a scenario
+// using this field is a no-op — the canonical hash matches the no-cache
+// case. See scenario #23's `description` for the documented asymmetry.
+const scenarioCacheControlSchema = z.object({
+  type: z.literal('ephemeral'),
+  ttl: z.union([z.literal('5m'), z.literal('1h')]).optional(),
+});
+
 export const scenarioSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
@@ -434,6 +447,19 @@ export const scenarioSchema = z.object({
    * makes is event-stream equality, NOT request-hash equality.
    */
   effort: scenarioEffortSchema.optional(),
+  /**
+   * Scenario-level OR auto-prompt-cache directive. Forwarded into the OR
+   * side via `OpenRouterAgentRunOptions.cacheControl` → top-level
+   * `cacheControl` field on the `callModel` request body. The OR canonical
+   * projection (`script-engine.ts`) does NOT include `cache_control`, so
+   * the hash matches the no-cacheControl case for the same prompt/model
+   * combo — the parity claim this knob exercises is event-stream equality
+   * with the option set on the OR side. The Anthropic side has no
+   * equivalent request-level cache hint on `query()`'s `Options`, so this
+   * field is a no-op on that wire (its hash also matches the no-cache
+   * case). See scenario #23's `description` for the full asymmetry note.
+   */
+  cacheControl: scenarioCacheControlSchema.optional(),
   /**
    * Fixture tool names to register from `scenarios/_tools.ts`. Empty/omitted
    * means no tools (scenario #1's no-tool happy path). The harness builds
